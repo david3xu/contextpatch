@@ -17,6 +17,9 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
+| `read_command_log` | No | Reads captured guarded-command logs by opaque id |
+| `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
+| `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
 
 ## Naming
@@ -36,6 +39,7 @@ Rules:
 - Must report file tools and process-execution availability honestly.
 - Must identify the configured repository root.
 - Must state unsupported operations, including arbitrary shell and destructive Git mutations.
+- Must distinguish the narrow local `git_commit_exact` checkpoint from unsupported fetch/push/destructive Git workflows.
 - Must not mutate repository state.
 
 ### `preflight_health`
@@ -244,15 +248,105 @@ Rules:
 - The working directory must resolve inside the configured repository root.
 - The executable must be an allowlisted program name, not a path.
 - The subcommand must be allowlisted:
-  - `git`: `status`, `diff`, `log`, `show`, `rev-parse`
+  - `git`: `status`, `diff`, `log`, `show`, `rev-parse`, `ls-tree`
   - `cargo`: `check`, `test`, `build`, `clippy`
   - `bun`: `run`, `test`
   - `npm`: `run`, `test`
   - `rg`: search invocation
 - Arguments that directly reference paths outside the repository root must be refused.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
-- Output must redact secret-like lines and truncate large streams.
+- Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
 - The tool must refuse arbitrary shell, environment inspection, destructive Git commands, and automatic commits.
+
+### `read_command_log`
+
+Reads a captured guarded-command log produced by `run_guarded_command` or `validation_profile_run`.
+
+Required inputs:
+
+- `log_id`: opaque id returned by a command-running tool
+
+Optional inputs:
+
+- `max_chars`: maximum characters to return, from 1 to 200000; defaults to 12000
+
+Rules:
+
+- `log_id` must be an opaque command-log id, not a path.
+- The tool must only read from the contextpatch command-log directory.
+- Logs contain the same redacted command output shape as guarded command responses.
+- The tool must truncate large responses rather than returning unbounded JSON-RPC payloads.
+
+### `validation_profile_run`
+
+Runs a predefined sequence of allowlisted validation commands as one MCP call.
+
+Required inputs:
+
+- `profile`: one of `repo-basic`, `rust-workspace`, `datacore-vscode`, or `datacore-m6-vscode`
+
+Optional inputs:
+
+- `timeout_secs`: per-command timeout override, from 1 to 600
+- `stop_on_failure`: stop after the first non-zero or timed-out command; defaults to true
+
+Rules:
+
+- Profiles must be explicit server-owned command lists, not user-supplied shell snippets.
+- Each command must pass the same `run_guarded_command` allowlist, cwd, timeout, and redaction rules.
+- The first response should be compact: per-command status, duration, timeout state, and log id.
+- Full command output should be retrieved with `read_command_log` only when needed.
+- Profiles must not commit, push, reset, checkout, clean, stash, or mutate product files.
+
+### `git_commit_exact`
+
+Creates a local Git commit only when the caller provides the exact complete dirty-path set.
+
+Required inputs:
+
+- `paths`: non-empty list of repository-relative paths
+- `subject`: single-line commit subject
+
+Optional inputs:
+
+- `body`: commit body/trailers
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `commit exact paths` when `dry_run` is `false`
+
+Rules:
+
+- The tool must default to dry-run and perform no mutation unless `dry_run` is `false` and `confirm` exactly equals `commit exact paths`.
+- `paths` must exactly match the repository's full dirty-path set from Git status, including untracked files. If any dirty path is missing or any extra path is supplied, the tool must refuse.
+- Paths must be normalized repository-relative paths and must not use path traversal, absolute paths, NUL bytes, or Git pathspec metacharacters.
+- Rename/copy status entries are refused until a dedicated tracked-move workflow exists.
+- The tool may run `git add -- <paths>` and one local `git commit`; it must not fetch, pull, push, reset, checkout, stash, clean, or modify remotes.
+- The tool must verify that the staged path set exactly matches `paths` before committing.
+- On success, the tool returns the commit hash, short hash, committed paths, and post-commit short status.
+- Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
+
+### Latency instrumentation
+
+Future Stage 2B command and workflow tools should expose optional timing metadata. The metadata should be diagnostic, not part of the safety decision itself.
+
+Recommended fields:
+
+- `request_received_to_dispatch_ms`
+- `argument_validation_ms`
+- `allowlist_validation_ms`
+- `child_spawn_ms`
+- `child_runtime_ms`
+- `stdout_stderr_drain_ms`
+- `redaction_truncation_ms`
+- `log_write_ms`
+- `response_bytes`
+- `total_tool_ms`
+
+Rules:
+
+- Timing metadata must not include command output, arguments classified as secret values, or environment values.
+- Timings should be monotonic-duration measurements, not wall-clock timestamps.
+- Tools should keep compact summaries as the default and use `read_command_log` for large output details.
+- The instrumentation goal is p50/p95/p99 diagnosis across long sessions, especially to distinguish MCP transport overhead from process/output handling.
 
 ### `delete_guarded`
 
@@ -279,5 +373,11 @@ Stage 1 ships:
 3. `write_new_file`
 4. `diff_preview`
 5. `status_guard`
+6. `capability_manifest`
+7. `preflight_health`
+8. `run_guarded_command`
+9. `read_command_log`
+10. `validation_profile_run`
+11. `git_commit_exact`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

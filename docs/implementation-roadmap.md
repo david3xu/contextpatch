@@ -58,8 +58,39 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `capability_manifest` | Let clients know exactly which file and process capabilities exist |
 | `preflight_health` | Report repo cleanliness and expected validation-tool availability |
 | `run_guarded_command` | Run repo-confined allowlisted validation commands without shell access |
+| `read_command_log` | Let clients retrieve captured command output without forcing large JSON-RPC responses into the first call |
+| `validation_profile_run` | Collapse common multi-command validation sequences into one auditable MCP call |
+| `git_commit_exact` | Allow a narrow local commit checkpoint after exact-path validation, while still refusing push/fetch/destructive Git |
 
-Stage 2A is implemented for the MCP server. It intentionally does not add automatic commits, destructive Git operations, or arbitrary shell command strings.
+Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, push/fetch, destructive Git operations, or broad automatic commits. `git_commit_exact` is the only commit path: dry-run by default, exact dirty-path set required, explicit confirmation required before mutation, and local commit only.
+
+## Stage 2B: latency and workflow compression
+
+These tools should reduce MCP round trips and process-spawn overhead while keeping the same guardrails:
+
+| Tool | Reason |
+| --- | --- |
+| `repo_snapshot` | One call for branch, HEAD, dirty paths, and short status |
+| `read_many_ranges` | Batch related bounded reads instead of repeated JSON-RPC calls |
+| `grep_profile` | Run named drift-search bundles without many separate `rg` calls |
+| `list_files` | Native repo-confined file listing for simple `rg --files` use cases |
+
+Stage 2B tools should prefer native Rust operations where possible and should return compact summaries plus log ids for large details.
+
+Latency instrumentation is a Stage 2B must-have, not a cosmetic metric. Each MCP tool should be able to report timing and size metadata precise enough to separate Claude/Desktop round-trip overhead from server-side work. At minimum, record:
+
+1. `request_received_to_dispatch_ms`
+2. `argument_validation_ms`
+3. `allowlist_validation_ms`
+4. `child_spawn_ms`
+5. `child_runtime_ms`
+6. `stdout_stderr_drain_ms`
+7. `redaction_truncation_ms`
+8. `log_write_ms`
+9. `response_bytes`
+10. `total_tool_ms`
+
+The goal is to stop guessing whether latency comes from JSON-RPC handling, process spawn, child runtime, output draining, redaction, log writes, or response size. Instrument first, then optimize based on measured p50/p95/p99 behavior across long Claude Desktop sessions.
 
 ## Always out of scope by default
 
@@ -67,4 +98,5 @@ Stage 2A is implemented for the MCP server. It intentionally does not add automa
 - Recursive directory writes
 - Unrestricted delete
 - Unrestricted shell execution
-- Automatic Git commits, resets, checkouts, or stashes
+- Broad or automatic Git commits
+- Git fetch/push, resets, checkouts, or stashes

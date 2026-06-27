@@ -14,7 +14,8 @@ The server should not expose broad filesystem write tools. In particular, the de
 - unrestricted delete
 - recursive directory writes
 - shell execution
-- Git reset/checkout/stash/commit
+- Git reset/checkout/stash/fetch/push
+- broad or automatic Git commits
 
 The expected agent workflow is:
 
@@ -24,7 +25,7 @@ The expected agent workflow is:
 4. Use `write_new_file` for create-only file creation.
 5. Use `capability_manifest` and `preflight_health` to determine whether this server can support the current workflow.
 6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, or `rg` drift searches.
-7. Let the human or another explicitly trusted tool perform commits and pushes outside the server.
+7. Use `git_commit_exact` only when the desired local commit path set is explicit and complete. Let the human or another explicitly trusted tool perform fetches and pushes outside the server.
 
 ## Build and configure Claude Desktop
 
@@ -88,6 +89,9 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `capability_manifest`
 - `preflight_health`
 - `run_guarded_command`
+- `read_command_log`
+- `validation_profile_run`
+- `git_commit_exact`
 
 ## Currently exposed tools
 
@@ -101,10 +105,17 @@ The current server exposes the implemented safe primitives:
 - `capability_manifest`
 - `preflight_health`
 - `run_guarded_command`
+- `read_command_log`
+- `validation_profile_run`
+- `git_commit_exact`
 
 Other documented tools remain roadmap items until implemented.
 
-`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, times out, redacts secret-like output lines, and returns command/cwd/exit-code/duration metadata.
+`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata.
+
+Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, or `datacore-m6-vscode`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values. Use `read_command_log` only for logs that need inspection.
+
+Use `git_commit_exact` for the narrow local-commit case that previously required leaving contextpatch entirely: the tool validates that `paths` exactly equals the repository's full dirty-path set, defaults to dry-run, requires `confirm: "commit exact paths"` when `dry_run` is false, stages only those paths, creates one local commit, and reports the commit hash. It still does not run `git fetch`, `git push`, reset, checkout, stash, or clean.
 
 ## Failure behavior
 

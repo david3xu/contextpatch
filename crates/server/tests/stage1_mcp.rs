@@ -40,6 +40,9 @@ fn stage1_mcp_tools_work_together() {
         "status_guard",
         "write_new_file",
         "run_guarded_command",
+        "read_command_log",
+        "validation_profile_run",
+        "git_commit_exact",
     ] {
         assert!(
             list.as_array()
@@ -67,6 +70,68 @@ fn stage1_mcp_tools_work_together() {
     assert_eq!(responses[6]["result"]["isError"], true);
     assert_text(&responses[6], "status_guard refused");
     assert_text(&responses[6], "sample.txt");
+}
+
+#[test]
+fn stage2_git_commit_exact_dry_run_and_commit_are_gated() {
+    let root = git_repo("stage2_git_commit_exact_dry_run_and_commit_are_gated");
+    fs::write(root.join("sample.txt"), "before\n").unwrap();
+    git(&root, &["add", "sample.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("sample.txt"), "after\n").unwrap();
+    fs::write(root.join("created.txt"), "new\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["sample.txt","created.txt"],"subject":"test: commit exact paths"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["sample.txt","created.txt"],"subject":"test: commit exact paths","dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["sample.txt","created.txt"],"subject":"test: commit exact paths","body":"Co-authored-by: Contextpatch <contextpatch@example.invalid>","dry_run":false,"confirm":"commit exact paths"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "\"would_commit\": true");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
+    assert_text(&responses[2], "\"committed\": true");
+    assert_text(&responses[2], "\"push\": false");
+
+    let log = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["log", "-1", "--pretty=%s%n%b"])
+        .output()
+        .unwrap();
+    let log = String::from_utf8(log.stdout).unwrap();
+    assert!(log.contains("test: commit exact paths"));
+    assert!(log.contains("Co-authored-by: Contextpatch"));
+
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["status", "--short"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(status.stdout).unwrap(), "");
+}
+
+#[test]
+fn stage2_git_commit_exact_refuses_partial_dirty_path_set() {
+    let root = git_repo("stage2_git_commit_exact_refuses_partial_dirty_path_set");
+    fs::write(root.join("one.txt"), "one\n").unwrap();
+    fs::write(root.join("two.txt"), "two\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["one.txt"],"subject":"test: partial"}}}"#,
+        ],
+    );
+
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_text(&responses[0], "provided paths must exactly match");
+    assert_text(&responses[0], "two.txt");
 }
 
 #[test]
@@ -113,6 +178,38 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[2], "exit_code: 0");
     assert_eq!(responses[3]["result"]["isError"], true);
     assert_text(&responses[3], "not allowlisted");
+}
+
+#[test]
+fn stage2_validation_profile_writes_readable_command_logs() {
+    let root = git_repo("stage2_validation_profile_writes_readable_command_logs");
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validation_profile_run","arguments":{"profile":"repo-basic","timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "profile: repo-basic");
+    assert_text(&responses[0], "failed: false");
+    assert_text(&responses[0], "git status --branch --short");
+    assert_text(&responses[0], "git diff --check");
+
+    let log_id = response_text(&responses[0])
+        .split("log_id: ")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .unwrap()
+        .to_string();
+
+    let request = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"read_command_log","arguments":{{"log_id":"{log_id}"}}}}}}"#
+    );
+    let log_responses = run_server(&root, &[&request]);
+    assert_text(&log_responses[0], &format!("log_id: {log_id}"));
+    assert_text(&log_responses[0], "allowlist: git/status");
+    assert_text(&log_responses[0], "timed_out: false");
 }
 
 #[test]
@@ -230,11 +327,15 @@ fn run_server(root: &Path, requests: &[&str]) -> Vec<Value> {
 }
 
 fn assert_text(response: &Value, expected: &str) {
-    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let text = response_text(response);
     assert!(
         text.contains(expected),
         "expected response text to contain {expected:?}, got {text:?}"
     );
+}
+
+fn response_text(response: &Value) -> &str {
+    response["result"]["content"][0]["text"].as_str().unwrap()
 }
 
 fn git_repo(name: &str) -> PathBuf {

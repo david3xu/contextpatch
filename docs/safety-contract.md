@@ -16,6 +16,7 @@ This document is normative. If implementation behavior conflicts with this file,
 6. Prefer previewable diffs over hidden mutation.
 7. Never provide an unrestricted shell or recursive delete primitive.
 8. If validation command execution is exposed, it must be no-shell, repo-root-confined, allowlisted, timeout-bound, and auditable.
+9. If local Git commit support is exposed, it must be an explicitly confirmed exact-path checkpoint, not broad Git authority.
 
 ## Required refusal cases
 
@@ -45,7 +46,7 @@ If the platform cannot provide the expected atomic behavior, the operation must 
 
 ## Git guard expectation
 
-Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves, but they must not commit, reset, checkout, stash, clean, or discard user work.
+Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves. The only allowed commit workflow is `git_commit_exact`: it defaults to dry-run, requires an exact complete dirty-path set, requires explicit confirmation before mutation, stages only those paths, creates at most one local commit, and never pushes. Tools must not reset, checkout, stash, clean, fetch, push, or discard user work.
 
 ## Default-deny tools
 
@@ -61,14 +62,19 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 2. Resolve the working directory inside the configured repository root.
 3. Allow only documented validation-oriented programs and subcommands.
 4. Time out rather than running indefinitely.
-5. Return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
-6. Redact secret-like output lines and truncate large output.
-7. Refuse destructive Git operations and automatic commits.
+5. Return command, cwd, allowlist rule, exit code, timeout state, duration, stdout, and stderr.
+6. Drain stdout and stderr concurrently so child processes cannot deadlock on full pipes.
+7. Redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large output.
+8. Refuse destructive Git operations and ungated commits.
+9. Prefer predefined validation profiles for repeated workflows, but require every profile command to pass the same no-shell allowlist and timeout rules.
+10. Store only redacted command logs, address them by opaque ids, and read them back through `read_command_log` rather than exposing arbitrary paths.
+11. Add latency instrumentation with monotonic durations and response sizes so performance work is evidence-based, while never recording secrets, environment values, or unredacted command output in timing metadata.
 
 ## Non-goals
 
 - No unrestricted shell execution
 - No recursive bulk rewrite tool
 - No silent formatting of unrelated files
-- No automatic commits
+- No automatic or broad commits; only explicitly confirmed exact-path local checkpoints
+- No fetch or push
 - No hidden network calls for edit operations

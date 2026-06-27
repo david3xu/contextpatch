@@ -1,8 +1,9 @@
-use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use crate::error::ContextPatchError;
 
@@ -40,21 +41,8 @@ pub fn run_guarded_command(
     command.env("NO_COLOR", "1");
     command.stdin(Stdio::null());
 
-    let output_paths = OutputPaths::new()?;
-    let stdout = fs::File::create(&output_paths.stdout).map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to create stdout log {}: {error}",
-            output_paths.stdout.display()
-        ))
-    })?;
-    let stderr = fs::File::create(&output_paths.stderr).map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to create stderr log {}: {error}",
-            output_paths.stderr.display()
-        ))
-    })?;
-    command.stdout(Stdio::from(stdout));
-    command.stderr(Stdio::from(stderr));
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
 
     let started = std::time::Instant::now();
     let mut child = command.spawn().map_err(|error| {
@@ -64,6 +52,17 @@ pub fn run_guarded_command(
             cwd.display()
         ))
     })?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| ContextPatchError::new("failed to capture guarded command stdout pipe"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ContextPatchError::new("failed to capture guarded command stderr pipe"))?;
+    let stdout_reader = spawn_stream_reader("stdout", stdout);
+    let stderr_reader = spawn_stream_reader("stderr", stderr);
 
     let status = loop {
         match child.try_wait().map_err(|error| {
@@ -76,23 +75,27 @@ pub fn run_guarded_command(
             None if started.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(ContextPatchError::new(format!(
-                    "guarded command timed out after {}s: {}",
-                    timeout.as_secs(),
-                    display_command(program, args)
-                )));
+                let stdout = join_stream_reader(stdout_reader)?;
+                let stderr = join_stream_reader(stderr_reader)?;
+                return Ok(format!(
+                    "command: {}\ncwd: {}\nallowlist: {}\nexit_code: -1\ntimed_out: true\nduration_ms: {}\nstdout:\n{}\nstderr:\n{}",
+                    display_command(program, args),
+                    cwd.display(),
+                    allowlist_label(program, args),
+                    started.elapsed().as_millis(),
+                    redact_and_truncate(&stdout),
+                    redact_and_truncate(&stderr)
+                ));
             }
-            None => thread::sleep(Duration::from_millis(100)),
+            None => thread::sleep(Duration::from_millis(25)),
         }
     };
 
-    let stdout = read_log(&output_paths.stdout)?;
-    let stderr = read_log(&output_paths.stderr)?;
-    let _ = fs::remove_file(&output_paths.stdout);
-    let _ = fs::remove_file(&output_paths.stderr);
+    let stdout = join_stream_reader(stdout_reader)?;
+    let stderr = join_stream_reader(stderr_reader)?;
 
     Ok(format!(
-        "command: {}\ncwd: {}\nallowlist: {}\nexit_code: {}\nduration_ms: {}\nstdout:\n{}\nstderr:\n{}",
+        "command: {}\ncwd: {}\nallowlist: {}\nexit_code: {}\ntimed_out: false\nduration_ms: {}\nstdout:\n{}\nstderr:\n{}",
         display_command(program, args),
         cwd.display(),
         allowlist_label(program, args),
@@ -101,6 +104,34 @@ pub fn run_guarded_command(
         redact_and_truncate(&stdout),
         redact_and_truncate(&stderr)
     ))
+}
+
+fn spawn_stream_reader(
+    label: &'static str,
+    mut stream: impl Read + Send + 'static,
+) -> thread::JoinHandle<Result<String, ContextPatchError>> {
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        stream.read_to_end(&mut buffer).map_err(|error| {
+            ContextPatchError::new(format!("failed to read guarded command {label}: {error}"))
+        })?;
+        Ok(String::from_utf8_lossy(&buffer).into_owned())
+    })
+}
+
+fn join_stream_reader(
+    reader: thread::JoinHandle<Result<String, ContextPatchError>>,
+) -> Result<String, ContextPatchError> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = reader
+            .join()
+            .unwrap_or_else(|_| Err(ContextPatchError::new("guarded command reader panicked")));
+        let _ = sender.send(result);
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| ContextPatchError::new("timed out reading guarded command output"))?
 }
 
 fn resolve_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf, ContextPatchError> {
@@ -167,7 +198,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     let allowed = match program {
         "git" => matches!(
             subcommand,
-            Some("status" | "diff" | "log" | "show" | "rev-parse")
+            Some("status" | "diff" | "log" | "show" | "rev-parse" | "ls-tree")
         ),
         "cargo" => matches!(subcommand, Some("check" | "test" | "build" | "clippy")),
         "bun" => matches!(subcommand, Some("run" | "test")),
@@ -209,15 +240,6 @@ fn shell_display_arg(arg: &str) -> String {
     } else {
         format!("{arg:?}")
     }
-}
-
-fn read_log(path: &Path) -> Result<String, ContextPatchError> {
-    fs::read_to_string(path).map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to read command log {}: {error}",
-            path.display()
-        ))
-    })
 }
 
 fn redact_and_truncate(text: &str) -> String {
@@ -264,31 +286,38 @@ fn contains_secret_assignment(line: &str, name: &str) -> bool {
         return false;
     };
     let tail = line[index + name.len()..].trim_start();
-    tail.starts_with('=')
-        || tail.starts_with(':')
-        || tail.starts_with("\":")
-        || tail.starts_with(" =")
-        || tail.starts_with(" :")
+    let value = if let Some(value) = tail.strip_prefix('=') {
+        value
+    } else if let Some(value) = tail.strip_prefix(':') {
+        value
+    } else if let Some(value) = tail.strip_prefix("\":") {
+        value
+    } else {
+        return false;
+    };
+    is_probable_secret_value(value)
 }
 
-struct OutputPaths {
-    stdout: PathBuf,
-    stderr: PathBuf,
-}
-
-impl OutputPaths {
-    fn new() -> Result<Self, ContextPatchError> {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| ContextPatchError::new(format!("system clock error: {error}")))?
-            .as_nanos();
-        let pid = std::process::id();
-        let base = std::env::temp_dir().join(format!("contextpatch-command-{pid}-{unique}"));
-        Ok(Self {
-            stdout: base.with_extension("stdout.log"),
-            stderr: base.with_extension("stderr.log"),
-        })
+fn is_probable_secret_value(value: &str) -> bool {
+    let value = value
+        .trim()
+        .trim_matches(|ch| matches!(ch, '"' | '\'' | '`' | ',' | ';'));
+    let lower = value.to_ascii_lowercase();
+    if value.is_empty()
+        || matches!(
+            lower.as_str(),
+            "replace_me" | "<redacted>" | "[redacted]" | "<secret>" | "<token>"
+        )
+        || value.starts_with('$')
+        || value.starts_with("DATACORE_")
+    {
+        return false;
     }
+    contains_openai_style_key(value)
+        || value.len() >= 12 && value.chars().all(|ch| !ch.is_whitespace())
+        || value
+            .chars()
+            .any(|ch| matches!(ch, '_' | '-' | '.' | '/' | '+' | '='))
 }
 
 #[cfg(test)]
@@ -345,6 +374,41 @@ mod tests {
     }
 
     #[test]
+    fn drains_stdout_and_stderr_without_hanging() {
+        let root = git_root("drains_stdout_and_stderr_without_hanging");
+        fs::write(root.join("tracked.txt"), "one\ntwo\n").unwrap();
+        run_git(&root, &["add", "tracked.txt"]);
+        run_git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+        let stdout = run_guarded_command(
+            &root,
+            None,
+            "git",
+            &["ls-tree".to_string(), "-r".to_string(), "HEAD".to_string()],
+            Some(30),
+        )
+        .unwrap();
+        assert!(stdout.contains("allowlist: git/ls-tree"));
+        assert!(stdout.contains("timed_out: false"));
+        assert!(stdout.contains("tracked.txt"));
+
+        let stderr = run_guarded_command(
+            &root,
+            None,
+            "git",
+            &[
+                "status".to_string(),
+                "--definitely-not-a-real-option".to_string(),
+            ],
+            Some(30),
+        )
+        .unwrap();
+        assert!(stderr.contains("timed_out: false"));
+        assert!(stderr.contains("stderr:"));
+        assert!(stderr.contains("definitely-not-a-real-option"));
+    }
+
+    #[test]
     fn redaction_keeps_secret_adjacent_paths_and_docs_readable() {
         assert_eq!(
             redact_line("clients/vscode/src/commands/ask-datacore.ts"),
@@ -353,6 +417,22 @@ mod tests {
         assert_eq!(
             redact_line("docs mention token discovery without showing a value"),
             "docs mention token discovery without showing a value"
+        );
+        assert_eq!(
+            redact_line("docs/migration/roadmaps/product-readiness-task-list.md"),
+            "docs/migration/roadmaps/product-readiness-task-list.md"
+        );
+        assert_eq!(
+            redact_line("clients/vscode/src/chat/linked-task-store.ts"),
+            "clients/vscode/src/chat/linked-task-store.ts"
+        );
+        assert_eq!(
+            redact_line("DATACORE_GATEWAY_HTTP_API_KEY=REPLACE_ME"),
+            "DATACORE_GATEWAY_HTTP_API_KEY=REPLACE_ME"
+        );
+        assert_eq!(
+            redact_line("| API key | Use DATACORE_GATEWAY_HTTP_API_KEY in the runtime env |"),
+            "| API key | Use DATACORE_GATEWAY_HTTP_API_KEY in the runtime env |"
         );
         assert_eq!(
             redact_line("DATACORE_TOKEN=super-secret-value"),
