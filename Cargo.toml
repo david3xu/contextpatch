@@ -1,0 +1,12 @@
+[package]
+name = "contextpatch"
+version = "0.1.0"
+edition = "2021"
+description = "Guarded patch editing for AI context servers."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/david3xu/contextpatch"
+readme = "README.md"
+keywords = ["patch", "agent", "context", "atomic", "git"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
