@@ -15,6 +15,7 @@ This document is normative. If implementation behavior conflicts with this file,
 5. Expose Git state before guarded edits.
 6. Prefer previewable diffs over hidden mutation.
 7. Never provide an unrestricted shell or recursive delete primitive.
+8. If validation command execution is exposed, it must be no-shell, repo-root-confined, allowlisted, timeout-bound, and auditable.
 
 ## Required refusal cases
 
@@ -44,13 +45,25 @@ If the platform cannot provide the expected atomic behavior, the operation must 
 
 ## Git guard expectation
 
-Git state is a guardrail, not a hidden side effect. Tools may inspect Git state and may use Git for tracked moves, but they must not commit, reset, checkout, stash, or discard user work.
+Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves, but they must not commit, reset, checkout, stash, clean, or discard user work.
 
 ## Default-deny tools
 
 The server should not expose generic `write_file`, unrestricted `delete`, recursive directory writes, or shell execution as default tools.
 
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
+
+## Guarded validation command expectation
+
+`run_guarded_command` is validation support, not a shell. It must:
+
+1. Accept a program name plus argument array, never a shell command string.
+2. Resolve the working directory inside the configured repository root.
+3. Allow only documented validation-oriented programs and subcommands.
+4. Time out rather than running indefinitely.
+5. Return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
+6. Redact secret-like output lines and truncate large output.
+7. Refuse destructive Git operations and automatic commits.
 
 ## Non-goals
 

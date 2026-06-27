@@ -32,6 +32,7 @@ Owns:
 - Patch validation and application semantics
 - Diff generation semantics
 - Git status inspection and tracked move behavior
+- Guarded validation command policy and execution
 - Error types shared by CLI and server
 
 Must not own:
@@ -85,3 +86,4 @@ Repository-level integration tests should cover:
 4. Atomic write behavior where practical
 5. Path traversal refusal
 6. Dirty-repository guard behavior
+7. Capability discovery and guarded command refusal behavior

@@ -22,7 +22,7 @@ AI desktop tools often expose generic filesystem writes. That is convenient, but
 
 `contextpatch` is not a general filesystem server. It is not a shell runner. It is not a replacement for Git.
 
-The project owns one narrow surface: **safe repository editing primitives for agent clients**. Anything outside that boundary should be rejected unless it directly supports anchored edits, reviewable diffs, or repository guardrails.
+The project owns one narrow surface: **safe repository editing and validation primitives for agent clients**. Anything outside that boundary should be rejected unless it directly supports anchored edits, reviewable diffs, validation, or repository guardrails.
 
 That boundary is intentional product strategy, not a temporary limitation.
 
@@ -59,11 +59,16 @@ contextpatch status-guard [path]
 
 The MCP server exposes the same Stage 1 surface to local agent clients:
 
+- `capability_manifest`
+- `preflight_health`
 - `read_range`
 - `diff_preview`
 - `replace_exact`
 - `write_new_file`
 - `status_guard`
+- `run_guarded_command`
+
+`run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, applies a timeout, redacts secret-like output lines, and reports command/cwd/exit-code/duration metadata.
 
 ## Safety contract
 
@@ -78,7 +83,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, and allowlisted guarded command execution for Claude Desktop workflows. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

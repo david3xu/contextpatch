@@ -6,6 +6,8 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 
 | Tool | Writes? | Guard |
 | --- | --- | --- |
+| `capability_manifest` | No | Reports exact supported capabilities and unsupported boundaries |
+| `preflight_health` | No | Repository/tool readiness summary |
 | `read_range` | No | Bounded path and line range |
 | `diff_preview` | No | Proposed edit input |
 | `replace_exact` | Yes | Old text must match exactly once |
@@ -14,6 +16,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `move_tracked` | Yes | Source exists, destination absent, Git state visible |
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
+| `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
 
 ## Naming
@@ -21,6 +24,32 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 The public tool names use snake_case because they are protocol-facing. The CLI uses kebab-case commands.
 
 ## Tool contracts
+
+### `capability_manifest`
+
+Reports the server's capability contract in machine-readable JSON text.
+
+Required inputs: none.
+
+Rules:
+
+- Must report file tools and process-execution availability honestly.
+- Must identify the configured repository root.
+- Must state unsupported operations, including arbitrary shell and destructive Git mutations.
+- Must not mutate repository state.
+
+### `preflight_health`
+
+Reports whether the repository and local validation tools are ready for agent work.
+
+Required inputs: none.
+
+Rules:
+
+- Must report repository cleanliness using the same Git guard semantics as `status_guard`.
+- Must report whether guarded process execution is available.
+- Must report local availability of expected validation tools without treating missing optional tools as server failure.
+- Must not mutate repository state.
 
 ### `read_range`
 
@@ -195,6 +224,36 @@ Rules:
 - Refuse missing parent directories.
 - Write atomically.
 
+### `run_guarded_command`
+
+Runs a bounded validation-oriented command without invoking a shell.
+
+Required inputs:
+
+- `program`: one of `git`, `cargo`, `bun`, `npm`, or `rg`
+- `args`: command arguments; the first argument must be an allowlisted subcommand
+
+Optional inputs:
+
+- `cwd`: working directory relative to the configured repository root
+- `timeout_secs`: timeout in seconds, from 1 to 600
+
+Rules:
+
+- The command must run without shell interpolation.
+- The working directory must resolve inside the configured repository root.
+- The executable must be an allowlisted program name, not a path.
+- The subcommand must be allowlisted:
+  - `git`: `status`, `diff`, `log`, `show`, `rev-parse`
+  - `cargo`: `check`, `test`, `build`, `clippy`
+  - `bun`: `run`, `test`
+  - `npm`: `run`, `test`
+  - `rg`: search invocation
+- Arguments that directly reference paths outside the repository root must be refused.
+- The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
+- Output must redact secret-like lines and truncate large streams.
+- The tool must refuse arbitrary shell, environment inspection, destructive Git commands, and automatic commits.
+
 ### `delete_guarded`
 
 Deletes a file only with explicit confirmation.
@@ -213,7 +272,7 @@ Rules:
 
 ## MVP implementation subset
 
-Stage 1 should ship only:
+Stage 1 ships:
 
 1. `replace_exact`
 2. `read_range`

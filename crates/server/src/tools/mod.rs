@@ -1,5 +1,8 @@
+pub mod capability_manifest;
 pub mod diff_preview;
+pub mod preflight_health;
 pub mod read_range;
 pub mod replace_exact;
+pub mod run_guarded_command;
 pub mod status_guard;
 pub mod write_new_file;

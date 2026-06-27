@@ -32,11 +32,14 @@ fn stage1_mcp_tools_work_together() {
 
     let list = &responses[0]["result"]["tools"];
     for name in [
+        "capability_manifest",
+        "preflight_health",
         "read_range",
         "diff_preview",
         "replace_exact",
         "status_guard",
         "write_new_file",
+        "run_guarded_command",
     ] {
         assert!(
             list.as_array()
@@ -87,6 +90,29 @@ fn stage1_mcp_refusals_are_tool_results() {
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "beta beta\n"
     );
+}
+
+#[test]
+fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
+    let root = git_repo("stage2_mcp_reports_capabilities_and_runs_guarded_commands");
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capability_manifest","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"preflight_health","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status","--porcelain=v1"],"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["reset"],"timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"process_execution\"");
+    assert_text(&responses[0], "\"mode\": \"allowlisted_no_shell\"");
+    assert_text(&responses[1], "\"guarded_process_execution\"");
+    assert_text(&responses[2], "allowlist: git/status");
+    assert_text(&responses[2], "exit_code: 0");
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "not allowlisted");
 }
 
 fn run_server(root: &Path, requests: &[&str]) -> Vec<Value> {

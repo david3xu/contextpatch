@@ -9,6 +9,7 @@ use contextpatch_core::fs::read_range::read_range_in_root;
 use contextpatch_core::fs::write_new_file::write_new_file_in_root;
 use contextpatch_core::git::status::{status_summary, status_summary_for_path};
 use contextpatch_core::patch::diff::preview_exact_replacement_in_root;
+use contextpatch_core::process::guarded_command::run_guarded_command;
 use contextpatch_core::replace::exact::replace_exact_in_root;
 use serde_json::{json, Value};
 
@@ -146,6 +147,24 @@ fn requested_protocol_version(request: &Value) -> String {
 fn tool_definitions() -> Value {
     json!([
         {
+            "name": tools::capability_manifest::NAME,
+            "description": "Report the contextpatch server capability contract, including whether guarded process execution is available.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::preflight_health::NAME,
+            "description": "Check repository and local tool readiness for Claude Desktop workflows without mutating the repository.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::read_range::NAME,
             "description": "Read a bounded section of a UTF-8 text file with 1-based line numbers.",
             "inputSchema": {
@@ -248,6 +267,38 @@ fn tool_definitions() -> Value {
                 "required": ["path", "content"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": tools::run_guarded_command::NAME,
+            "description": "Run a repo-root-confined allowlisted validation command without using a shell.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "program": {
+                        "type": "string",
+                        "description": "Allowlisted executable name: git, cargo, bun, npm, or rg."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Command arguments. The first argument must be an allowlisted subcommand."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory relative to the configured repository root."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Optional timeout in seconds. Defaults to 120, maximum 600."
+                    }
+                },
+                "required": ["program", "args"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -266,11 +317,14 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         .unwrap_or_default();
 
     let result = match name {
+        tools::capability_manifest::NAME => call_capability_manifest(repo_root),
+        tools::preflight_health::NAME => call_preflight_health(repo_root),
         tools::read_range::NAME => call_read_range(repo_root, &arguments),
         tools::diff_preview::NAME => call_diff_preview(repo_root, &arguments),
         tools::replace_exact::NAME => call_replace_exact(repo_root, &arguments),
         tools::status_guard::NAME => call_status_guard(repo_root, &arguments),
         tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
+        tools::run_guarded_command::NAME => call_run_guarded_command(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
     };
 
@@ -299,6 +353,82 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
             }),
         ),
     }
+}
+
+fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
+    let root = repo_root
+        .canonicalize()
+        .map_err(|error| format!("capability_manifest refused: {error}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "server": "contextpatch",
+        "version": contextpatch_core::VERSION,
+        "repo_root": root.display().to_string(),
+        "file_tools": {
+            "read_range": true,
+            "diff_preview": true,
+            "replace_exact": true,
+            "write_new_file": true,
+            "status_guard": true
+        },
+        "process_execution": {
+            "available": true,
+            "mode": "allowlisted_no_shell",
+            "programs": {
+                "git": ["status", "diff", "log", "show", "rev-parse"],
+                "cargo": ["check", "test", "build", "clippy"],
+                "bun": ["run", "test"],
+                "npm": ["run", "test"],
+                "rg": ["search"]
+            },
+            "guards": [
+                "repo-root-confined cwd",
+                "no shell interpolation",
+                "allowlisted program and subcommand",
+                "timeout bounded",
+                "secret-like output redaction",
+                "stdout/stderr truncation",
+                "command/cwd/exit-code/duration metadata"
+            ],
+            "not_supported": [
+                "arbitrary shell",
+                "git reset/checkout/stash/clean",
+                "automatic commits",
+                "path traversal outside repo root",
+                "secret-printing environment inspection"
+            ]
+        }
+    }))
+    .map_err(|error| format!("capability_manifest refused: {error}"))?)
+}
+
+fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
+    let root = repo_root
+        .canonicalize()
+        .map_err(|error| format!("preflight_health refused: {error}"))?;
+    let git_status = match status_summary(&root) {
+        Ok(summary) => json!({ "clean": true, "summary": summary }),
+        Err(error) => json!({ "clean": false, "summary": error.to_string() }),
+    };
+    Ok(serde_json::to_string_pretty(&json!({
+        "server": "contextpatch",
+        "version": contextpatch_core::VERSION,
+        "repo_root": root.display().to_string(),
+        "repository": git_status,
+        "guarded_process_execution": {
+            "available": true,
+            "mode": "allowlisted_no_shell",
+            "default_timeout_secs": 120,
+            "max_timeout_secs": 600
+        },
+        "tools": {
+            "git": executable_available("git"),
+            "cargo": executable_available("cargo"),
+            "bun": executable_available("bun"),
+            "npm": executable_available("npm"),
+            "rg": executable_available("rg")
+        }
+    }))
+    .map_err(|error| format!("preflight_health refused: {error}"))?)
 }
 
 fn call_read_range(
@@ -373,6 +503,19 @@ fn call_write_new_file(
     ))
 }
 
+fn call_run_guarded_command(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let program = required_string(arguments, "program")?;
+    let args = required_string_array(arguments, "args")?;
+    let cwd = optional_string(arguments, "cwd")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?;
+
+    run_guarded_command(repo_root, cwd.map(Path::new), program, &args, timeout_secs)
+        .map_err(|error| format!("run_guarded_command refused: {error}"))
+}
+
 fn required_string<'a>(
     arguments: &'a serde_json::Map<String, Value>,
     key: &str,
@@ -396,6 +539,25 @@ fn optional_string<'a>(
     }
 }
 
+fn required_string_array(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let values = arguments
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("missing or invalid string array argument: {key}"))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToString::to_string)
+                .ok_or_else(|| format!("invalid string array item in argument: {key}"))
+        })
+        .collect()
+}
+
 fn required_usize(arguments: &serde_json::Map<String, Value>, key: &str) -> Result<usize, String> {
     let value = arguments
         .get(key)
@@ -403,6 +565,35 @@ fn required_usize(arguments: &serde_json::Map<String, Value>, key: &str) -> Resu
         .ok_or_else(|| format!("missing or invalid integer argument: {key}"))?;
 
     usize::try_from(value).map_err(|_| format!("integer argument out of range: {key}"))
+}
+
+fn optional_u64(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<u64>, String> {
+    match arguments.get(key) {
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("invalid integer argument: {key}")),
+        None => Ok(None),
+    }
+}
+
+fn executable_available(program: &str) -> Value {
+    let output = std::process::Command::new(program)
+        .arg("--version")
+        .output();
+    match output {
+        Ok(output) => json!({
+            "available": output.status.success(),
+            "exit_code": output.status.code().unwrap_or(-1)
+        }),
+        Err(error) => json!({
+            "available": false,
+            "error": error.to_string()
+        }),
+    }
 }
 
 fn success_response(id: Value, result: Value) -> String {

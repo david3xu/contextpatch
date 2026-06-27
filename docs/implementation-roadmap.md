@@ -49,10 +49,22 @@ Stage 1 must test these refusals:
 
 Stage 2 should not start until Stage 1 has stable tests and docs.
 
+## Stage 2A: Claude Desktop readiness and validation
+
+Claude Desktop can continue real project work only if it can discover capabilities and run bounded validation without falling back to a broad shell. Stage 2A adds that bridge while preserving the safety contract.
+
+| Tool | Reason for Stage 2A |
+| --- | --- |
+| `capability_manifest` | Let clients know exactly which file and process capabilities exist |
+| `preflight_health` | Report repo cleanliness and expected validation-tool availability |
+| `run_guarded_command` | Run repo-confined allowlisted validation commands without shell access |
+
+Stage 2A is implemented for the MCP server. It intentionally does not add automatic commits, destructive Git operations, or arbitrary shell command strings.
+
 ## Always out of scope by default
 
 - Generic `write_file`
 - Recursive directory writes
 - Unrestricted delete
-- Shell execution
+- Unrestricted shell execution
 - Automatic Git commits, resets, checkouts, or stashes
