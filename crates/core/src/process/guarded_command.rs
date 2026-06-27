@@ -38,6 +38,7 @@ pub fn run_guarded_command(
     command.args(args);
     command.env("GIT_PAGER", "cat");
     command.env("NO_COLOR", "1");
+    command.stdin(Stdio::null());
 
     let output_paths = OutputPaths::new()?;
     let stdout = fs::File::create(&output_paths.stdout).map_err(|error| {

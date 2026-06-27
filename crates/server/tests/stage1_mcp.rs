@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -113,6 +113,44 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[2], "exit_code: 0");
     assert_eq!(responses[3]["result"]["isError"], true);
     assert_text(&responses[3], "not allowlisted");
+}
+
+#[test]
+fn stage2_guarded_command_returns_while_mcp_stdin_stays_open() {
+    let root = git_repo("stage2_guarded_command_returns_while_mcp_stdin_stays_open");
+    let mut child = Command::new(contextpatch_server())
+        .arg("--repo-root")
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status","--branch","--short"],"timeout_secs":30}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(stdout);
+    reader.read_line(&mut line).unwrap();
+
+    let response: Value = serde_json::from_str(&line).unwrap();
+    assert_text(&response, "allowlist: git/status");
+    assert_text(&response, "exit_code: 0");
+
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "server failed\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn run_server(root: &Path, requests: &[&str]) -> Vec<Value> {
