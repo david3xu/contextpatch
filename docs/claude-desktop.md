@@ -20,8 +20,9 @@ The expected agent workflow is:
 
 1. Use `read_range` to inspect a bounded file section.
 2. Use `diff_preview` before `replace_exact` when reviewing exact anchored edits.
-3. Use `write_new_file` for create-only file creation; use `status_guard` once that roadmap tool is implemented.
-4. Let the human review Git diff outside the server.
+3. Use `status_guard` before writes when a clean repository or clean target path is required.
+4. Use `write_new_file` for create-only file creation.
+5. Let the human review Git diff outside the server.
 
 ## Configuration shape
 
@@ -66,6 +67,7 @@ The current server exposes only the implemented safe primitives:
 - `read_range`
 - `diff_preview`
 - `replace_exact`
+- `status_guard`
 - `write_new_file`
 
 Other documented tools remain roadmap items until implemented.

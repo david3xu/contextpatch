@@ -149,16 +149,26 @@ Rules:
 
 ### `status_guard`
 
-Reports repository readiness for edits.
+Reports repository readiness for edits and refuses when Git status is dirty.
 
 Required inputs:
 
-- repository root
+- optional `path`
+
+CLI shape:
+
+```bash
+contextpatch status-guard [path]
+```
+
+The CLI treats the current working directory as the repository root guard. `contextpatch status` is an alias.
 
 Rules:
 
-- Return clean/dirty status.
-- Include changed path summaries.
+- Return a clean summary when no Git changes are present.
+- Refuse when the repository, or optional scoped path, has uncommitted changes.
+- Include changed path summaries in the refusal.
+- Refuse paths outside the repository root.
 - Do not mutate repository state.
 
 ### `write_new_file`

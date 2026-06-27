@@ -34,7 +34,7 @@ That boundary is intentional product strategy, not a temporary limitation.
 | `diff-preview` | Preview a proposed edit before writing |
 | `replace-exact` | Replace text only when the expected anchor appears exactly once |
 | `write-new-file` | Create a file only when it does not already exist |
-| `status` | Show clean/dirty Git state before edits |
+| `status-guard` | Refuse when Git state is dirty before edits |
 | `serve` | Run a local context-server interface for agent tools |
 
 ## First implementation order
@@ -44,7 +44,7 @@ That boundary is intentional product strategy, not a temporary limitation.
 3. `read-range` in core and CLI
 4. `write-new-file`
 5. `diff-preview`
-6. `status`
+6. `status-guard`
 7. Stage 1 server schemas and transport
 
 The first useful milestone is a CLI command that can safely replace exactly one matched text span and refuse zero-match or multi-match edits. The full staged plan is in `docs/implementation-roadmap.md`.
@@ -54,6 +54,7 @@ contextpatch read-range <path> --start <line> --end <line>
 contextpatch diff-preview <path> --old <text> --new <text>
 contextpatch replace-exact <path> --old <text> --new <text>
 contextpatch write-new-file <path> --content <text>
+contextpatch status-guard [path]
 ```
 
 ## Safety contract
@@ -69,7 +70,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-This repository is a new Rust workspace. The docs define the product contract, and Stage 1 implementation has started with `replace-exact`, `read-range`, `write-new-file`, and `diff-preview` in the core crate, CLI, and MCP server. Code changes should keep the relevant Markdown file synchronized in the same commit.
+This repository is a new Rust workspace. The docs define the product contract, and Stage 1 implementation has started with `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard` in the core crate, CLI, and MCP server. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

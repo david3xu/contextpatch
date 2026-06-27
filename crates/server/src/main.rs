@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use contextpatch_core::fs::read_range::read_range_in_root;
 use contextpatch_core::fs::write_new_file::write_new_file_in_root;
+use contextpatch_core::git::status::{status_summary, status_summary_for_path};
 use contextpatch_core::patch::diff::preview_exact_replacement_in_root;
 use contextpatch_core::replace::exact::replace_exact_in_root;
 use serde_json::{json, Value};
@@ -216,6 +217,20 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::status_guard::NAME,
+            "description": "Refuse when the repository or requested path has uncommitted Git changes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Optional file or directory path relative to the configured repository root."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::write_new_file::NAME,
             "description": "Create a new UTF-8 text file only when the destination does not already exist.",
             "inputSchema": {
@@ -254,6 +269,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::read_range::NAME => call_read_range(repo_root, &arguments),
         tools::diff_preview::NAME => call_diff_preview(repo_root, &arguments),
         tools::replace_exact::NAME => call_replace_exact(repo_root, &arguments),
+        tools::status_guard::NAME => call_status_guard(repo_root, &arguments),
         tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
     };
@@ -329,6 +345,17 @@ fn call_replace_exact(
     ))
 }
 
+fn call_status_guard(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    match optional_string(arguments, "path")? {
+        Some(path) => status_summary_for_path(repo_root, Some(Path::new(path))),
+        None => status_summary(repo_root),
+    }
+    .map_err(|error| format!("status_guard refused: {error}"))
+}
+
 fn call_write_new_file(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
@@ -354,6 +381,19 @@ fn required_string<'a>(
         .get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing or invalid string argument: {key}"))
+}
+
+fn optional_string<'a>(
+    arguments: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<&'a str>, String> {
+    match arguments.get(key) {
+        Some(value) => value
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| format!("invalid string argument: {key}")),
+        None => Ok(None),
+    }
 }
 
 fn required_usize(arguments: &serde_json::Map<String, Value>, key: &str) -> Result<usize, String> {

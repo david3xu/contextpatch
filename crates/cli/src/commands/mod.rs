@@ -19,7 +19,7 @@ pub fn dispatch(args: &[String]) -> ExitCode {
             println!("contextpatch {}", contextpatch_core::VERSION);
             ExitCode::SUCCESS
         }
-        Command::Status => status::run(),
+        Command::Status => status::run(&args[1..]),
         Command::ReadRange => read_range::run(&args[1..]),
         Command::DiffPreview => diff_preview::run(&args[1..]),
         Command::ReplaceExact => replace_exact::run(&args[1..]),
@@ -36,7 +36,7 @@ fn parse_command(command: Option<&str>) -> Command {
     match command {
         None | Some("help") | Some("--help") | Some("-h") => Command::Help,
         Some("version") | Some("--version") | Some("-V") => Command::Version,
-        Some("status") => Command::Status,
+        Some("status") | Some("status-guard") => Command::Status,
         Some("read-range") => Command::ReadRange,
         Some("diff") | Some("diff-preview") => Command::DiffPreview,
         Some("replace-exact") => Command::ReplaceExact,
@@ -59,13 +59,15 @@ Guarded patch editing for AI context servers.
 
 Usage:
   contextpatch <command>
+  contextpatch status-guard [path]
   contextpatch read-range <path> --start <line> --end <line>
   contextpatch diff-preview <path> --old <text> --new <text>
   contextpatch replace-exact <path> --old <text> --new <text>
   contextpatch write-new-file <path> --content <text>
 
 Commands:
-  status          Show repository edit readiness
+  status-guard    Refuse when Git status is dirty
+  status          Alias for status-guard
   read-range      Read a bounded file range
   diff-preview    Preview a guarded edit
   replace-exact   Replace text only when an anchor matches exactly once
