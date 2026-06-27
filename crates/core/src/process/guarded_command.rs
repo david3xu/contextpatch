@@ -235,17 +235,40 @@ fn redact_and_truncate(text: &str) -> String {
 
 fn redact_line(line: &str) -> String {
     let lower = line.to_ascii_lowercase();
-    if lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("token")
-        || lower.contains("secret")
-        || lower.contains("password")
-        || line.contains("sk-")
+    if contains_openai_style_key(line)
+        || lower.contains("authorization: bearer ")
+        || contains_secret_assignment(&lower, "api_key")
+        || contains_secret_assignment(&lower, "apikey")
+        || contains_secret_assignment(&lower, "token")
+        || contains_secret_assignment(&lower, "secret")
+        || contains_secret_assignment(&lower, "password")
     {
         "[redacted potential secret line]".to_string()
     } else {
         line.to_string()
     }
+}
+
+fn contains_openai_style_key(line: &str) -> bool {
+    line.match_indices("sk-").any(|(index, _)| {
+        let preceded_by_word = line[..index]
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        !preceded_by_word
+    })
+}
+
+fn contains_secret_assignment(line: &str, name: &str) -> bool {
+    let Some(index) = line.find(name) else {
+        return false;
+    };
+    let tail = line[index + name.len()..].trim_start();
+    tail.starts_with('=')
+        || tail.starts_with(':')
+        || tail.starts_with("\":")
+        || tail.starts_with(" =")
+        || tail.starts_with(" :")
 }
 
 struct OutputPaths {
@@ -275,7 +298,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::run_guarded_command;
+    use super::{redact_line, run_guarded_command};
 
     #[test]
     fn runs_allowlisted_git_status() {
@@ -319,6 +342,26 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("outside repository root"));
+    }
+
+    #[test]
+    fn redaction_keeps_secret_adjacent_paths_and_docs_readable() {
+        assert_eq!(
+            redact_line("clients/vscode/src/commands/ask-datacore.ts"),
+            "clients/vscode/src/commands/ask-datacore.ts"
+        );
+        assert_eq!(
+            redact_line("docs mention token discovery without showing a value"),
+            "docs mention token discovery without showing a value"
+        );
+        assert_eq!(
+            redact_line("DATACORE_TOKEN=super-secret-value"),
+            "[redacted potential secret line]"
+        );
+        assert_eq!(
+            redact_line("Authorization: Bearer abc123"),
+            "[redacted potential secret line]"
+        );
     }
 
     fn git_root(name: &str) -> PathBuf {

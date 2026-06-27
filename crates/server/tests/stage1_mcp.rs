@@ -153,6 +153,51 @@ fn stage2_guarded_command_returns_while_mcp_stdin_stays_open() {
     );
 }
 
+#[test]
+fn stage2_rg_files_returns_while_mcp_stdin_stays_open() {
+    let root = git_repo("stage2_rg_files_returns_while_mcp_stdin_stays_open");
+    fs::create_dir_all(root.join("clients/vscode/test/suite")).unwrap();
+    fs::write(
+        root.join("clients/vscode/test/suite/live-runtime.test.ts"),
+        "",
+    )
+    .unwrap();
+
+    let mut child = Command::new(contextpatch_server())
+        .arg("--repo-root")
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"rg","args":["--files","clients/vscode/test"],"timeout_secs":30}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(stdout);
+    reader.read_line(&mut line).unwrap();
+
+    let response: Value = serde_json::from_str(&line).unwrap();
+    assert_text(&response, "allowlist: rg/--files");
+    assert_text(&response, "clients/vscode/test/suite/live-runtime.test.ts");
+
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "server failed\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn run_server(root: &Path, requests: &[&str]) -> Vec<Value> {
     let mut child = Command::new(contextpatch_server())
         .arg("--repo-root")
