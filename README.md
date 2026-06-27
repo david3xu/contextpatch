@@ -49,6 +49,10 @@ That boundary is intentional product strategy, not a temporary limitation.
 
 The first useful milestone is a CLI command that can safely replace exactly one matched text span and refuse zero-match or multi-match edits. The full staged plan is in `docs/implementation-roadmap.md`.
 
+```bash
+contextpatch replace-exact <path> --old <text> --new <text>
+```
+
 ## Safety contract
 
 1. Do not overwrite whole files by default.
@@ -62,7 +66,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-This repository is newly scaffolded as a Rust workspace. The docs now define the product contract before implementation. Code changes should keep the relevant Markdown file synchronized in the same commit.
+This repository is a new Rust workspace. The docs define the product contract, and Stage 1 implementation has started with `replace-exact` in the core crate and CLI. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

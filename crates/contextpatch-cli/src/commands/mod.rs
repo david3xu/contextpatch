@@ -8,8 +8,8 @@ pub mod read_range;
 pub mod replace_exact;
 pub mod status;
 
-pub fn dispatch(command: Option<&str>) -> ExitCode {
-    match parse_command(command) {
+pub fn dispatch(args: &[String]) -> ExitCode {
+    match parse_command(args.first().map(String::as_str)) {
         Command::Help => {
             print_help();
             ExitCode::SUCCESS
@@ -21,7 +21,7 @@ pub fn dispatch(command: Option<&str>) -> ExitCode {
         Command::Status => status::run(),
         Command::ReadRange => read_range::run(),
         Command::DiffPreview => diff_preview::run(),
-        Command::ReplaceExact => replace_exact::run(),
+        Command::ReplaceExact => replace_exact::run(&args[1..]),
         Command::ApplyPatch => apply_patch::run(),
         Command::Serve => {
             eprintln!("serve lives in the contextpatch-server crate and is not implemented yet");
@@ -56,6 +56,7 @@ Guarded patch editing for AI context servers.
 
 Usage:
   contextpatch <command>
+  contextpatch replace-exact <path> --old <text> --new <text>
 
 Commands:
   status          Show repository edit readiness

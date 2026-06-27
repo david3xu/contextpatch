@@ -64,6 +64,14 @@ Required inputs:
 - `old`
 - `new`
 
+CLI shape:
+
+```bash
+contextpatch replace-exact <path> --old <text> --new <text>
+```
+
+The CLI treats the current working directory as the repository root guard.
+
 Rules:
 
 - Refuse if `old` is empty.
