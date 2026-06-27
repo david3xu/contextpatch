@@ -2,6 +2,8 @@
 
 `contextpatch` exists to make agent edits small, anchored, atomic, and reviewable.
 
+The product position is that AI coding agents should receive guarded edit primitives, not broad filesystem write power. This contract protects that position.
+
 This document is normative. If implementation behavior conflicts with this file, the implementation is wrong unless this file is intentionally updated in the same change.
 
 ## Write rules
@@ -47,6 +49,8 @@ Git state is a guardrail, not a hidden side effect. Tools may inspect Git state 
 ## Default-deny tools
 
 The server should not expose generic `write_file`, unrestricted `delete`, recursive directory writes, or shell execution as default tools.
+
+Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
 
 ## Non-goals
 

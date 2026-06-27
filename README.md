@@ -1,10 +1,16 @@
 # contextpatch
 
-Guarded patch editing for AI context servers.
+The safe patch layer for AI coding agents.
 
-`contextpatch` is a small Rust tool for safe, reviewable repository edits. It is designed for agent workflows where whole-file writes are too risky, too broad, or too unreliable.
+`contextpatch` is a Rust tool for safe, reviewable repository edits. It is designed for agent workflows where broad filesystem writes are too risky, whole-file rewrites are too unreliable, and every persistent change should be easy to audit.
 
 The project principle is simple: **every write must be anchored, atomic, and reviewable**.
+
+## Product thesis
+
+AI agents should not get broad filesystem write power by default. They should get small, guarded, reviewable edit primitives.
+
+`contextpatch` aims to be the safe patch layer between AI coding agents and a repository. It should be useful as a CLI, a local context server, and a reusable edit engine for future editor or agent integrations.
 
 ## Why this exists
 
@@ -17,6 +23,8 @@ AI desktop tools often expose generic filesystem writes. That is convenient, but
 `contextpatch` is not a general filesystem server. It is not a shell runner. It is not a replacement for Git.
 
 The project owns one narrow surface: **safe repository editing primitives for agent clients**. Anything outside that boundary should be rejected unless it directly supports anchored edits, reviewable diffs, or repository guardrails.
+
+That boundary is intentional product strategy, not a temporary limitation.
 
 ## MVP scope
 

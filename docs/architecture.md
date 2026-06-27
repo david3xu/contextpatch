@@ -2,6 +2,8 @@
 
 `contextpatch` is split into three layers so safe edit behavior is independent from any single agent host.
 
+The architecture supports one product goal: provide a reusable safe patch layer for AI coding agents without turning into a generic filesystem server.
+
 ## Layers
 
 | Layer | Crate | Responsibility |
@@ -15,6 +17,8 @@
 The core crate must not know about the server protocol. Server tools call core operations; they do not own edit semantics.
 
 This keeps the edit engine reusable by the CLI, context server, editor integrations, and tests.
+
+The safe edit engine is the product center. CLI and server crates are adapters.
 
 ## Crate ownership
 

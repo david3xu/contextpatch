@@ -2,6 +2,8 @@
 
 Initial contextpatch tools are intentionally narrow.
 
+This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, not a general filesystem toolbox.
+
 | Tool | Writes? | Guard |
 | --- | --- | --- |
 | `read_range` | No | Bounded path and line range |
