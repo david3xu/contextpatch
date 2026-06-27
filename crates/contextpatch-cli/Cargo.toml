@@ -1,0 +1,17 @@
+[package]
+name = "contextpatch-cli"
+description = "Command-line interface for contextpatch."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "contextpatch"
+path = "src/main.rs"
+
+[dependencies]
+contextpatch-core.workspace = true

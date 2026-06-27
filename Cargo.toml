@@ -1,12 +1,19 @@
-[package]
-name = "contextpatch"
+[workspace]
+members = [
+    "crates/contextpatch-core",
+    "crates/contextpatch-cli",
+    "crates/contextpatch-server",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Guarded patch editing for AI context servers."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/david3xu/contextpatch"
 readme = "README.md"
 keywords = ["patch", "agent", "context", "atomic", "git"]
 categories = ["command-line-utilities", "development-tools"]
 
-[dependencies]
+[workspace.dependencies]
+contextpatch-core = { path = "crates/contextpatch-core" }

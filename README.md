@@ -16,7 +16,8 @@ AI desktop tools often expose generic filesystem writes. That is convenient, but
 
 | Capability | Purpose |
 | --- | --- |
-| `diff` | Preview a proposed edit before writing |
+| `read-range` | Read a bounded section of a file |
+| `diff-preview` | Preview a proposed edit before writing |
 | `replace-exact` | Replace text only when the expected anchor appears exactly once |
 | `apply-patch` | Apply unified patches with repository guardrails |
 | `status` | Show clean/dirty Git state before edits |
@@ -33,4 +34,14 @@ AI desktop tools often expose generic filesystem writes. That is convenient, but
 
 ## Current status
 
-This repository is newly scaffolded. The first implementation target is a local CLI with the same primitives that the server interface will expose.
+This repository is newly scaffolded as a Rust workspace. The first implementation target is a local CLI with the same primitives that the server interface will expose.
+
+## Repository layout
+
+```text
+crates/contextpatch-core/      safe edit engine
+crates/contextpatch-cli/       human CLI
+crates/contextpatch-server/    context-server adapter
+docs/                          public design and usage docs
+tests/                         repo-level fixtures and integration tests
+```

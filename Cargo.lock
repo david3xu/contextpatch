@@ -3,5 +3,19 @@
 version = 4
 
 [[package]]
-name = "contextpatch"
+name = "contextpatch-cli"
 version = "0.1.0"
+dependencies = [
+ "contextpatch-core",
+]
+
+[[package]]
+name = "contextpatch-core"
+version = "0.1.0"
+
+[[package]]
+name = "contextpatch-server"
+version = "0.1.0"
+dependencies = [
+ "contextpatch-core",
+]

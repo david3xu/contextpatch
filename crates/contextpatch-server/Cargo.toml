@@ -1,0 +1,17 @@
+[package]
+name = "contextpatch-server"
+description = "Context server adapter for contextpatch."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "contextpatch-server"
+path = "src/main.rs"
+
+[dependencies]
+contextpatch-core.workspace = true
