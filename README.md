@@ -57,6 +57,14 @@ contextpatch write-new-file <path> --content <text>
 contextpatch status-guard [path]
 ```
 
+The MCP server exposes the same Stage 1 surface to local agent clients:
+
+- `read_range`
+- `diff_preview`
+- `replace_exact`
+- `write_new_file`
+- `status_guard`
+
 ## Safety contract
 
 1. Do not overwrite whole files by default.
@@ -70,7 +78,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-This repository is a new Rust workspace. The docs define the product contract, and Stage 1 implementation has started with `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard` in the core crate, CLI, and MCP server. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

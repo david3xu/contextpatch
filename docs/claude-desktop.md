@@ -24,18 +24,24 @@ The expected agent workflow is:
 4. Use `write_new_file` for create-only file creation.
 5. Let the human review Git diff outside the server.
 
-## Configuration shape
+## Build and configure Claude Desktop
 
-During local development, build the server and point Claude Desktop at the compiled binary:
+Build the release server:
+
+```bash
+cargo build --release -p server --bin contextpatch-server
+```
+
+Then point Claude Desktop at the compiled binary. Use absolute paths because Claude Desktop does not inherit your shell's current directory:
 
 ```json
 {
   "mcpServers": {
     "contextpatch": {
-      "command": "/path/to/contextpatch/target/debug/contextpatch-server",
+      "command": "/absolute/path/to/contextpatch/target/release/contextpatch-server",
       "args": [
         "--repo-root",
-        "/path/to/repo"
+        "/absolute/path/to/repo"
       ]
     }
   }
@@ -43,6 +49,14 @@ During local development, build the server and point Claude Desktop at the compi
 ```
 
 Change `--repo-root` to the repository Claude should edit. The server treats that directory as the path guard root.
+
+On macOS, Claude Desktop reads this configuration from:
+
+```text
+~/Library/Application Support/Claude/claude_desktop_config.json
+```
+
+Restart Claude Desktop after changing the config or rebuilding the server binary.
 
 ## Local development command
 
@@ -59,6 +73,16 @@ contextpatch-server --repo-root /path/to/repo
 ```
 
 The workspace package is named `server`; the installed binary remains `contextpatch-server` to avoid colliding with generic commands.
+
+## Quick MCP smoke test
+
+After restarting Claude Desktop, ask it to list available `contextpatch` tools. It should see:
+
+- `read_range`
+- `diff_preview`
+- `replace_exact`
+- `status_guard`
+- `write_new_file`
 
 ## Currently exposed tools
 

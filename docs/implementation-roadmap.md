@@ -14,7 +14,7 @@ Stage 1 should finish the smallest serious product surface.
 | `status_guard` | Repository state visibility and edit gating |
 | `write_new_file` | Safe create-only file creation |
 
-Stage 1 is complete when these tools work through the core crate and CLI, have tests for success and refusal paths, and have protocol-facing server schemas ready or implemented.
+Stage 1 is complete: these tools work through the core crate, CLI, and MCP server, with success/refusal tests and protocol-facing schemas.
 
 ## Stage 1 implementation order
 
