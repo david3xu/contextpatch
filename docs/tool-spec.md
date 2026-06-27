@@ -20,6 +20,8 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
+| `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
+| `git_push_exact` | Remote branch update | Clean worktree, exact HEAD, no remote-ahead divergence, explicit confirmation, no force |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
 
 ## Naming
@@ -39,7 +41,7 @@ Rules:
 - Must report file tools and process-execution availability honestly.
 - Must identify the configured repository root.
 - Must state unsupported operations, including arbitrary shell and destructive Git mutations.
-- Must distinguish the narrow local `git_commit_exact` checkpoint from unsupported fetch/push/destructive Git workflows.
+- Must distinguish the narrow local `git_commit_exact` checkpoint and guarded `git_remote_check`/`git_push_exact` workflow from unsupported broad Git/destructive workflows.
 - Must not mutate repository state.
 
 ### `preflight_health`
@@ -324,6 +326,48 @@ Rules:
 - On success, the tool returns the commit hash, short hash, committed paths, and post-commit short status.
 - Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
 
+### `git_remote_check`
+
+Fetches one explicit remote branch and reports whether the local `HEAD` is behind that remote branch.
+
+Required inputs:
+
+- `branch`: branch name to check
+
+Optional inputs:
+
+- `remote`: remote name; defaults to `origin`
+
+Rules:
+
+- The tool may run only `git fetch <remote> <branch>` plus read-only Git queries.
+- The tool must reject malformed remote or branch names.
+- The tool must not modify source files or the Git index. It may update remote-tracking refs as the explicit purpose of the tool.
+- The response must include `head`, `remote_head`, `remote_ref`, `head_to_remote_empty`, `remote_ahead_count`, and `local_ahead_count`.
+- The tool must report whether source status changed during the fetch and refuse if source status changes.
+
+### `git_push_exact`
+
+Pushes exactly the current branch `HEAD` to the matching branch on an explicit remote.
+
+Required inputs:
+
+- `remote`
+- `branch`
+- `expected_head`
+- `confirm`: literal `push exact commit`
+
+Rules:
+
+- The tool must require a clean worktree before pushing.
+- The current branch must exactly match `branch`.
+- The current `HEAD` must match `expected_head`.
+- The tool must fetch `<remote> <branch>` immediately before the push.
+- The remote-tracking ref must not be ahead of `HEAD`, and it must be an ancestor of `HEAD`; divergent or non-fast-forward states must be refused.
+- The push refspec must be exactly `HEAD:refs/heads/<branch>` for the requested branch.
+- The tool must not use force push, delete refs, push tags, push multiple branches, or push a different local branch.
+- On success, the response must include the pushed commit hash, branch, remote, previous remote head, refspec, and post-push status.
+
 ### Latency instrumentation
 
 Future Stage 2B command and workflow tools should expose optional timing metadata. The metadata should be diagnostic, not part of the safety decision itself.
@@ -379,5 +423,7 @@ Stage 1 ships:
 9. `read_command_log`
 10. `validation_profile_run`
 11. `git_commit_exact`
+12. `git_remote_check`
+13. `git_push_exact`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

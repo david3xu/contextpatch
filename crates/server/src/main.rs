@@ -383,6 +383,52 @@ fn tool_definitions() -> Value {
                 "required": ["paths", "subject"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": tools::git_remote_check::NAME,
+            "description": "Fetch one remote branch and report whether the remote branch is ahead of HEAD. Does not modify source files.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "remote": {
+                        "type": "string",
+                        "description": "Git remote name. Defaults to origin."
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch name to compare with the remote-tracking ref."
+                    }
+                },
+                "required": ["branch"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::git_push_exact::NAME,
+            "description": "Push the current branch HEAD to the matching remote branch only after exact hash and divergence checks.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "remote": {
+                        "type": "string",
+                        "description": "Git remote name."
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Current branch name and matching remote branch name."
+                    },
+                    "expected_head": {
+                        "type": "string",
+                        "description": "Full or short commit hash expected at HEAD."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `push exact commit`."
+                    }
+                },
+                "required": ["remote", "branch", "expected_head", "confirm"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -412,6 +458,8 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::read_command_log::NAME => call_read_command_log(&arguments),
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
+        tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
+        tools::git_push_exact::NAME => call_git_push_exact(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
     };
 
@@ -457,12 +505,14 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "write_new_file": true,
             "status_guard": true,
             "read_command_log": true,
-            "git_commit_exact": true
+            "git_commit_exact": true,
+            "git_remote_check": true,
+            "git_push_exact": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
-            "push": false,
-            "fetch": false,
+            "remote_check": true,
+            "push_exact_commit": true,
             "reset_checkout_clean_stash": false,
             "guards": [
                 "requires exact complete dirty-path set",
@@ -470,7 +520,9 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "requires confirm literal for mutation",
                 "stages only explicit paths",
                 "creates at most one local commit",
-                "never pushes"
+                "fetches only explicit remote branch",
+                "pushes only expected HEAD to matching remote branch",
+                "never force pushes"
             ]
         },
         "process_execution": {
@@ -495,7 +547,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             ],
             "not_supported": [
                 "arbitrary shell",
-                "git push/fetch/reset/checkout/stash/clean",
+                "force push/pull/reset/checkout/stash/clean",
                 "ungated or automatic commits",
                 "path traversal outside repo root",
                 "secret-printing environment inspection"
@@ -817,6 +869,179 @@ fn call_git_commit_exact(
     .map_err(|error| format!("git_commit_exact refused: {error}"))
 }
 
+fn call_git_remote_check(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let remote = validate_git_remote(optional_string(arguments, "remote")?.unwrap_or("origin"))?;
+    let branch = validate_git_branch(required_string(arguments, "branch")?)?;
+    let root = canonical_repo_root(repo_root, tools::git_remote_check::NAME)?;
+    ensure_remote_exists(tools::git_remote_check::NAME, &root, &remote)?;
+    let source_status_before = git_status_short(&root)?;
+
+    git_success_for_tool(
+        tools::git_remote_check::NAME,
+        &root,
+        vec!["fetch".to_string(), remote.clone(), branch.clone()],
+    )?;
+
+    let source_status_after = git_status_short(&root)?;
+    if source_status_after != source_status_before {
+        return Err(format!(
+            "git_remote_check refused: source worktree changed during fetch\nbefore:\n{}\nafter:\n{}",
+            empty_label(&source_status_before),
+            empty_label(&source_status_after)
+        ));
+    }
+
+    let head = git_stdout_for_tool(tools::git_remote_check::NAME, &root, &["rev-parse", "HEAD"])?;
+    let remote_ref = remote_ref(&remote, &branch);
+    let remote_head = git_stdout_for_tool(
+        tools::git_remote_check::NAME,
+        &root,
+        &["rev-parse", &remote_ref],
+    )?;
+    let remote_ahead_count = rev_count_for_tool(
+        tools::git_remote_check::NAME,
+        &root,
+        &format!("HEAD..{remote_ref}"),
+    )?;
+    let local_ahead_count = rev_count_for_tool(
+        tools::git_remote_check::NAME,
+        &root,
+        &format!("{remote_ref}..HEAD"),
+    )?;
+    let remote_is_ancestor =
+        git_status_code(&root, &["merge-base", "--is-ancestor", &remote_ref, "HEAD"])? == 0;
+    let head_is_ancestor =
+        git_status_code(&root, &["merge-base", "--is-ancestor", "HEAD", &remote_ref])? == 0;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_remote_check::NAME,
+        "remote": remote,
+        "branch": branch,
+        "remote_ref": remote_ref,
+        "head": head.trim(),
+        "remote_head": remote_head.trim(),
+        "head_to_remote_empty": remote_ahead_count == 0,
+        "remote_ahead_count": remote_ahead_count,
+        "local_ahead_count": local_ahead_count,
+        "remote_is_ancestor_of_head": remote_is_ancestor,
+        "head_is_ancestor_of_remote": head_is_ancestor,
+        "source_status_unchanged": true,
+        "status_short": source_status_after
+    }))
+    .map_err(|error| format!("git_remote_check refused: {error}"))
+}
+
+fn call_git_push_exact(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "push exact commit";
+
+    let remote = validate_git_remote(required_string(arguments, "remote")?)?;
+    let branch = validate_git_branch(required_string(arguments, "branch")?)?;
+    let expected_head = validate_expected_head(required_string(arguments, "expected_head")?)?;
+    let confirm = required_string(arguments, "confirm")?;
+    if confirm != CONFIRMATION {
+        return Err(format!(
+            "git_push_exact refused: confirm must be {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = canonical_repo_root(repo_root, tools::git_push_exact::NAME)?;
+    ensure_remote_exists(tools::git_push_exact::NAME, &root, &remote)?;
+    let status = git_status_short(&root)?;
+    if !status.trim().is_empty() {
+        return Err(format!(
+            "git_push_exact refused: worktree must be clean before push\n{}",
+            status.trim()
+        ));
+    }
+
+    let current_branch = git_stdout_for_tool(
+        tools::git_push_exact::NAME,
+        &root,
+        &["branch", "--show-current"],
+    )?;
+    let current_branch = current_branch.trim();
+    if current_branch != branch {
+        return Err(format!(
+            "git_push_exact refused: current branch `{current_branch}` does not match requested branch `{branch}`"
+        ));
+    }
+
+    let head = git_stdout_for_tool(tools::git_push_exact::NAME, &root, &["rev-parse", "HEAD"])?;
+    let head = head.trim().to_string();
+    if !head.starts_with(&expected_head) {
+        return Err(format!(
+            "git_push_exact refused: HEAD `{head}` does not match expected_head `{expected_head}`"
+        ));
+    }
+
+    git_success_for_tool(
+        tools::git_push_exact::NAME,
+        &root,
+        vec!["fetch".to_string(), remote.clone(), branch.clone()],
+    )?;
+    let status_after_fetch = git_status_short(&root)?;
+    if !status_after_fetch.trim().is_empty() {
+        return Err(format!(
+            "git_push_exact refused: worktree changed during fetch\n{}",
+            status_after_fetch.trim()
+        ));
+    }
+
+    let remote_ref = remote_ref(&remote, &branch);
+    let remote_head = git_stdout_for_tool(
+        tools::git_push_exact::NAME,
+        &root,
+        &["rev-parse", &remote_ref],
+    )?;
+    let remote_head = remote_head.trim().to_string();
+    let remote_ahead_count = rev_count_for_tool(
+        tools::git_push_exact::NAME,
+        &root,
+        &format!("HEAD..{remote_ref}"),
+    )?;
+    if remote_ahead_count != 0 {
+        return Err(format!(
+            "git_push_exact refused: remote `{remote_ref}` is ahead of HEAD by {remote_ahead_count} commit(s)"
+        ));
+    }
+    let remote_is_ancestor =
+        git_status_code(&root, &["merge-base", "--is-ancestor", &remote_ref, "HEAD"])? == 0;
+    if !remote_is_ancestor {
+        return Err(format!(
+            "git_push_exact refused: remote `{remote_ref}` is not an ancestor of HEAD; refusing non-fast-forward/divergent push"
+        ));
+    }
+
+    git_success_for_tool(
+        tools::git_push_exact::NAME,
+        &root,
+        vec![
+            "push".to_string(),
+            remote.clone(),
+            format!("HEAD:refs/heads/{branch}"),
+        ],
+    )?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_push_exact::NAME,
+        "pushed": true,
+        "remote": remote,
+        "branch": branch,
+        "commit": head,
+        "previous_remote_head": remote_head,
+        "force": false,
+        "refspec": format!("HEAD:refs/heads/{branch}"),
+        "status_short": git_status_short(&root)?
+    }))
+    .map_err(|error| format!("git_push_exact refused: {error}"))
+}
+
 fn required_string<'a>(
     arguments: &'a serde_json::Map<String, Value>,
     key: &str,
@@ -1075,6 +1300,159 @@ fn git_output(root: &Path, args: &[&str]) -> Result<std::process::Output, String
         ));
     }
     Ok(output)
+}
+
+fn canonical_repo_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
+    repo_root
+        .canonicalize()
+        .map_err(|error| format!("{tool_name} refused: failed to resolve repo root: {error}"))
+}
+
+fn git_status_short(root: &Path) -> Result<String, String> {
+    git_stdout_for_tool(
+        "git_status_short",
+        root,
+        &["status", "--short", "--untracked-files=all"],
+    )
+}
+
+fn git_stdout_for_tool(tool_name: &str, root: &Path, args: &[&str]) -> Result<String, String> {
+    let output = git_output_for_tool(tool_name, root, args)?;
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("{tool_name} refused: git output was not UTF-8: {error}"))
+}
+
+fn git_success_for_tool(tool_name: &str, root: &Path, args: Vec<String>) -> Result<(), String> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let _ = git_output_for_tool(tool_name, root, &arg_refs)?;
+    Ok(())
+}
+
+fn git_output_for_tool(
+    tool_name: &str,
+    root: &Path,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_PAGER", "cat")
+        .env("NO_COLOR", "1")
+        .output()
+        .map_err(|error| format!("{tool_name} refused: failed to run git: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{tool_name} refused: git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output)
+}
+
+fn git_status_code(root: &Path, args: &[&str]) -> Result<i32, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_PAGER", "cat")
+        .env("NO_COLOR", "1")
+        .output()
+        .map_err(|error| format!("git operation refused: failed to run git: {error}"))?;
+    Ok(output.status.code().unwrap_or(-1))
+}
+
+fn rev_count_for_tool(tool_name: &str, root: &Path, range: &str) -> Result<u64, String> {
+    let output = git_stdout_for_tool(tool_name, root, &["rev-list", "--count", range])?;
+    output.trim().parse::<u64>().map_err(|error| {
+        format!(
+            "{tool_name} refused: failed to parse revision count `{}`: {error}",
+            output.trim()
+        )
+    })
+}
+
+fn ensure_remote_exists(tool_name: &str, root: &Path, remote: &str) -> Result<(), String> {
+    let remotes = git_stdout_for_tool(tool_name, root, &["remote"])?;
+    if remotes.lines().any(|line| line == remote) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{tool_name} refused: remote `{remote}` is not configured"
+        ))
+    }
+}
+
+fn validate_git_remote(remote: &str) -> Result<String, String> {
+    validate_git_ref_component("remote", remote)?;
+    Ok(remote.to_string())
+}
+
+fn validate_git_branch(branch: &str) -> Result<String, String> {
+    validate_git_ref_component("branch", branch)?;
+    if branch.contains("..")
+        || branch.contains("@{")
+        || branch.starts_with('-')
+        || branch.starts_with('/')
+        || branch.ends_with('/')
+        || branch.ends_with(".lock")
+    {
+        return Err(format!("git workflow refused: invalid branch `{branch}`"));
+    }
+    let status = Command::new("git")
+        .args(["check-ref-format", "--branch", branch])
+        .env("GIT_PAGER", "cat")
+        .env("NO_COLOR", "1")
+        .output()
+        .map_err(|error| format!("git workflow refused: failed to validate branch: {error}"))?;
+    if !status.status.success() {
+        return Err(format!("git workflow refused: invalid branch `{branch}`"));
+    }
+    Ok(branch.to_string())
+}
+
+fn validate_git_ref_component(label: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.contains('\0')
+        || value.chars().any(char::is_whitespace)
+        || value.starts_with('-')
+        || value.contains('\\')
+        || value.contains(':')
+        || value.contains('^')
+        || value.contains('~')
+        || value.contains('?')
+        || value.contains('*')
+        || value.contains('[')
+    {
+        return Err(format!("git workflow refused: invalid {label} `{value}`"));
+    }
+    Ok(())
+}
+
+fn validate_expected_head(expected_head: &str) -> Result<String, String> {
+    if expected_head.len() < 7 || expected_head.len() > 40 {
+        return Err(
+            "git_push_exact refused: expected_head must be a 7 to 40 character commit hash"
+                .to_string(),
+        );
+    }
+    if !expected_head.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("git_push_exact refused: expected_head must be hexadecimal".to_string());
+    }
+    Ok(expected_head.to_ascii_lowercase())
+}
+
+fn remote_ref(remote: &str, branch: &str) -> String {
+    format!("refs/remotes/{remote}/{branch}")
+}
+
+fn empty_label(text: &str) -> &str {
+    if text.trim().is_empty() {
+        "(empty)"
+    } else {
+        text
+    }
 }
 
 fn format_set(paths: &BTreeSet<String>) -> String {

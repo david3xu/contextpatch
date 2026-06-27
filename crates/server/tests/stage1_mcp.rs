@@ -43,6 +43,8 @@ fn stage1_mcp_tools_work_together() {
         "read_command_log",
         "validation_profile_run",
         "git_commit_exact",
+        "git_remote_check",
+        "git_push_exact",
     ] {
         assert!(
             list.as_array()
@@ -70,6 +72,92 @@ fn stage1_mcp_tools_work_together() {
     assert_eq!(responses[6]["result"]["isError"], true);
     assert_text(&responses[6], "status_guard refused");
     assert_text(&responses[6], "sample.txt");
+}
+
+#[test]
+fn stage2_git_remote_check_and_push_exact_are_gated() {
+    let origin = bare_repo("stage2_git_remote_check_and_push_exact_are_gated_origin");
+    let root = git_repo("stage2_git_remote_check_and_push_exact_are_gated");
+    fs::write(root.join("sample.txt"), "initial\n").unwrap();
+    git(&root, &["add", "sample.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    git(&root, &["branch", "-M", "main"]);
+    git(
+        &root,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&root, &["push", "--quiet", "-u", "origin", "main"]);
+
+    fs::write(root.join("sample.txt"), "changed\n").unwrap();
+    let commit_responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["sample.txt"],"subject":"test: local change","dry_run":false,"confirm":"commit exact paths"}}}"#,
+        ],
+    );
+    assert_text(&commit_responses[0], "\"committed\": true");
+    let head = git_stdout(&root, &["rev-parse", "HEAD"]);
+
+    let remote_check = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_remote_check","arguments":{"remote":"origin","branch":"main"}}}"#;
+    let push_without_confirm = format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"git_push_exact","arguments":{{"remote":"origin","branch":"main","expected_head":"{}","confirm":"wrong"}}}}}}"#,
+        head.trim()
+    );
+    let push = format!(
+        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"git_push_exact","arguments":{{"remote":"origin","branch":"main","expected_head":"{}","confirm":"push exact commit"}}}}}}"#,
+        head.trim()
+    );
+
+    let responses = run_server(&root, &[remote_check, &push_without_confirm, &push]);
+
+    assert_text(&responses[0], "\"head_to_remote_empty\": true");
+    assert_text(&responses[0], "\"local_ahead_count\": 1");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "confirm must be");
+    assert_text(&responses[2], "\"pushed\": true");
+    assert_text(&responses[2], "\"force\": false");
+
+    let remote_head = git_stdout(&root, &["ls-remote", "origin", "refs/heads/main"]);
+    assert!(
+        remote_head.starts_with(head.trim()),
+        "remote head {remote_head:?} did not match {head:?}"
+    );
+}
+
+#[test]
+fn stage2_git_push_exact_refuses_remote_ahead() {
+    let origin = bare_repo("stage2_git_push_exact_refuses_remote_ahead_origin");
+    let root = git_repo("stage2_git_push_exact_refuses_remote_ahead");
+    fs::write(root.join("sample.txt"), "initial\n").unwrap();
+    git(&root, &["add", "sample.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    git(&root, &["branch", "-M", "main"]);
+    git(
+        &root,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&root, &["push", "--quiet", "-u", "origin", "main"]);
+
+    let other = temp_root("stage2_git_push_exact_refuses_remote_ahead_other");
+    git(&other, &["clone", "--quiet", origin.to_str().unwrap(), "."]);
+    git(&other, &["config", "user.name", "Contextpatch Test"]);
+    git(
+        &other,
+        &["config", "user.email", "contextpatch@example.invalid"],
+    );
+    fs::write(other.join("sample.txt"), "remote\n").unwrap();
+    git(&other, &["commit", "--quiet", "-am", "remote change"]);
+    git(&other, &["push", "--quiet", "origin", "main"]);
+
+    let head = git_stdout(&root, &["rev-parse", "HEAD"]);
+    let push = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"git_push_exact","arguments":{{"remote":"origin","branch":"main","expected_head":"{}","confirm":"push exact commit"}}}}}}"#,
+        head.trim()
+    );
+    let responses = run_server(&root, &[&push]);
+
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_text(&responses[0], "remote `refs/remotes/origin/main` is ahead");
 }
 
 #[test]
@@ -357,6 +445,34 @@ fn git(root: &Path, args: &[&str]) {
         .status()
         .unwrap();
     assert!(status.success(), "git {args:?} failed");
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn bare_repo(name: &str) -> PathBuf {
+    let root = temp_root(name);
+    let status = Command::new("git")
+        .arg("init")
+        .arg("--bare")
+        .arg("--quiet")
+        .arg(&root)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    root
 }
 
 fn temp_root(name: &str) -> PathBuf {

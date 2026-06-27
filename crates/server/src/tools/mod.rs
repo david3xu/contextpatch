@@ -1,6 +1,8 @@
 pub mod capability_manifest;
 pub mod diff_preview;
 pub mod git_commit_exact;
+pub mod git_push_exact;
+pub mod git_remote_check;
 pub mod preflight_health;
 pub mod read_command_log;
 pub mod read_range;

@@ -60,9 +60,11 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `run_guarded_command` | Run repo-confined allowlisted validation commands without shell access |
 | `read_command_log` | Let clients retrieve captured command output without forcing large JSON-RPC responses into the first call |
 | `validation_profile_run` | Collapse common multi-command validation sequences into one auditable MCP call |
-| `git_commit_exact` | Allow a narrow local commit checkpoint after exact-path validation, while still refusing push/fetch/destructive Git |
+| `git_commit_exact` | Allow a narrow local commit checkpoint after exact-path validation |
+| `git_remote_check` | Fetch exactly one explicit remote branch and report local/remote divergence without source edits |
+| `git_push_exact` | Publish the exact current commit only after branch, clean-worktree, expected-HEAD, remote-divergence, and confirmation guards |
 
-Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, push/fetch, destructive Git operations, or broad automatic commits. `git_commit_exact` is the only commit path: dry-run by default, exact dirty-path set required, explicit confirmation required before mutation, and local commit only.
+Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, or broad automatic commits. Git mutation remains split by risk boundary: `git_commit_exact` is local only, `git_remote_check` is explicit single-branch fetch/report only, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing.
 
 ## Stage 2B: latency and workflow compression
 
