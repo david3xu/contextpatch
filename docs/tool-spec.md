@@ -168,11 +168,12 @@ Rules:
 
 ## MVP implementation subset
 
-The first implementation should ship only:
+Stage 1 should ship only:
 
 1. `replace_exact`
 2. `read_range`
-3. `diff_preview`
-4. `status_guard`
+3. `write_new_file`
+4. `diff_preview`
+5. `status_guard`
 
-The remaining tools stay documented as planned boundaries until implemented.
+The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

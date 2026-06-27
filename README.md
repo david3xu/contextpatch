@@ -33,7 +33,7 @@ That boundary is intentional product strategy, not a temporary limitation.
 | `read-range` | Read a bounded section of a file |
 | `diff-preview` | Preview a proposed edit before writing |
 | `replace-exact` | Replace text only when the expected anchor appears exactly once |
-| `apply-patch` | Apply unified patches with repository guardrails |
+| `write-new-file` | Create a file only when it does not already exist |
 | `status` | Show clean/dirty Git state before edits |
 | `serve` | Run a local context-server interface for agent tools |
 
@@ -42,11 +42,12 @@ That boundary is intentional product strategy, not a temporary limitation.
 1. `replace-exact` in `contextpatch-core`
 2. `replace-exact` in `contextpatch-cli`
 3. `read-range` in core and CLI
-4. `diff-preview`
-5. `status`
-6. `contextpatch-server` protocol transport
+4. `write-new-file`
+5. `diff-preview`
+6. `status`
+7. Stage 1 server schemas and transport
 
-The first useful milestone is a CLI command that can safely replace exactly one matched text span and refuse zero-match or multi-match edits.
+The first useful milestone is a CLI command that can safely replace exactly one matched text span and refuse zero-match or multi-match edits. The full staged plan is in `docs/implementation-roadmap.md`.
 
 ## Safety contract
 
@@ -81,3 +82,4 @@ tests/                         repo-level fixtures and integration tests
 | `docs/safety-contract.md` | A write rule, guard, or refusal policy changes |
 | `docs/architecture.md` | Crate boundaries or ownership changes |
 | `docs/claude-desktop.md` | Server install/config behavior changes |
+| `docs/implementation-roadmap.md` | Stage scope, sequencing, or release criteria change |
