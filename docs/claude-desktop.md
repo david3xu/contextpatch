@@ -25,32 +25,46 @@ The expected agent workflow is:
 
 ## Configuration shape
 
-Exact configuration will be added after the server transport is implemented.
+During local development, build the server and point Claude Desktop at the compiled binary:
 
 ```json
 {
   "mcpServers": {
     "contextpatch": {
-      "command": "contextpatch-server",
-      "args": []
+      "command": "/path/to/contextpatch/target/debug/contextpatch-server",
+      "args": [
+        "--repo-root",
+        "/path/to/repo"
+      ]
     }
   }
 }
 ```
+
+Change `--repo-root` to the repository Claude should edit. The server treats that directory as the path guard root.
 
 ## Local development command
 
 Before packaging, the server can be launched from the workspace with:
 
 ```bash
-cargo run -p contextpatch-server
+cargo run -p contextpatch-server -- --repo-root /path/to/repo
 ```
 
 After installation, the intended command is:
 
 ```bash
-contextpatch-server
+contextpatch-server --repo-root /path/to/repo
 ```
+
+## Currently exposed tools
+
+The current server exposes only the implemented safe primitives:
+
+- `read_range`
+- `replace_exact`
+
+Other documented tools remain roadmap items until implemented.
 
 ## Failure behavior
 

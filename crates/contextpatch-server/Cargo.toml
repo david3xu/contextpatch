@@ -15,3 +15,4 @@ path = "src/main.rs"
 
 [dependencies]
 contextpatch-core.workspace = true
+serde_json = "1"

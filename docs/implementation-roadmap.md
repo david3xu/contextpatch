@@ -24,8 +24,8 @@ Stage 1 is complete when these tools work through the core crate and CLI, have t
 4. `write_new_file` core behavior and CLI command
 5. `diff_preview` core behavior and CLI command
 6. `status_guard` core behavior and CLI command
-7. Server tool schemas for the Stage 1 set
-8. Server transport for the Stage 1 set
+7. Server tool schemas for implemented Stage 1 tools - implemented for `read_range` and `replace_exact`
+8. Server transport for implemented Stage 1 tools - implemented for stdio MCP
 
 ## Stage 1 refusal tests
 
