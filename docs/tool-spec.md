@@ -32,6 +32,14 @@ Required inputs:
 - `start_line`
 - `end_line`
 
+CLI shape:
+
+```bash
+contextpatch read-range <path> --start <line> --end <line>
+```
+
+The CLI treats the current working directory as the repository root guard.
+
 Rules:
 
 - Line numbers are 1-based.

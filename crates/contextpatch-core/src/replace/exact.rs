@@ -1,8 +1,9 @@
-use std::path::Path;
-use std::{env, fs, path::PathBuf};
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use crate::error::ContextPatchError;
 use crate::fs::atomic_write::write_atomic;
+use crate::fs::path::resolve_existing_file;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ReplaceExactSummary {
@@ -68,44 +69,6 @@ pub fn replace_exact_in_root(
         end_byte,
         bytes_written: updated.len(),
     })
-}
-
-fn resolve_existing_file(repo_root: &Path, path: &Path) -> Result<PathBuf, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
-
-    let resolved = candidate.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve target file {}: {error}",
-            candidate.display()
-        ))
-    })?;
-
-    if !resolved.starts_with(&root) {
-        return Err(ContextPatchError::new(format!(
-            "target path {} is outside repository root {}",
-            resolved.display(),
-            root.display()
-        )));
-    }
-
-    if !resolved.is_file() {
-        return Err(ContextPatchError::new(format!(
-            "target path {} is not a file",
-            resolved.display()
-        )));
-    }
-
-    Ok(resolved)
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ Stage 1 is complete when these tools work through the core crate and CLI, have t
 
 1. `replace_exact` core behavior - implemented
 2. `replace-exact` CLI command - implemented
-3. `read_range` core behavior and `read-range` CLI command
+3. `read_range` core behavior and `read-range` CLI command - implemented
 4. `write_new_file` core behavior and CLI command
 5. `diff_preview` core behavior and CLI command
 6. `status_guard` core behavior and CLI command
