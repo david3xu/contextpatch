@@ -48,7 +48,7 @@ Change `--repo-root` to the repository Claude should edit. The server treats tha
 Before packaging, the server can be launched from the workspace with:
 
 ```bash
-cargo run -p contextpatch-server -- --repo-root /path/to/repo
+cargo run -p server --bin contextpatch-server -- --repo-root /path/to/repo
 ```
 
 After installation, the intended command is:
@@ -56,6 +56,8 @@ After installation, the intended command is:
 ```bash
 contextpatch-server --repo-root /path/to/repo
 ```
+
+The workspace package is named `server`; the installed binary remains `contextpatch-server` to avoid colliding with generic commands.
 
 ## Currently exposed tools
 

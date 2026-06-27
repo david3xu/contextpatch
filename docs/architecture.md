@@ -6,11 +6,11 @@ The architecture supports one product goal: provide a reusable safe patch layer 
 
 ## Layers
 
-| Layer | Crate | Responsibility |
+| Layer | Package | Responsibility |
 | --- | --- | --- |
-| Core | `contextpatch-core` | Filesystem, patch, replacement, policy, and Git guard logic |
-| CLI | `contextpatch-cli` | Human-facing command-line UX |
-| Server | `contextpatch-server` | Context-server protocol adapter and tool schema |
+| Core | `core` | Filesystem, patch, replacement, policy, and Git guard logic |
+| CLI | `cli` | Human-facing command-line UX |
+| Server | `server` | Context-server protocol adapter and tool schema |
 
 ## Boundary rule
 
@@ -22,7 +22,7 @@ The safe edit engine is the product center. CLI and server crates are adapters.
 
 ## Crate ownership
 
-### `contextpatch-core`
+### `core`
 
 Owns:
 
@@ -41,7 +41,7 @@ Must not own:
 - Claude Desktop configuration
 - Human CLI argument parsing
 
-### `contextpatch-cli`
+### `cli`
 
 Owns:
 
@@ -50,9 +50,9 @@ Owns:
 - Exit codes
 - Human-readable output
 
-Must call `contextpatch-core` for edit behavior instead of reimplementing safety logic.
+Must call `core` for edit behavior instead of reimplementing safety logic.
 
-### `contextpatch-server`
+### `server`
 
 Owns:
 
@@ -61,17 +61,17 @@ Owns:
 - Request/response adaptation
 - Server startup and client transport
 
-Must call `contextpatch-core` for edit behavior instead of owning filesystem mutation logic.
+Must call `core` for edit behavior instead of owning filesystem mutation logic.
 
 ## Dependency direction
 
 ```text
-contextpatch-cli     -> contextpatch-core
-contextpatch-server  -> contextpatch-core
-contextpatch-core    -> standard library / focused implementation dependencies
+cli     -> core
+server  -> core
+core    -> standard library / focused implementation dependencies
 ```
 
-`contextpatch-core` must not depend on `contextpatch-cli` or `contextpatch-server`.
+`core` must not depend on `cli` or `server`.
 
 ## Testing strategy
 

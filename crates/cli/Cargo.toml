@@ -1,6 +1,6 @@
 [package]
-name = "contextpatch-server"
-description = "Context server adapter for contextpatch."
+name = "cli"
+description = "Command-line interface for contextpatch."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,9 +10,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [[bin]]
-name = "contextpatch-server"
+name = "contextpatch"
 path = "src/main.rs"
 
 [dependencies]
-contextpatch-core.workspace = true
-serde_json = "1"
+core.workspace = true

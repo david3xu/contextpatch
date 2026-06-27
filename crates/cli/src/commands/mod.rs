@@ -24,7 +24,7 @@ pub fn dispatch(args: &[String]) -> ExitCode {
         Command::ReplaceExact => replace_exact::run(&args[1..]),
         Command::ApplyPatch => apply_patch::run(),
         Command::Serve => {
-            eprintln!("serve lives in the contextpatch-server crate and is not implemented yet");
+            eprintln!("serve lives in the server package and is not implemented yet");
             ExitCode::from(2)
         }
     }

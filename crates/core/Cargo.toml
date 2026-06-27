@@ -1,6 +1,6 @@
 [package]
-name = "contextpatch-cli"
-description = "Command-line interface for contextpatch."
+name = "core"
+description = "Core guarded edit engine for contextpatch."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,9 +9,8 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[[bin]]
-name = "contextpatch"
-path = "src/main.rs"
-
 [dependencies]
-contextpatch-core.workspace = true
+
+[lib]
+name = "contextpatch_core"
+path = "src/lib.rs"

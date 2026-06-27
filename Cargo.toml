@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/contextpatch-core",
-    "crates/contextpatch-cli",
-    "crates/contextpatch-server",
+    "crates/core",
+    "crates/cli",
+    "crates/server",
 ]
 resolver = "2"
 
@@ -16,4 +16,4 @@ keywords = ["patch", "agent", "context", "atomic", "git"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
-contextpatch-core = { path = "crates/contextpatch-core" }
+core = { path = "crates/core" }

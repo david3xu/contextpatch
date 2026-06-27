@@ -39,8 +39,8 @@ That boundary is intentional product strategy, not a temporary limitation.
 
 ## First implementation order
 
-1. `replace-exact` in `contextpatch-core`
-2. `replace-exact` in `contextpatch-cli`
+1. `replace-exact` in `core`
+2. `replace-exact` in `cli`
 3. `read-range` in core and CLI
 4. `write-new-file`
 5. `diff-preview`
@@ -72,9 +72,9 @@ This repository is a new Rust workspace. The docs define the product contract, a
 ## Repository layout
 
 ```text
-crates/contextpatch-core/      safe edit engine
-crates/contextpatch-cli/       human CLI
-crates/contextpatch-server/    context-server adapter
+crates/core/                   safe edit engine
+crates/cli/                    human CLI
+crates/server/                 context-server adapter
 docs/                          public design and usage docs
 tests/                         repo-level fixtures and integration tests
 ```
