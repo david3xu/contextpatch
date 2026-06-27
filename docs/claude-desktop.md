@@ -19,8 +19,8 @@ The server should not expose broad filesystem write tools. In particular, the de
 The expected agent workflow is:
 
 1. Use `read_range` to inspect a bounded file section.
-2. Use `write_new_file` for create-only file creation or `replace_exact` for exact anchored edits.
-3. Use `diff_preview` or `status_guard` once those roadmap tools are implemented.
+2. Use `diff_preview` before `replace_exact` when reviewing exact anchored edits.
+3. Use `write_new_file` for create-only file creation; use `status_guard` once that roadmap tool is implemented.
 4. Let the human review Git diff outside the server.
 
 ## Configuration shape
@@ -64,6 +64,7 @@ The workspace package is named `server`; the installed binary remains `contextpa
 The current server exposes only the implemented safe primitives:
 
 - `read_range`
+- `diff_preview`
 - `replace_exact`
 - `write_new_file`
 

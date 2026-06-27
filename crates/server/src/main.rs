@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use contextpatch_core::fs::read_range::read_range_in_root;
 use contextpatch_core::fs::write_new_file::write_new_file_in_root;
+use contextpatch_core::patch::diff::preview_exact_replacement_in_root;
 use contextpatch_core::replace::exact::replace_exact_in_root;
 use serde_json::{json, Value};
 
@@ -169,6 +170,29 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::diff_preview::NAME,
+            "description": "Return a unified diff for an exact replacement without writing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the configured repository root."
+                    },
+                    "old": {
+                        "type": "string",
+                        "description": "Existing text that must appear exactly once."
+                    },
+                    "new": {
+                        "type": "string",
+                        "description": "Replacement text to preview."
+                    }
+                },
+                "required": ["path", "old", "new"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::replace_exact::NAME,
             "description": "Replace text only when the old text matches exactly once.",
             "inputSchema": {
@@ -228,6 +252,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
 
     let result = match name {
         tools::read_range::NAME => call_read_range(repo_root, &arguments),
+        tools::diff_preview::NAME => call_diff_preview(repo_root, &arguments),
         tools::replace_exact::NAME => call_replace_exact(repo_root, &arguments),
         tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
@@ -270,6 +295,18 @@ fn call_read_range(
 
     read_range_in_root(repo_root, Path::new(path), start_line, end_line)
         .map_err(|error| format!("read_range refused: {error}"))
+}
+
+fn call_diff_preview(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let path = required_string(arguments, "path")?;
+    let old = required_string(arguments, "old")?;
+    let new = required_string(arguments, "new")?;
+
+    preview_exact_replacement_in_root(repo_root, Path::new(path), old, new)
+        .map_err(|error| format!("diff_preview refused: {error}"))
 }
 
 fn call_replace_exact(

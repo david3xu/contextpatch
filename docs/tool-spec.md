@@ -54,12 +54,22 @@ Returns a unified diff for a proposed edit without writing.
 Required inputs:
 
 - `path`
-- proposed edit input, either full candidate contents or a structured replacement request
+- `old`
+- `new`
+
+CLI shape:
+
+```bash
+contextpatch diff-preview <path> --old <text> --new <text>
+```
+
+The CLI treats the current working directory as the repository root guard.
 
 Rules:
 
 - The tool must not mutate files.
 - The diff must be generated from the current file contents.
+- The current implementation previews exact replacements; `old` must match exactly once.
 - If the proposed edit cannot be validated, return a refusal reason instead of a diff.
 
 ### `replace_exact`

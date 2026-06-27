@@ -51,6 +51,7 @@ The first useful milestone is a CLI command that can safely replace exactly one 
 
 ```bash
 contextpatch read-range <path> --start <line> --end <line>
+contextpatch diff-preview <path> --old <text> --new <text>
 contextpatch replace-exact <path> --old <text> --new <text>
 contextpatch write-new-file <path> --content <text>
 ```
@@ -68,7 +69,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-This repository is a new Rust workspace. The docs define the product contract, and Stage 1 implementation has started with `replace-exact`, `read-range`, and `write-new-file` in the core crate, CLI, and MCP server. Code changes should keep the relevant Markdown file synchronized in the same commit.
+This repository is a new Rust workspace. The docs define the product contract, and Stage 1 implementation has started with `replace-exact`, `read-range`, `write-new-file`, and `diff-preview` in the core crate, CLI, and MCP server. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

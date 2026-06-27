@@ -21,7 +21,7 @@ pub fn dispatch(args: &[String]) -> ExitCode {
         }
         Command::Status => status::run(),
         Command::ReadRange => read_range::run(&args[1..]),
-        Command::DiffPreview => diff_preview::run(),
+        Command::DiffPreview => diff_preview::run(&args[1..]),
         Command::ReplaceExact => replace_exact::run(&args[1..]),
         Command::WriteNewFile => write_new_file::run(&args[1..]),
         Command::ApplyPatch => apply_patch::run(),
@@ -60,6 +60,7 @@ Guarded patch editing for AI context servers.
 Usage:
   contextpatch <command>
   contextpatch read-range <path> --start <line> --end <line>
+  contextpatch diff-preview <path> --old <text> --new <text>
   contextpatch replace-exact <path> --old <text> --new <text>
   contextpatch write-new-file <path> --content <text>
 
