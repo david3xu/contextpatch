@@ -6,6 +6,7 @@ pub enum Command {
     ReadRange,
     DiffPreview,
     ReplaceExact,
+    WriteNewFile,
     ApplyPatch,
     Serve,
 }

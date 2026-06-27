@@ -160,10 +160,19 @@ Required inputs:
 - `path`
 - `content`
 
+CLI shape:
+
+```bash
+contextpatch write-new-file <path> --content <text>
+```
+
+The CLI treats the current working directory as the repository root guard.
+
 Rules:
 
 - Refuse if the file already exists.
 - Refuse parent traversal outside the repository root.
+- Refuse missing parent directories.
 - Write atomically.
 
 ### `delete_guarded`

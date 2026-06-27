@@ -9,7 +9,7 @@ This document is normative. If implementation behavior conflicts with this file,
 ## Write rules
 
 1. Do not overwrite whole files by default.
-2. Require exact anchors, hashes, or patch context for persistent writes.
+2. Require exact anchors, hashes, patch context, or destination-absence checks for persistent writes.
 3. Refuse ambiguous replacements.
 4. Write through a temporary file and atomic rename where supported.
 5. Expose Git state before guarded edits.
@@ -35,10 +35,10 @@ Refusals must return a clear reason. They must not pretend success.
 Persistent file writes should use this pattern:
 
 1. Read the current file state.
-2. Validate anchors, hashes, or patch context.
+2. Validate anchors, hashes, patch context, or destination absence.
 3. Build the complete new file contents in memory.
 4. Write to a temporary file in the same directory.
-5. Flush and rename the temporary file over the target.
+5. Flush and rename the temporary file over an existing target, or publish a create-only target with an atomic no-overwrite operation.
 
 If the platform cannot provide the expected atomic behavior, the operation must report that limitation.
 

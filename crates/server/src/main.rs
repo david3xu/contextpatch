@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use contextpatch_core::fs::read_range::read_range_in_root;
+use contextpatch_core::fs::write_new_file::write_new_file_in_root;
 use contextpatch_core::replace::exact::replace_exact_in_root;
 use serde_json::{json, Value};
 
@@ -189,6 +190,25 @@ fn tool_definitions() -> Value {
                 "required": ["path", "old", "new"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": tools::write_new_file::NAME,
+            "description": "Create a new UTF-8 text file only when the destination does not already exist.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the configured repository root."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full file content to write."
+                    }
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -209,6 +229,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
     let result = match name {
         tools::read_range::NAME => call_read_range(repo_root, &arguments),
         tools::replace_exact::NAME => call_replace_exact(repo_root, &arguments),
+        tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
     };
 
@@ -266,6 +287,23 @@ fn call_replace_exact(
         "replaced bytes {}..{} in {} ({} bytes written)",
         summary.start_byte,
         summary.end_byte,
+        summary.path.display(),
+        summary.bytes_written
+    ))
+}
+
+fn call_write_new_file(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let path = required_string(arguments, "path")?;
+    let content = required_string(arguments, "content")?;
+
+    let summary = write_new_file_in_root(repo_root, Path::new(path), content)
+        .map_err(|error| format!("write_new_file refused: {error}"))?;
+
+    Ok(format!(
+        "created {} ({} bytes written)",
         summary.path.display(),
         summary.bytes_written
     ))
