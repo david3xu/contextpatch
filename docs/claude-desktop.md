@@ -97,6 +97,14 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `git_remote_check`
 - `git_push_exact`
 
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all thirteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+
+```text
+/Users/291928k/Developer/contextpatch/target/release/contextpatch-server
+```
+
+Then list contextpatch tools again. If the list is still partial, the chat is likely connected to an older binary/config entry or Claude Desktop cached a partial MCP tool list for that session; start a fresh chat after restart.
+
 ## Currently exposed tools
 
 The current server exposes the implemented safe primitives:
