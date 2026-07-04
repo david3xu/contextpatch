@@ -404,6 +404,37 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::git_merge_readiness::NAME,
+            "description": "Read-only merge/PR readiness analysis between two refs, including changed-on-both-sides conflict candidates.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base_ref": {
+                        "type": "string",
+                        "description": "Base ref to compare, such as HEAD, main, origin/main, refs/heads/main, or a commit hash."
+                    },
+                    "target_ref": {
+                        "type": "string",
+                        "description": "Target ref to compare, such as feature, origin/feature, refs/remotes/origin/feature, or a commit hash."
+                    },
+                    "fetch": {
+                        "type": "boolean",
+                        "description": "Optionally fetch one explicit remote branch before analysis. Defaults to false."
+                    },
+                    "remote": {
+                        "type": "string",
+                        "description": "Remote name used only when fetch is true. Defaults to origin."
+                    },
+                    "target_branch": {
+                        "type": "string",
+                        "description": "Remote branch to fetch when fetch is true. Inferred from target_ref when target_ref is a remote-tracking ref."
+                    }
+                },
+                "required": ["base_ref", "target_ref"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::git_push_exact::NAME,
             "description": "Push the current branch HEAD to the matching remote branch only after exact hash and divergence checks.",
             "inputSchema": {
@@ -459,6 +490,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
         tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
+        tools::git_merge_readiness::NAME => call_git_merge_readiness(repo_root, &arguments),
         tools::git_push_exact::NAME => call_git_push_exact(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
     };
@@ -507,11 +539,13 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "read_command_log": true,
             "git_commit_exact": true,
             "git_remote_check": true,
+            "git_merge_readiness": true,
             "git_push_exact": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
             "remote_check": true,
+            "merge_readiness": true,
             "push_exact_commit": true,
             "reset_checkout_clean_stash": false,
             "guards": [
@@ -521,6 +555,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "stages only explicit paths",
                 "creates at most one local commit",
                 "fetches only explicit remote branch",
+                "merge readiness is read-only and reports changed-on-both-sides candidates",
                 "pushes only expected HEAD to matching remote branch",
                 "never force pushes"
             ]
@@ -934,6 +969,121 @@ fn call_git_remote_check(
     .map_err(|error| format!("git_remote_check refused: {error}"))
 }
 
+fn call_git_merge_readiness(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let base_ref = validate_git_ref_expression(required_string(arguments, "base_ref")?)?;
+    let target_ref = validate_git_ref_expression(required_string(arguments, "target_ref")?)?;
+    let fetch = optional_bool(arguments, "fetch")?.unwrap_or(false);
+    let root = canonical_repo_root(repo_root, tools::git_merge_readiness::NAME)?;
+    let source_status_before = git_status_short(&root)?;
+
+    let mut fetched_remote = None;
+    let mut fetched_branch = None;
+    if fetch {
+        let remote =
+            validate_git_remote(optional_string(arguments, "remote")?.unwrap_or("origin"))?;
+        ensure_remote_exists(tools::git_merge_readiness::NAME, &root, &remote)?;
+        let branch = match optional_string(arguments, "target_branch")? {
+            Some(branch) => validate_git_branch(branch)?,
+            None => infer_fetch_branch(&remote, &target_ref)?,
+        };
+
+        git_success_for_tool(
+            tools::git_merge_readiness::NAME,
+            &root,
+            vec![
+                "fetch".to_string(),
+                remote.clone(),
+                format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
+            ],
+        )?;
+
+        let source_status_after_fetch = git_status_short(&root)?;
+        if source_status_after_fetch != source_status_before {
+            return Err(format!(
+                "git_merge_readiness refused: source worktree changed during fetch\nbefore:\n{}\nafter:\n{}",
+                empty_label(&source_status_before),
+                empty_label(&source_status_after_fetch)
+            ));
+        }
+
+        fetched_remote = Some(remote);
+        fetched_branch = Some(branch);
+    } else if arguments.contains_key("target_branch") {
+        return Err(
+            "git_merge_readiness refused: target_branch is only valid when fetch is true"
+                .to_string(),
+        );
+    } else if let Some(remote) = optional_string(arguments, "remote")? {
+        validate_git_remote(remote)?;
+    }
+
+    let base_commit = resolve_commit(tools::git_merge_readiness::NAME, &root, &base_ref)?;
+    let target_commit = resolve_commit(tools::git_merge_readiness::NAME, &root, &target_ref)?;
+    let merge_base = git_stdout_for_tool(
+        tools::git_merge_readiness::NAME,
+        &root,
+        &["merge-base", &base_commit, &target_commit],
+    )?;
+    let merge_base = merge_base.trim().to_string();
+
+    let base_ahead_count = rev_count_for_tool(
+        tools::git_merge_readiness::NAME,
+        &root,
+        &format!("{merge_base}..{base_commit}"),
+    )?;
+    let target_ahead_count = rev_count_for_tool(
+        tools::git_merge_readiness::NAME,
+        &root,
+        &format!("{merge_base}..{target_commit}"),
+    )?;
+    let base_changed_files = changed_files_between(
+        tools::git_merge_readiness::NAME,
+        &root,
+        &merge_base,
+        &base_commit,
+    )?;
+    let target_changed_files = changed_files_between(
+        tools::git_merge_readiness::NAME,
+        &root,
+        &merge_base,
+        &target_commit,
+    )?;
+    let changed_on_both_sides: BTreeSet<String> = base_changed_files
+        .intersection(&target_changed_files)
+        .cloned()
+        .collect();
+    let source_status_after = git_status_short(&root)?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_merge_readiness::NAME,
+        "read_only": true,
+        "fetch_performed": fetch,
+        "fetched_remote": fetched_remote,
+        "fetched_branch": fetched_branch,
+        "base_ref": base_ref,
+        "target_ref": target_ref,
+        "base_commit": base_commit,
+        "target_commit": target_commit,
+        "merge_base": merge_base,
+        "base_is_ancestor_of_target": base_ahead_count == 0,
+        "target_is_ancestor_of_base": target_ahead_count == 0,
+        "base_ahead_count": base_ahead_count,
+        "target_ahead_count": target_ahead_count,
+        "base_changed_files_count": base_changed_files.len(),
+        "target_changed_files_count": target_changed_files.len(),
+        "changed_on_both_sides_count": changed_on_both_sides.len(),
+        "changed_on_both_sides": changed_on_both_sides,
+        "likely_conflict_candidates": changed_on_both_sides,
+        "has_likely_conflict_candidates": !changed_on_both_sides.is_empty(),
+        "source_status_unchanged": source_status_after == source_status_before,
+        "status_short": source_status_after
+    }))
+    .map_err(|error| format!("git_merge_readiness refused: {error}"))
+}
+
 fn call_git_push_exact(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
@@ -1257,6 +1407,22 @@ fn parse_nul_paths(bytes: &[u8], label: &str) -> Result<BTreeSet<String>, String
         .collect()
 }
 
+fn parse_nul_paths_for_tool(
+    tool_name: &str,
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            std::str::from_utf8(entry)
+                .map(|path| path.to_string())
+                .map_err(|error| format!("{tool_name} refused: {label} path is not UTF-8: {error}"))
+        })
+        .collect()
+}
+
 fn git_args(subcommand: &str, paths: &[String]) -> Vec<String> {
     std::iter::once(subcommand.to_string())
         .chain(std::iter::once("--".to_string()))
@@ -1412,6 +1578,36 @@ fn validate_git_branch(branch: &str) -> Result<String, String> {
     Ok(branch.to_string())
 }
 
+fn validate_git_ref_expression(value: &str) -> Result<String, String> {
+    if value == "HEAD" {
+        return Ok(value.to_string());
+    }
+    if (7..=40).contains(&value.len()) && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Ok(value.to_ascii_lowercase());
+    }
+
+    validate_git_ref_component("ref", value)?;
+    if value.contains("..")
+        || value.contains('@')
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.ends_with(".lock")
+    {
+        return Err(format!("git workflow refused: invalid ref `{value}`"));
+    }
+
+    let status = Command::new("git")
+        .args(["check-ref-format", "--allow-onelevel", value])
+        .env("GIT_PAGER", "cat")
+        .env("NO_COLOR", "1")
+        .output()
+        .map_err(|error| format!("git workflow refused: failed to validate ref: {error}"))?;
+    if !status.status.success() {
+        return Err(format!("git workflow refused: invalid ref `{value}`"));
+    }
+    Ok(value.to_string())
+}
+
 fn validate_git_ref_component(label: &str, value: &str) -> Result<(), String> {
     if value.is_empty()
         || value.contains('\0')
@@ -1445,6 +1641,41 @@ fn validate_expected_head(expected_head: &str) -> Result<String, String> {
 
 fn remote_ref(remote: &str, branch: &str) -> String {
     format!("refs/remotes/{remote}/{branch}")
+}
+
+fn infer_fetch_branch(remote: &str, target_ref: &str) -> Result<String, String> {
+    let refs_remotes_prefix = format!("refs/remotes/{remote}/");
+    let remote_prefix = format!("{remote}/");
+    let branch = if let Some(branch) = target_ref.strip_prefix(&refs_remotes_prefix) {
+        branch
+    } else if let Some(branch) = target_ref.strip_prefix(&remote_prefix) {
+        branch
+    } else {
+        return Err(format!(
+            "git_merge_readiness refused: fetch=true requires target_branch unless target_ref starts with `{remote}/` or `refs/remotes/{remote}/`"
+        ));
+    };
+    validate_git_branch(branch)
+}
+
+fn resolve_commit(tool_name: &str, root: &Path, ref_name: &str) -> Result<String, String> {
+    let commit_ref = format!("{ref_name}^{{commit}}");
+    let commit = git_stdout_for_tool(tool_name, root, &["rev-parse", "--verify", &commit_ref])?;
+    Ok(commit.trim().to_string())
+}
+
+fn changed_files_between(
+    tool_name: &str,
+    root: &Path,
+    from_ref: &str,
+    to_ref: &str,
+) -> Result<BTreeSet<String>, String> {
+    let output = git_output_for_tool(
+        tool_name,
+        root,
+        &["diff", "--name-only", "-z", from_ref, to_ref, "--"],
+    )?;
+    parse_nul_paths_for_tool(tool_name, &output.stdout, "git diff --name-only")
 }
 
 fn empty_label(text: &str) -> &str {

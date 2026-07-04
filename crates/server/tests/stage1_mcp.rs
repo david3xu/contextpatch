@@ -44,6 +44,7 @@ fn stage1_mcp_tools_work_together() {
         "validation_profile_run",
         "git_commit_exact",
         "git_remote_check",
+        "git_merge_readiness",
         "git_push_exact",
     ] {
         assert!(
@@ -72,6 +73,85 @@ fn stage1_mcp_tools_work_together() {
     assert_eq!(responses[6]["result"]["isError"], true);
     assert_text(&responses[6], "status_guard refused");
     assert_text(&responses[6], "sample.txt");
+}
+
+#[test]
+fn stage2_git_merge_readiness_reports_changed_on_both_sides() {
+    let root = git_repo("stage2_git_merge_readiness_reports_changed_on_both_sides");
+    fs::write(root.join("app.txt"), "initial\n").unwrap();
+    git(&root, &["add", "app.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    git(&root, &["branch", "-M", "main"]);
+    git(&root, &["checkout", "--quiet", "-b", "feature"]);
+    fs::write(root.join("app.txt"), "feature\n").unwrap();
+    git(&root, &["commit", "--quiet", "-am", "feature change"]);
+    git(&root, &["checkout", "--quiet", "main"]);
+    fs::write(root.join("app.txt"), "main\n").unwrap();
+    git(&root, &["commit", "--quiet", "-am", "main change"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_merge_readiness","arguments":{"base_ref":"main","target_ref":"feature"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_merge_readiness","arguments":{"base_ref":"main..bad","target_ref":"feature"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"read_only\": true");
+    assert_text(&responses[0], "\"changed_on_both_sides_count\": 1");
+    assert_text(&responses[0], "\"has_likely_conflict_candidates\": true");
+    assert_text(&responses[0], "app.txt");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "invalid ref");
+}
+
+#[test]
+fn stage2_git_merge_readiness_fetches_one_branch_without_source_changes() {
+    let origin = bare_repo("stage2_git_merge_readiness_fetches_one_branch_origin");
+    let seed = git_repo("stage2_git_merge_readiness_fetches_one_branch_seed");
+    fs::write(seed.join("app.txt"), "initial\n").unwrap();
+    git(&seed, &["add", "app.txt"]);
+    git(&seed, &["commit", "--quiet", "-m", "initial"]);
+    git(&seed, &["branch", "-M", "main"]);
+    git(
+        &seed,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&seed, &["push", "--quiet", "-u", "origin", "main"]);
+
+    let root = temp_root("stage2_git_merge_readiness_fetches_one_branch");
+    git(&root, &["clone", "--quiet", origin.to_str().unwrap(), "."]);
+    git(&root, &["config", "user.name", "Contextpatch Test"]);
+    git(
+        &root,
+        &["config", "user.email", "contextpatch@example.invalid"],
+    );
+
+    let other = temp_root("stage2_git_merge_readiness_fetches_one_branch_other");
+    git(&other, &["clone", "--quiet", origin.to_str().unwrap(), "."]);
+    git(&other, &["config", "user.name", "Contextpatch Test"]);
+    git(
+        &other,
+        &["config", "user.email", "contextpatch@example.invalid"],
+    );
+    git(&other, &["checkout", "--quiet", "-b", "feature"]);
+    fs::write(other.join("feature.txt"), "feature\n").unwrap();
+    git(&other, &["add", "feature.txt"]);
+    git(&other, &["commit", "--quiet", "-m", "feature change"]);
+    git(&other, &["push", "--quiet", "-u", "origin", "feature"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_merge_readiness","arguments":{"base_ref":"main","target_ref":"origin/feature","fetch":true,"remote":"origin"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"fetch_performed\": true");
+    assert_text(&responses[0], "\"fetched_branch\": \"feature\"");
+    assert_text(&responses[0], "\"target_ahead_count\": 1");
+    assert_text(&responses[0], "\"source_status_unchanged\": true");
+    assert_eq!(git_stdout(&root, &["status", "--short"]), "");
 }
 
 #[test]

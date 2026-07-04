@@ -71,6 +71,7 @@ The MCP server exposes the same Stage 1 surface to local agent clients:
 - `validation_profile_run`
 - `git_commit_exact`
 - `git_remote_check`
+- `git_merge_readiness`
 - `git_push_exact`
 
 `run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata.
@@ -80,6 +81,8 @@ The MCP server exposes the same Stage 1 surface to local agent clients:
 `git_commit_exact` is a narrowly gated local Git checkpoint tool. It defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` before mutation, stages only those paths, creates at most one local commit, and never fetches or pushes.
 
 `git_remote_check` and `git_push_exact` keep remote publishing separate from local commit authority. `git_remote_check` fetches one explicit remote branch and reports whether `HEAD..remote/branch` is empty without changing source files. `git_push_exact` requires a clean worktree, matching current branch, expected HEAD hash, no remote-ahead divergence after fetch, `confirm: "push exact commit"`, and pushes only `HEAD:refs/heads/<branch>` without force.
+
+`git_merge_readiness` fills the PR/merge planning gap without exposing `git merge` or `merge-tree`: it optionally fetches one explicit remote branch, resolves two validated refs, reports ahead counts, and returns files changed on both sides since the merge base as likely conflict candidates. It does not checkout, merge, reset, stash, or edit source files.
 
 ## Safety contract
 

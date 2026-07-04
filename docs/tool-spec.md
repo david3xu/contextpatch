@@ -21,6 +21,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
+| `git_merge_readiness` | Optional remote-tracking ref update only | Validated refs, optional single-branch fetch, merge-base/ahead/diff-name analysis, no merge |
 | `git_push_exact` | Remote branch update | Clean worktree, exact HEAD, no remote-ahead divergence, explicit confirmation, no force |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
 
@@ -42,6 +43,7 @@ Rules:
 - Must identify the configured repository root.
 - Must state unsupported operations, including arbitrary shell and destructive Git mutations.
 - Must distinguish the narrow local `git_commit_exact` checkpoint and guarded `git_remote_check`/`git_push_exact` workflow from unsupported broad Git/destructive workflows.
+- Must report `git_merge_readiness` honestly when available and distinguish it from generic merge authority.
 - Must not mutate repository state.
 
 ### `preflight_health`
@@ -346,6 +348,31 @@ Rules:
 - The response must include `head`, `remote_head`, `remote_ref`, `head_to_remote_empty`, `remote_ahead_count`, and `local_ahead_count`.
 - The tool must report whether source status changed during the fetch and refuse if source status changes.
 
+### `git_merge_readiness`
+
+Performs read-only merge/PR readiness analysis between two validated refs.
+
+Required inputs:
+
+- `base_ref`: base ref, remote-tracking ref, `HEAD`, or commit hash
+- `target_ref`: target ref, remote-tracking ref, `HEAD`, or commit hash
+
+Optional inputs:
+
+- `fetch`: defaults to `false`
+- `remote`: remote name used only when `fetch` is true; defaults to `origin`
+- `target_branch`: remote branch to fetch when `fetch` is true; inferred from `target_ref` when `target_ref` starts with `<remote>/` or `refs/remotes/<remote>/`
+
+Rules:
+
+- The tool must validate refs before invoking Git and reject ref syntax such as whitespace, pathspec metacharacters, revision operators, or ref traversal.
+- If `fetch` is true, the tool may fetch only `refs/heads/<target_branch>:refs/remotes/<remote>/<target_branch>` for the validated remote and branch.
+- The tool must refuse if source status changes during fetch.
+- The tool may run read-only `merge-base`, `rev-list --count`, and `diff --name-only -z` queries after ref resolution.
+- The response must include resolved commits, merge base, ahead counts, changed-file counts, `changed_on_both_sides`, and `likely_conflict_candidates`.
+- `likely_conflict_candidates` is a conservative file-level intersection, not a guarantee that Git merge content conflicts exist.
+- The tool must not checkout, merge, run merge-tree as a generic command, reset, stash, clean, edit source files, stage files, commit, or push.
+
 ### `git_push_exact`
 
 Pushes exactly the current branch `HEAD` to the matching branch on an explicit remote.
@@ -424,6 +451,7 @@ Stage 1 ships:
 10. `validation_profile_run`
 11. `git_commit_exact`
 12. `git_remote_check`
-13. `git_push_exact`
+13. `git_merge_readiness`
+14. `git_push_exact`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

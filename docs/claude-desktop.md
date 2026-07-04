@@ -15,6 +15,7 @@ The server should not expose broad filesystem write tools. In particular, the de
 - recursive directory writes
 - shell execution
 - Git reset/checkout/stash/fetch/push
+- Git merge or merge-tree as generic commands
 - broad or automatic Git commits
 
 The expected agent workflow is:
@@ -27,7 +28,8 @@ The expected agent workflow is:
 6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, or `rg` drift searches.
 7. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
 8. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
-9. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+9. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
+10. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
 
 ## Build and configure Claude Desktop
 
@@ -95,9 +97,10 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `validation_profile_run`
 - `git_commit_exact`
 - `git_remote_check`
+- `git_merge_readiness`
 - `git_push_exact`
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all thirteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all fourteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -121,6 +124,7 @@ The current server exposes the implemented safe primitives:
 - `validation_profile_run`
 - `git_commit_exact`
 - `git_remote_check`
+- `git_merge_readiness`
 - `git_push_exact`
 
 Other documented tools remain roadmap items until implemented.
@@ -132,6 +136,8 @@ Use `validation_profile_run` when a workflow has a named validation sequence, su
 Use `git_commit_exact` for the narrow local-commit case that previously required leaving contextpatch entirely: the tool validates that `paths` exactly equals the repository's full dirty-path set, defaults to dry-run, requires `confirm: "commit exact paths"` when `dry_run` is false, stages only those paths, creates one local commit, and reports the commit hash. It still does not run fetch or push.
 
 Use `git_remote_check` and `git_push_exact` for the separate remote-publishing boundary. `git_remote_check` fetches one explicit remote branch and reports whether the remote is ahead without source changes. `git_push_exact` requires `confirm: "push exact commit"`, a clean worktree, current branch equal to the requested branch, `expected_head` equal to current `HEAD`, and no remote-ahead divergence after fetch; it pushes only `HEAD:refs/heads/<branch>` and never force-pushes.
+
+Use `git_merge_readiness` for read-only PR or merge planning. It validates two refs, optionally fetches one explicit target branch, computes the merge base and ahead counts, and reports files changed on both sides as likely conflict candidates. It does not perform a merge, checkout, reset, stash, or source edit.
 
 ## Failure behavior
 

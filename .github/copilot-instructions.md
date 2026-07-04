@@ -20,6 +20,7 @@ cargo test -p core replaces_exactly_one_match
 cargo test -p cli stage1_cli_tools_work_together
 cargo test -p server stage1_mcp_tools_work_together
 cargo test -p server stage2_git_commit_exact_dry_run_and_commit_are_gated
+cargo test -p server stage2_git_merge_readiness
 ```
 
 Useful local commands:
@@ -71,7 +72,7 @@ Currently allowlisted command families are:
 - `npm`: `run`, `test`
 - `rg`: search invocations
 
-Local Git mutation is intentionally narrow. `git_commit_exact` defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` for mutation, stages only those paths, creates one local commit, and never pushes. Remote publishing is split into `git_remote_check` and `git_push_exact`; push requires a clean worktree, matching current branch, expected HEAD, no remote-ahead divergence after fetch, `confirm: "push exact commit"`, and no force.
+Local Git mutation is intentionally narrow. `git_commit_exact` defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` for mutation, stages only those paths, creates one local commit, and never pushes. Remote publishing is split into `git_remote_check` and `git_push_exact`; push requires a clean worktree, matching current branch, expected HEAD, no remote-ahead divergence after fetch, `confirm: "push exact commit"`, and no force. Merge planning belongs in `git_merge_readiness`, which validates refs, optionally fetches one explicit target branch, reports merge-base/ahead/diff-name readiness, and must not expose generic merge or merge-tree authority.
 
 ## Testing conventions
 
@@ -92,4 +93,3 @@ Keep docs synchronized with behavior changes:
 | `docs/architecture.md` | Crate boundaries or ownership change |
 | `docs/claude-desktop.md` | Server install/config behavior changes |
 | `docs/implementation-roadmap.md` | Stage scope, sequencing, or release criteria change |
-
