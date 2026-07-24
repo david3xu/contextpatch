@@ -444,7 +444,7 @@ Params by action:
 - `ios_create_simulator`: `name`, `device_type`, optional `runtime`
 - `ios_cap_run`: `target`
 - `ios_boot_simulator`: `device`
-- `ios_read_logs`: `device`, optional `last` duration such as `30s`, `2m`, `1h`, or `1d`
+- `ios_read_logs`: `device`, optional `duration` in seconds from `1` to `30`
 - `ios_install_app`: `device`, `app_path`
 - `ios_launch_app`: `device`, `app_id`
 - `android_list_devices`: optional `serial`
@@ -459,7 +459,7 @@ Rules:
 - The caller must not supply raw `program` or `args`.
 - Core must derive exact `xcrun simctl` or `adb` command plans from typed params.
 - `ios_cap_run` must select `pnpm exec cap run ios --target <target> --no-sync` when `pnpm-lock.yaml` is present in cwd, otherwise `npm exec -- cap run ios --target <target> --no-sync`; it is for running already-synced Capacitor iOS projects, not broad package-manager execution.
-- `ios_read_logs` must use a finite `log show --last <duration>` snapshot, not an unbounded `log stream`, so read attempts complete instead of relying on command timeouts.
+- `ios_read_logs` must use `log stream --timeout <duration>` so simulator log reads terminate at the platform command level instead of relying on external command timeouts.
 - Artifact paths such as `app_path` and `apk_path` must be repository-relative paths.
 - Device ids, serials, and app ids must be single-line bounded values with only supported characters.
 - Dry-run must not touch simulator, emulator, or device state.
