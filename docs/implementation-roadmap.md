@@ -13,6 +13,7 @@ Stage 1 should finish the smallest serious product surface.
 | `diff_preview` | Reviewability before mutation |
 | `status_guard` | Repository state visibility and edit gating |
 | `write_new_file` | Safe create-only file creation |
+| `create_directory` | Safe create-only directory creation for intended nested file layouts |
 
 Stage 1 is complete: these tools work through the core crate, CLI, and MCP server, with success/refusal tests and protocol-facing schemas.
 
@@ -22,10 +23,11 @@ Stage 1 is complete: these tools work through the core crate, CLI, and MCP serve
 2. `replace-exact` CLI command - implemented
 3. `read_range` core behavior and `read-range` CLI command - implemented
 4. `write_new_file` core behavior and `write-new-file` CLI command - implemented
-5. `diff_preview` core behavior and `diff-preview` CLI command - implemented
-6. `status_guard` core behavior and `status-guard` CLI command - implemented
-7. Server tool schemas for implemented Stage 1 tools - implemented for `read_range`, `diff_preview`, `replace_exact`, `write_new_file`, and `status_guard`
-8. Server transport for implemented Stage 1 tools - implemented for stdio MCP
+5. `create_directory` core behavior and `create-directory` CLI command - implemented
+6. `diff_preview` core behavior and `diff-preview` CLI command - implemented
+7. `status_guard` core behavior and `status-guard` CLI command - implemented
+8. Server tool schemas for implemented Stage 1 tools - implemented for `read_range`, `diff_preview`, `replace_exact`, `write_new_file`, `create_directory`, and `status_guard`
+9. Server transport for implemented Stage 1 tools - implemented for stdio MCP
 
 ## Stage 1 refusal tests
 

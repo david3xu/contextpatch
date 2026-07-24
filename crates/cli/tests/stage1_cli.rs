@@ -58,20 +58,37 @@ fn stage1_cli_tools_work_together() {
         "alpha\ndelta\ngamma\n"
     );
 
+    let directory = run_ok(
+        &root,
+        &[
+            "create-directory",
+            "native-plugins/background-audio",
+            "--parents",
+        ],
+    );
+    assert!(directory.stdout.contains("created directory"));
+
     let create = run_ok(
         &root,
-        &["write-new-file", "created.txt", "--content", "new file\n"],
+        &[
+            "write-new-file",
+            "native-plugins/background-audio/plugin.ts",
+            "--content",
+            "new file\n",
+        ],
     );
     assert!(create.stdout.contains("created"));
     assert_eq!(
-        fs::read_to_string(root.join("created.txt")).unwrap(),
+        fs::read_to_string(root.join("native-plugins/background-audio/plugin.ts")).unwrap(),
         "new file\n"
     );
 
     let dirty = run_err(&root, &["status-guard"]);
     assert!(dirty.stderr.contains("status-guard refused"));
     assert!(dirty.stderr.contains("sample.txt"));
-    assert!(dirty.stderr.contains("created.txt"));
+    assert!(dirty
+        .stderr
+        .contains("native-plugins/background-audio/plugin.ts"));
 }
 
 #[test]
@@ -101,6 +118,9 @@ fn stage1_cli_refusals_are_visible() {
         &["write-new-file", "sample.txt", "--content", "replacement"],
     );
     assert!(existing.stderr.contains("already exists"));
+    fs::create_dir(root.join("existing")).unwrap();
+    let existing_dir = run_err(&root, &["create-directory", "existing"]);
+    assert!(existing_dir.stderr.contains("already exists"));
     assert_eq!(
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "beta beta\n"

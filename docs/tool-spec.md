@@ -16,6 +16,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `move_tracked` | Yes | Source exists, destination absent, Git state visible |
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
+| `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
@@ -239,6 +240,34 @@ Rules:
 - Refuse parent traversal outside the repository root.
 - Refuse missing parent directories.
 - Write atomically.
+
+### `create_directory`
+
+Creates a new directory only when the destination does not exist.
+
+Required inputs:
+
+- `path`
+
+Optional inputs:
+
+- `parents`: defaults to `false`; when `true`, create missing parent directories inside the repository root.
+
+CLI shape:
+
+```bash
+contextpatch create-directory <path> [--parents]
+```
+
+The CLI treats the current working directory as the repository root guard.
+
+Rules:
+
+- Refuse if the target directory already exists.
+- Refuse if any existing path component is a file.
+- Refuse parent traversal outside the repository root.
+- Refuse missing parent directories unless `parents` is true.
+- With `parents: true`, create only the explicit path components needed for the requested directory path.
 
 ### `run_guarded_command`
 
@@ -599,20 +628,21 @@ Stage 1 ships:
 1. `replace_exact`
 2. `read_range`
 3. `write_new_file`
-4. `diff_preview`
-5. `status_guard`
-6. `capability_manifest`
-7. `preflight_health`
-8. `run_guarded_command`
-9. `read_command_log`
-10. `validation_profile_run`
-11. `git_commit_exact`
-12. `git_remote_check`
-13. `git_branch_prepare`
-14. `git_merge_readiness`
-15. `git_push_exact`
-16. `setup_profile_run`
-17. `native_build_run`
-18. `native_device_run`
+4. `create_directory`
+5. `diff_preview`
+6. `status_guard`
+7. `capability_manifest`
+8. `preflight_health`
+9. `run_guarded_command`
+10. `read_command_log`
+11. `validation_profile_run`
+12. `git_commit_exact`
+13. `git_remote_check`
+14. `git_branch_prepare`
+15. `git_merge_readiness`
+16. `git_push_exact`
+17. `setup_profile_run`
+18. `native_build_run`
+19. `native_device_run`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

@@ -7,6 +7,7 @@ pub enum Command {
     DiffPreview,
     ReplaceExact,
     WriteNewFile,
+    CreateDirectory,
     ApplyPatch,
     Serve,
 }

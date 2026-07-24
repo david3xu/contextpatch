@@ -24,9 +24,10 @@ fn stage1_mcp_tools_work_together() {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status_guard","arguments":{"path":"sample.txt"}}}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_range","arguments":{"path":"sample.txt","start_line":2,"end_line":3}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"diff_preview","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
-            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"write_new_file","arguments":{"path":"created.txt","content":"new file\n"}}}"#,
-            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"status_guard","arguments":{"path":"sample.txt"}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"create_directory","arguments":{"path":"native-plugins/background-audio","parents":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"write_new_file","arguments":{"path":"native-plugins/background-audio/plugin.ts","content":"new file\n"}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"status_guard","arguments":{"path":"sample.txt"}}}"#,
         ],
     );
 
@@ -39,6 +40,7 @@ fn stage1_mcp_tools_work_together() {
         "replace_exact",
         "status_guard",
         "write_new_file",
+        "create_directory",
         "run_guarded_command",
         "read_command_log",
         "validation_profile_run",
@@ -64,19 +66,20 @@ fn stage1_mcp_tools_work_together() {
     assert_text(&responses[2], "2. beta\n3. gamma\n");
     assert_text(&responses[3], "-beta\n+delta");
     assert_text(&responses[4], "created");
-    assert_text(&responses[5], "replaced bytes");
+    assert_text(&responses[5], "created");
+    assert_text(&responses[6], "replaced bytes");
     assert_eq!(
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "alpha\ndelta\ngamma\n"
     );
     assert_eq!(
-        fs::read_to_string(root.join("created.txt")).unwrap(),
+        fs::read_to_string(root.join("native-plugins/background-audio/plugin.ts")).unwrap(),
         "new file\n"
     );
 
-    assert_eq!(responses[6]["result"]["isError"], true);
-    assert_text(&responses[6], "status_guard refused");
-    assert_text(&responses[6], "sample.txt");
+    assert_eq!(responses[7]["result"]["isError"], true);
+    assert_text(&responses[7], "status_guard refused");
+    assert_text(&responses[7], "sample.txt");
 }
 
 #[test]
@@ -448,12 +451,14 @@ fn stage2_git_commit_exact_refuses_partial_dirty_path_set() {
 fn stage1_mcp_refusals_are_tool_results() {
     let root = git_repo("stage1_mcp_refusals_are_tool_results");
     fs::write(root.join("sample.txt"), "beta beta\n").unwrap();
+    fs::create_dir(root.join("existing")).unwrap();
 
     let responses = run_server(
         &root,
         &[
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write_new_file","arguments":{"path":"sample.txt","content":"replacement"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_directory","arguments":{"path":"existing"}}}"#,
         ],
     );
 
@@ -461,6 +466,8 @@ fn stage1_mcp_refusals_are_tool_results() {
     assert_text(&responses[0], "expected exactly one match");
     assert_eq!(responses[1]["result"]["isError"], true);
     assert_text(&responses[1], "already exists");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "already exists");
     assert_eq!(
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "beta beta\n"

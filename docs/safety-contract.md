@@ -30,8 +30,9 @@ Write tools must refuse the operation when:
 3. The expected anchor or old text is missing.
 4. The expected anchor or old text appears more than once.
 5. The destination already exists for create-only writes.
-6. A delete request lacks the expected file hash or equivalent confirmation.
-7. Repository status violates the requested guard policy.
+6. The destination already exists for create-only directory creation.
+7. A delete request lacks the expected file hash or equivalent confirmation.
+8. Repository status violates the requested guard policy.
 
 Refusals must return a clear reason. They must not pretend success.
 
@@ -55,7 +56,7 @@ Remote Git authority is intentionally split. `git_remote_check` may fetch exactl
 
 ## Default-deny tools
 
-The server should not expose generic `write_file`, unrestricted `delete`, recursive directory writes, or shell execution as default tools.
+The server should not expose generic `write_file`, unrestricted `delete`, recursive directory writes, or shell execution as default tools. Directory creation, if exposed, must be create-only for one explicit path, refuse existing targets, and keep all created components inside the repository root.
 
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
 

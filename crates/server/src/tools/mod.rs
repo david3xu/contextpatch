@@ -1,4 +1,5 @@
 pub mod capability_manifest;
+pub mod create_directory;
 pub mod diff_preview;
 pub mod git_branch_prepare;
 pub mod git_commit_exact;

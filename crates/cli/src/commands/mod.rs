@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use crate::args::Command;
 
 pub mod apply_patch;
+pub mod create_directory;
 pub mod diff_preview;
 pub mod read_range;
 pub mod replace_exact;
@@ -24,6 +25,7 @@ pub fn dispatch(args: &[String]) -> ExitCode {
         Command::DiffPreview => diff_preview::run(&args[1..]),
         Command::ReplaceExact => replace_exact::run(&args[1..]),
         Command::WriteNewFile => write_new_file::run(&args[1..]),
+        Command::CreateDirectory => create_directory::run(&args[1..]),
         Command::ApplyPatch => apply_patch::run(),
         Command::Serve => {
             eprintln!("serve lives in the server package and is not implemented yet");
@@ -41,6 +43,7 @@ fn parse_command(command: Option<&str>) -> Command {
         Some("diff") | Some("diff-preview") => Command::DiffPreview,
         Some("replace-exact") => Command::ReplaceExact,
         Some("write-new-file") => Command::WriteNewFile,
+        Some("create-directory") | Some("mkdir") => Command::CreateDirectory,
         Some("apply-patch") => Command::ApplyPatch,
         Some("serve") => Command::Serve,
         Some(unknown) => {
@@ -64,6 +67,7 @@ Usage:
   contextpatch diff-preview <path> --old <text> --new <text>
   contextpatch replace-exact <path> --old <text> --new <text>
   contextpatch write-new-file <path> --content <text>
+  contextpatch create-directory <path> [--parents]
 
 Commands:
   status-guard    Refuse when Git status is dirty
@@ -72,6 +76,7 @@ Commands:
   diff-preview    Preview a guarded edit
   replace-exact   Replace text only when an anchor matches exactly once
   write-new-file  Create a file only when it does not already exist
+  create-directory Create a directory only when it does not already exist
   apply-patch     Apply a guarded unified patch
   serve           Run the local context server
   version         Print version

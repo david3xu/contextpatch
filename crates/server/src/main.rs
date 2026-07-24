@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use contextpatch_core::fs::create_directory::create_directory_in_root;
 use contextpatch_core::fs::read_range::read_range_in_root;
 use contextpatch_core::fs::write_new_file::write_new_file_in_root;
 use contextpatch_core::git::status::{status_summary, status_summary_for_path};
@@ -271,6 +272,25 @@ fn tool_definitions() -> Value {
                     }
                 },
                 "required": ["path", "content"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::create_directory::NAME,
+            "description": "Create a new directory only when the destination does not already exist.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path relative to the configured repository root."
+                    },
+                    "parents": {
+                        "type": "boolean",
+                        "description": "When true, create missing parent directories inside the repository root. Defaults to false."
+                    }
+                },
+                "required": ["path"],
                 "additionalProperties": false
             }
         },
@@ -635,6 +655,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::replace_exact::NAME => call_replace_exact(repo_root, &arguments),
         tools::status_guard::NAME => call_status_guard(repo_root, &arguments),
         tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
+        tools::create_directory::NAME => call_create_directory(repo_root, &arguments),
         tools::run_guarded_command::NAME => call_run_guarded_command(repo_root, &arguments),
         tools::read_command_log::NAME => call_read_command_log(&arguments),
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
@@ -689,6 +710,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "diff_preview": true,
             "replace_exact": true,
             "write_new_file": true,
+            "create_directory": true,
             "status_guard": true,
             "read_command_log": true,
             "setup_profile_run": true,
@@ -1069,6 +1091,23 @@ fn call_write_new_file(
         "created {} ({} bytes written)",
         summary.path.display(),
         summary.bytes_written
+    ))
+}
+
+fn call_create_directory(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let path = required_string(arguments, "path")?;
+    let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
+
+    let summary = create_directory_in_root(repo_root, Path::new(path), parents)
+        .map_err(|error| format!("create_directory refused: {error}"))?;
+
+    Ok(format!(
+        "created directory {} ({} directories created)",
+        summary.path.display(),
+        summary.directories_created.len()
     ))
 }
 

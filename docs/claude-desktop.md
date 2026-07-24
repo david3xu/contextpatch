@@ -25,7 +25,7 @@ The expected agent workflow is:
 1. Use `read_range` to inspect a bounded file section.
 2. Use `diff_preview` before `replace_exact` when reviewing exact anchored edits.
 3. Use `status_guard` before writes when a clean repository or clean target path is required.
-4. Use `write_new_file` for create-only file creation.
+4. Use `create_directory` for create-only directory creation, then `write_new_file` for create-only file creation inside that directory.
 5. Use `capability_manifest` and `preflight_health` to determine whether this server can support the current workflow.
 6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, or `rg` drift searches.
 7. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
@@ -96,6 +96,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `replace_exact`
 - `status_guard`
 - `write_new_file`
+- `create_directory`
 - `capability_manifest`
 - `preflight_health`
 - `run_guarded_command`
@@ -110,7 +111,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `git_merge_readiness`
 - `git_push_exact`
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all eighteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all nineteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -127,6 +128,7 @@ The current server exposes the implemented safe primitives:
 - `replace_exact`
 - `status_guard`
 - `write_new_file`
+- `create_directory`
 - `capability_manifest`
 - `preflight_health`
 - `run_guarded_command`
