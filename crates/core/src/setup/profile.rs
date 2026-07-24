@@ -356,6 +356,31 @@ mod tests {
     }
 
     #[test]
+    fn plans_capacitor_filesystem_install_without_arbitrary_package_list() {
+        let root = git_root("plans_capacitor_filesystem_install_without_arbitrary_package_list");
+        fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+
+        let result = setup_profile_run(
+            &root,
+            None,
+            "node-capacitor-shell",
+            "install_capacitor_filesystem",
+            SetupActionParams::None,
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.plan.program, "pnpm");
+        assert_eq!(result.plan.args, ["add", "@capacitor/filesystem"]);
+        assert_eq!(
+            result.plan.expected_changed_path_classes,
+            ["package_manifest", "package_lock", "node_modules"]
+        );
+    }
+
+    #[test]
     fn plans_cap_init_from_typed_params() {
         let root = git_root("plans_cap_init_from_typed_params");
 

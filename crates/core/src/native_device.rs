@@ -28,6 +28,9 @@ pub enum NativeDeviceParams {
         device: String,
         app_id: String,
     },
+    IosCapRun {
+        target: String,
+    },
     AndroidSerial {
         serial: Option<String>,
     },
@@ -124,7 +127,7 @@ pub fn native_device_run(
     })?;
     let cwd = resolve_cwd(&root, cwd)?;
     let timeout = checked_timeout(timeout_secs)?;
-    let plan = plan_native_device(action, params)?;
+    let plan = plan_native_device(&cwd, action, params)?;
 
     if !dry_run && plan.changes_device_state && confirm != Some(NATIVE_DEVICE_CONFIRMATION) {
         return Err(ContextPatchError::new(format!(
@@ -171,6 +174,7 @@ pub fn native_device_run(
 }
 
 fn plan_native_device(
+    cwd: &Path,
     action: &str,
     params: NativeDeviceParams,
 ) -> Result<NativeDevicePlan, ContextPatchError> {
@@ -241,6 +245,22 @@ fn plan_native_device(
                 vec!["simctl".to_string(), "launch".to_string(), device, app_id],
                 true,
             )
+        }
+        "ios_cap_run" => {
+            let NativeDeviceParams::IosCapRun { target } = params else {
+                return Err(required(action, "target"));
+            };
+            validate_device_id("target", &target)?;
+            let package_manager = detect_package_manager(cwd);
+            let mut args = package_manager.cap_exec_args();
+            args.extend([
+                "run".to_string(),
+                "ios".to_string(),
+                "--target".to_string(),
+                target,
+                "--no-sync".to_string(),
+            ]);
+            (package_manager.program(), args, true)
         }
         "ios_read_logs" => {
             let NativeDeviceParams::IosDevice { device } = params else {
@@ -322,6 +342,36 @@ fn plan_native_device(
 
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| value.to_string()).collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageManager {
+    Npm,
+    Pnpm,
+}
+
+impl PackageManager {
+    fn program(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Pnpm => "pnpm",
+        }
+    }
+
+    fn cap_exec_args(self) -> Vec<String> {
+        match self {
+            Self::Npm => vec!["exec".to_string(), "--".to_string(), "cap".to_string()],
+            Self::Pnpm => vec!["exec".to_string(), "cap".to_string()],
+        }
+    }
+}
+
+fn detect_package_manager(cwd: &Path) -> PackageManager {
+    if cwd.join("pnpm-lock.yaml").is_file() {
+        PackageManager::Pnpm
+    } else {
+        PackageManager::Npm
+    }
 }
 
 fn android_plan(
@@ -480,6 +530,34 @@ mod tests {
             ]
         );
         assert!(create.plan.changes_device_state);
+
+        fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+        let cap_run = native_device_run(
+            &root,
+            None,
+            "ios_cap_run",
+            NativeDeviceParams::IosCapRun {
+                target: "00000000-0000-0000-0000-000000000000".to_string(),
+            },
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(cap_run.plan.program, "pnpm");
+        assert_eq!(
+            cap_run.plan.args,
+            [
+                "exec",
+                "cap",
+                "run",
+                "ios",
+                "--target",
+                "00000000-0000-0000-0000-000000000000",
+                "--no-sync"
+            ]
+        );
+        assert!(cap_run.plan.changes_device_state);
 
         let android = native_device_run(
             &root,

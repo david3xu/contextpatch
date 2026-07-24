@@ -364,7 +364,7 @@ fn tool_definitions() -> Value {
                     },
                     "action": {
                         "type": "string",
-                        "description": "Profile action, such as install_capacitor_dependencies, cap_init, cap_add_ios, cap_add_android, or cap_sync."
+                        "description": "Profile action, such as install_capacitor_dependencies, install_capacitor_filesystem, cap_init, cap_add_ios, cap_add_android, cap_sync, or ios_pod_install."
                     },
                     "params": {
                         "type": "object",
@@ -433,7 +433,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "Native device action such as ios_list_simulators, ios_create_simulator, ios_boot_simulator, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat."
+                        "description": "Native device action such as ios_list_simulators, ios_create_simulator, ios_boot_simulator, ios_cap_run, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat."
                     },
                     "params": {
                         "type": "object",
@@ -755,6 +755,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "node-capacitor-shell": {
                     "actions": [
                         "install_capacitor_dependencies",
+                        "install_capacitor_filesystem",
                         "cap_init",
                         "cap_add_ios",
                         "cap_add_android",
@@ -768,6 +769,9 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                     "package_manager_selection": "uses pnpm when pnpm-lock.yaml exists in cwd; otherwise npm",
                     "dependency_layout": {
                         "dependencies": ["@capacitor/core", "@capacitor/ios", "@capacitor/android"],
+                        "optional_runtime_dependencies_by_action": {
+                            "install_capacitor_filesystem": ["@capacitor/filesystem"]
+                        },
                         "dev_dependencies": ["@capacitor/cli"]
                     },
                     "mutation_enabled": true,
@@ -786,6 +790,15 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                             "app_name": "Example",
                             "web_dir": "dist"
                         },
+                        "dry_run": true
+                    }
+                },
+                {
+                    "tool": "setup_profile_run",
+                    "description": "Install the Capacitor Filesystem plugin needed to pass fetched local files into native plugins.",
+                    "arguments": {
+                        "profile": "node-capacitor-shell",
+                        "action": "install_capacitor_filesystem",
                         "dry_run": true
                     }
                 },
@@ -855,6 +868,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "ios_list_simulators",
                 "ios_create_simulator",
                 "ios_boot_simulator",
+                "ios_cap_run",
                 "ios_install_app",
                 "ios_launch_app",
                 "ios_read_logs",
@@ -892,6 +906,17 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 },
                 {
                     "tool": "native_device_run",
+                    "description": "Run a synced Capacitor iOS app on a specific simulator target without raw npx/pnpm/xcrun commands.",
+                    "arguments": {
+                        "action": "ios_cap_run",
+                        "params": {
+                            "target": "00000000-0000-0000-0000-000000000000"
+                        },
+                        "dry_run": true
+                    }
+                },
+                {
+                    "tool": "native_device_run",
                     "description": "Read recent Android logcat output without changing device state.",
                     "arguments": {
                         "action": "android_read_logcat",
@@ -905,7 +930,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             ],
             "guards": [
                 "typed action parameters only",
-                "no arbitrary xcrun or adb",
+                "no arbitrary xcrun, adb, or package-manager exec",
                 "device-state changes require dry_run=false plus exact confirmation",
                 "bounded timeout and redacted log output",
                 "repository source files are not mutated"
@@ -1197,6 +1222,7 @@ fn setup_action_params(action: &str, value: Option<&Value>) -> Result<SetupActio
             Ok(SetupActionParams::CapSync { platform })
         }
         "install_capacitor_dependencies"
+        | "install_capacitor_filesystem"
         | "cap_add_ios"
         | "cap_add_android"
         | "ios_pod_install"
@@ -1205,6 +1231,7 @@ fn setup_action_params(action: &str, value: Option<&Value>) -> Result<SetupActio
             Ok(SetupActionParams::None)
         }
         "install_capacitor_dependencies"
+        | "install_capacitor_filesystem"
         | "cap_add_ios"
         | "cap_add_android"
         | "ios_pod_install" => Err(format!(
@@ -1334,6 +1361,9 @@ fn native_device_params(action: &str, value: Option<&Value>) -> Result<NativeDev
         "ios_launch_app" => Ok(NativeDeviceParams::IosLaunch {
             device: required_string(params, "device")?.to_string(),
             app_id: required_string(params, "app_id")?.to_string(),
+        }),
+        "ios_cap_run" => Ok(NativeDeviceParams::IosCapRun {
+            target: required_string(params, "target")?.to_string(),
         }),
         "android_list_devices" => Ok(NativeDeviceParams::AndroidSerial {
             serial: optional_string(params, "serial")?.map(ToString::to_string),

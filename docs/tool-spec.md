@@ -332,6 +332,7 @@ Optional inputs:
 Supported `node-capacitor-shell` actions:
 
 - `install_capacitor_dependencies`
+- `install_capacitor_filesystem`
 - `cap_init` with `app_id`, `app_name`, and `web_dir`
 - `cap_add_ios`
 - `cap_add_android`
@@ -344,6 +345,7 @@ Rules:
 - The profile must derive the exact planned command and expected changed-path classes.
 - The profile may select npm or pnpm from repository lockfiles, but callers still must not choose arbitrary package-manager commands.
 - The `node-capacitor-shell` dependency install action installs `@capacitor/core`, `@capacitor/ios`, and `@capacitor/android` as dependencies, and `@capacitor/cli` as a dev dependency.
+- The `install_capacitor_filesystem` action installs only `@capacitor/filesystem`; callers must not supply arbitrary package names.
 - `ios_pod_install` must refuse when the cwd has no `Podfile`; Swift Package Manager based Capacitor projects do not need CocoaPods.
 - Action params must be typed and validated by the profile.
 - The working directory must resolve inside the configured repository root.
@@ -396,7 +398,7 @@ Plans or runs a typed native simulator/emulator/device action without exposing r
 
 Required inputs:
 
-- `action`: one of `ios_list_simulators`, `ios_create_simulator`, `ios_boot_simulator`, `ios_install_app`, `ios_launch_app`, `ios_read_logs`, `android_list_devices`, `android_install_app`, `android_launch_app`, or `android_read_logcat`
+- `action`: one of `ios_list_simulators`, `ios_create_simulator`, `ios_boot_simulator`, `ios_cap_run`, `ios_install_app`, `ios_launch_app`, `ios_read_logs`, `android_list_devices`, `android_install_app`, `android_launch_app`, or `android_read_logcat`
 
 Optional inputs:
 
@@ -409,6 +411,7 @@ Optional inputs:
 Params by action:
 
 - `ios_create_simulator`: `name`, `device_type`, optional `runtime`
+- `ios_cap_run`: `target`
 - `ios_boot_simulator`, `ios_read_logs`: `device`
 - `ios_install_app`: `device`, `app_path`
 - `ios_launch_app`: `device`, `app_id`
@@ -421,6 +424,7 @@ Rules:
 
 - The caller must not supply raw `program` or `args`.
 - Core must derive exact `xcrun simctl` or `adb` command plans from typed params.
+- `ios_cap_run` must select `pnpm exec cap run ios --target <target> --no-sync` when `pnpm-lock.yaml` is present in cwd, otherwise `npm exec -- cap run ios --target <target> --no-sync`; it is for running already-synced Capacitor iOS projects, not broad package-manager execution.
 - Artifact paths such as `app_path` and `apk_path` must be repository-relative paths.
 - Device ids, serials, and app ids must be single-line bounded values with only supported characters.
 - Dry-run must not touch simulator, emulator, or device state.

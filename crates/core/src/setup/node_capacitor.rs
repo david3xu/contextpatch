@@ -27,6 +27,18 @@ pub(crate) fn plan(
                 ],
             ))
         }
+        "install_capacitor_filesystem" => {
+            require_no_params(action, params)?;
+            Ok(CommandPlan::new(
+                package_manager.program(),
+                package_manager.add_args(&["@capacitor/filesystem"], false),
+                vec![
+                    "package_manifest".to_string(),
+                    "package_lock".to_string(),
+                    "node_modules".to_string(),
+                ],
+            ))
+        }
         "cap_init" => {
             let SetupActionParams::CapInit {
                 app_id,

@@ -349,6 +349,10 @@ Add native setup actions only when they are repository setup mutators:
   - allowed cwd: an iOS project directory under the repository, usually `ios/App`
   - mutation policy: clean worktree and `confirm: "run setup profile"`
   - expected changed-path classes: `ios_project`, CocoaPods lockfiles, workspace/project metadata
+- `install_capacitor_filesystem`
+  - command plan: npm/pnpm add of fixed package `@capacitor/filesystem`
+  - use only for native-plugin workflows that need local file URLs from fetched web assets
+  - not a generic package-add surface
 - `android_gradle_sync`
   - add only if there is a concrete CLI sync workflow that mutates expected Gradle files
   - prefer build validation through `native_build_run` if no repository mutation is needed
@@ -403,6 +407,7 @@ Initial action set:
   - `ios_list_simulators`
   - `ios_create_simulator`
   - `ios_boot_simulator`
+  - `ios_cap_run`
   - `ios_install_app`
   - `ios_launch_app`
   - `ios_read_logs`

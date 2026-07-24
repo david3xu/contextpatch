@@ -527,6 +527,7 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"pnpm","args":["add","@capacitor/core"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"install_capacitor_dependencies","dry_run":true,"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"ios_pod_install"}}}"#,
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"install_capacitor_filesystem","dry_run":true,"timeout_secs":30}}}"#,
         ],
     );
 
@@ -558,6 +559,10 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
     assert_text(&responses[7], "npm install --save-dev \"@capacitor/cli\"");
     assert_eq!(responses[8]["result"]["isError"], true);
     assert_text(&responses[8], "requires a Podfile");
+    assert_text(
+        &responses[9],
+        "command: npm install \"@capacitor/filesystem\"",
+    );
     assert_eq!(
         git_stdout(&root, &["status", "--short"]),
         "",
@@ -642,6 +647,7 @@ fn stage2_native_device_run_plans_device_actions_and_requires_confirmation() {
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_boot_simulator","params":{"device":"booted"},"dry_run":false,"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"android_install_app","params":{"apk_path":"../app.apk"},"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_create_simulator","params":{"name":"ContextPatch iPhone","device_type":"iPhone 16","runtime":"iOS 26.4"},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_cap_run","params":{"target":"00000000-0000-0000-0000-000000000000"},"timeout_secs":30}}}"#,
         ],
     );
 
@@ -662,6 +668,10 @@ fn stage2_native_device_run_plans_device_actions_and_requires_confirmation() {
     assert_text(
         &responses[4],
         "command: xcrun simctl create \"ContextPatch iPhone\" \"iPhone 16\" \"iOS 26.4\"",
+    );
+    assert_text(
+        &responses[5],
+        "command: npm exec -- cap run ios --target 00000000-0000-0000-0000-000000000000 --no-sync",
     );
 }
 

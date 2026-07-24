@@ -85,6 +85,8 @@ Stage 2A is implemented for the MCP server. It intentionally does not add arbitr
 
 The first profile is `node-capacitor-shell` because it matches a real project setup need while staying universal: the profile owns dependency names, package-manager selection, and Capacitor actions, and callers never provide arbitrary package lists or commands. It uses pnpm when `pnpm-lock.yaml` is present and otherwise uses npm.
 
+The profile includes a fixed `install_capacitor_filesystem` action for native-plugin workflows that need to hand fetched local files to native code. This is intentionally not a generic package-add surface.
+
 The profile also includes `ios_pod_install` for CocoaPods-based native dependency setup. It remains a setup-profile action because CocoaPods mutates dependency state and should not be exposed through `run_guarded_command`, but it is intentionally refused when the cwd has no `Podfile`; Swift Package Manager based Capacitor projects do not need it.
 
 ## Stage 2A-native: typed native build and device actions
@@ -103,13 +105,14 @@ Build actions derive exact `xcodebuild` or repo-relative Gradle wrapper plans fr
 1. `ios_list_simulators`
 2. `ios_create_simulator`
 3. `ios_boot_simulator`
-4. `ios_install_app`
-5. `ios_launch_app`
-6. `ios_read_logs`
-7. `android_list_devices`
-8. `android_install_app`
-9. `android_launch_app`
-10. `android_read_logcat`
+4. `ios_cap_run`
+5. `ios_install_app`
+6. `ios_launch_app`
+7. `ios_read_logs`
+8. `android_list_devices`
+9. `android_install_app`
+10. `android_launch_app`
+11. `android_read_logcat`
 
 Device actions derive exact `xcrun simctl` or `adb` plans from typed params. They default to dry-run, keep repository mutation out of scope, and require `confirm: "run native device"` before executing actions that change simulator, emulator, or device state.
 
