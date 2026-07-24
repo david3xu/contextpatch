@@ -151,7 +151,7 @@ The caller should not provide `program` or raw `args`. Core should derive an exa
 
 Typed parameter implications for the first profile:
 
-- `install_capacitor_dependencies`: no caller-supplied package list at first; the profile owns the exact package list.
+- `install_capacitor_dependencies`: no caller-supplied package list at first; the profile owns the exact package list and selects npm or pnpm from the project lockfile.
 - `cap_init`: require explicit `app_id`, `app_name`, and `web_dir`; do not hardcode downstream-project placeholders in contextpatch.
 - `cap_add_ios`: no untyped args.
 - `cap_add_android`: no untyped args.
@@ -281,11 +281,11 @@ This profile is justified by the immediate real project need, but should be repr
 
 Candidate commands:
 
-- `npm install @capacitor/core @capacitor/cli @capacitor/ios @capacitor/android`
-- `npm exec -- cap init ...` or `npx cap init ...`
-- `npm exec -- cap add ios`
-- `npm exec -- cap add android`
-- `npm exec -- cap sync`
+- `npm install @capacitor/core @capacitor/cli @capacitor/ios @capacitor/android`, or `pnpm add ...` when `pnpm-lock.yaml` is present
+- `npm exec -- cap init ...`, or `pnpm exec cap init ...` when `pnpm-lock.yaml` is present
+- `npm exec -- cap add ios`, or `pnpm exec cap add ios`
+- `npm exec -- cap add android`, or `pnpm exec cap add android`
+- `npm exec -- cap sync`, or `pnpm exec cap sync`
 
 Guardrails:
 
@@ -295,7 +295,7 @@ Guardrails:
 - Return exact changed path list after the command.
 - Restrict package names for this profile to the Capacitor packages above.
 - Restrict `npx`/`npm exec` to the Capacitor CLI for this profile.
-- Do not make arbitrary `npm install` or arbitrary `npx` globally available.
+- Do not make arbitrary `npm install`, `pnpm add`, or arbitrary `npx` globally available.
 
 ### Later profiles or policy additions
 
@@ -421,7 +421,7 @@ Guardrails:
 
 ### Developer-use principle
 
-The developer should not need to know whether the underlying command is `npm exec`, `pod install`, `xcodebuild`, `./gradlew`, `xcrun simctl`, or `adb`. They should be able to inspect `capability_manifest`, see supported profiles/actions, and call one named action with typed params. Low-level command syntax remains an implementation detail owned by core profiles.
+The developer should not need to know whether the underlying command is `npm exec`, `pnpm exec`, `pod install`, `xcodebuild`, `./gradlew`, `xcrun simctl`, or `adb`. They should be able to inspect `capability_manifest`, see supported profiles/actions, and call one named action with typed params. Low-level command syntax remains an implementation detail owned by core profiles.
 
 ### Fresh audit before implementation
 

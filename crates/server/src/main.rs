@@ -763,6 +763,8 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                     ],
                     "external_mutator": true,
                     "caller_supplies_raw_command": false,
+                    "supported_package_managers": ["npm", "pnpm"],
+                    "package_manager_selection": "uses pnpm when pnpm-lock.yaml exists in cwd; otherwise npm",
                     "mutation_enabled": true,
                     "required_confirm_for_mutation": "run setup profile"
                 }
@@ -795,6 +797,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             ],
             "guards": [
                 "profile derives exact command plan",
+                "package-manager commands stay inside setup profiles, not run_guarded_command",
                 "typed action parameters only",
                 "repo-root-confined cwd",
                 "dry-run first",
@@ -921,9 +924,10 @@ fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
         },
         "setup_profiles": {
             "node-capacitor-shell": {
-                "available": executable_is_available("npm"),
+                "available": executable_is_available("npm") || executable_is_available("pnpm"),
                 "required_tools": {
                     "npm": executable_available("npm"),
+                    "pnpm": executable_available("pnpm"),
                     "pod": executable_available("pod")
                 },
                 "mutation_enabled": true

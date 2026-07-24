@@ -485,6 +485,8 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"mode\": \"allowlisted_no_shell\"");
     assert_text(&responses[0], "\"setup_profiles\"");
     assert_text(&responses[0], "\"node-capacitor-shell\"");
+    assert_text(&responses[0], "\"supported_package_managers\"");
+    assert_text(&responses[0], "\"pnpm\"");
     assert_text(&responses[0], "\"native_build\"");
     assert_text(&responses[0], "\"native_device\"");
     assert_text(&responses[0], "\"examples\"");
@@ -519,6 +521,7 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","params":{"platform":"windows"}}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"npm","args":["install","@capacitor/core"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"ios_pod_install"}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"pnpm","args":["add","@capacitor/core"],"timeout_secs":30}}}"#,
         ],
     );
 
@@ -541,10 +544,44 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
     assert_eq!(responses[4]["result"]["isError"], true);
     assert_text(&responses[4], "not allowlisted");
     assert_text(&responses[5], "command: pod install");
+    assert_eq!(responses[6]["result"]["isError"], true);
+    assert_text(&responses[6], "not allowlisted");
     assert_eq!(
         git_stdout(&root, &["status", "--short"]),
         "",
         "setup_profile_run dry-runs must not mutate the repository"
+    );
+}
+
+#[test]
+fn stage2_setup_profile_run_uses_pnpm_for_pnpm_projects_without_raw_allowlist() {
+    let root =
+        git_repo("stage2_setup_profile_run_uses_pnpm_for_pnpm_projects_without_raw_allowlist");
+    fs::write(root.join("package.json"), "{}\n").unwrap();
+    fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+    git(&root, &["add", "package.json", "pnpm-lock.yaml"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"install_capacitor_dependencies","dry_run":true,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","params":{"platform":"ios"},"dry_run":true,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"pnpm","args":["add","@capacitor/core"],"timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(
+        &responses[0],
+        "command: pnpm add \"@capacitor/core\" \"@capacitor/cli\" \"@capacitor/ios\" \"@capacitor/android\"",
+    );
+    assert_text(&responses[1], "command: pnpm exec cap sync ios");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "not allowlisted");
+    assert_eq!(
+        git_stdout(&root, &["status", "--short"]),
+        "",
+        "setup_profile_run dry-runs must not mutate pnpm projects"
     );
 }
 

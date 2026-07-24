@@ -33,7 +33,7 @@ The expected agent workflow is:
 9. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
 10. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
 11. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
-12. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+12. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
 13. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
 14. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
 
@@ -147,7 +147,7 @@ Other documented tools remain roadmap items until implemented.
 
 Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, or `datacore-m6-vscode`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values. Use `read_command_log` only for logs that need inspection.
 
-Use `setup_profile_run` when a real project setup task needs a profile-owned command plan. It defaults to dry-run and requires `confirm: "run setup profile"` plus a clean worktree before executing an external setup command. The first supported profile is `node-capacitor-shell`, with typed actions for Capacitor dependency installation, init, adding iOS/Android projects, sync, and iOS CocoaPods install. The caller never supplies raw commands, arbitrary package lists, or shell strings.
+Use `setup_profile_run` when a real project setup task needs a profile-owned command plan. It defaults to dry-run and requires `confirm: "run setup profile"` plus a clean worktree before executing an external setup command. The first supported profile is `node-capacitor-shell`, with typed actions for Capacitor dependency installation, init, adding iOS/Android projects, sync, and iOS CocoaPods install. The profile uses pnpm when `pnpm-lock.yaml` is present and otherwise uses npm. The caller never supplies raw commands, arbitrary package lists, or shell strings.
 
 Use `native_build_run` for native build/test validation. It supports typed iOS actions (`ios_build`, `ios_test`) and Android actions (`android_assemble_debug`, `android_unit_test`), derives exact `xcodebuild` or repo-relative Gradle wrapper plans, defaults to dry-run, and refuses success if an executed build leaves Git source status changed.
 

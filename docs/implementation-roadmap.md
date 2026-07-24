@@ -83,7 +83,7 @@ Stage 2A is implemented for the MCP server. It intentionally does not add arbitr
 6. Refusal when changed paths fall outside the profile's expected changed-path classes
 7. Clear reporting that the external tool performed the mutation and contextpatch did not provide atomic edit semantics
 
-The first profile is `node-capacitor-shell` because it matches a real project setup need while staying universal: the profile owns dependency names and Capacitor actions, and callers never provide arbitrary package lists or commands.
+The first profile is `node-capacitor-shell` because it matches a real project setup need while staying universal: the profile owns dependency names, package-manager selection, and Capacitor actions, and callers never provide arbitrary package lists or commands. It uses pnpm when `pnpm-lock.yaml` is present and otherwise uses npm.
 
 The profile also includes `ios_pod_install` for native dependency setup. It remains a setup-profile action because CocoaPods mutates dependency state and should not be exposed through `run_guarded_command`.
 

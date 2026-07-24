@@ -67,7 +67,7 @@ pub fn setup_profile_run(
     }
 
     let plan = match profile {
-        node_capacitor::PROFILE => node_capacitor::plan(action, params)?,
+        node_capacitor::PROFILE => node_capacitor::plan(&cwd, action, params)?,
         _ => {
             return Err(ContextPatchError::new(format!(
                 "setup_profile_run refused: unknown profile `{profile}`"
@@ -152,7 +152,7 @@ fn unexpected_changed_paths(paths: &[String], expected_classes: &[String]) -> Ve
 fn changed_path_class(path: &str) -> &'static str {
     match path {
         "package.json" => "package_manifest",
-        "package-lock.json" | "npm-shrinkwrap.json" => "package_lock",
+        "package-lock.json" | "npm-shrinkwrap.json" | "pnpm-lock.yaml" => "package_lock",
         "capacitor.config.ts" | "capacitor.config.js" | "capacitor.config.json" => {
             "capacitor_config"
         }
@@ -270,6 +270,53 @@ mod tests {
             ]
         );
         assert!(result.summary().contains("external_mutator: true"));
+    }
+
+    #[test]
+    fn plans_pnpm_for_pnpm_lockfile() {
+        let root = git_root("plans_pnpm_for_pnpm_lockfile");
+        fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+
+        let install = setup_profile_run(
+            &root,
+            None,
+            "node-capacitor-shell",
+            "install_capacitor_dependencies",
+            SetupActionParams::None,
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(install.plan.program, "pnpm");
+        assert_eq!(
+            install.plan.args,
+            [
+                "add",
+                "@capacitor/core",
+                "@capacitor/cli",
+                "@capacitor/ios",
+                "@capacitor/android"
+            ]
+        );
+
+        let sync = setup_profile_run(
+            &root,
+            None,
+            "node-capacitor-shell",
+            "cap_sync",
+            SetupActionParams::CapSync {
+                platform: Some(CapacitorPlatform::Ios),
+            },
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(sync.plan.program, "pnpm");
+        assert_eq!(sync.plan.args, ["exec", "cap", "sync", "ios"]);
     }
 
     #[test]
@@ -441,6 +488,7 @@ mod tests {
         let changed_paths = vec![
             "ios/App/App.xcodeproj/project.pbxproj".to_string(),
             "package-lock.json".to_string(),
+            "pnpm-lock.yaml".to_string(),
             "src/main.ts".to_string(),
         ];
         let expected = vec!["ios_project".to_string(), "package_lock".to_string()];

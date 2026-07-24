@@ -87,8 +87,9 @@ Rules:
 4. Resolve `cwd` inside the configured repository root.
 5. Default to dry-run and clearly label planned commands as external mutators, not atomic contextpatch writes.
 6. Keep setup/package-manager commands out of `run_guarded_command`; validation and setup are separate trust boundaries.
-7. Refuse mutation until the implementation records clean-worktree preconditions, exact confirmation, before/after Git status, changed paths, and expected changed-path classes.
-8. Keep profile modules universal and reusable; do not add app-specific setup logic to `contextpatch`.
+7. Package-manager selection may be derived by a profile from lockfiles, such as using pnpm for `pnpm-lock.yaml`, but callers must not pass arbitrary package-manager commands.
+8. Refuse mutation until the implementation records clean-worktree preconditions, exact confirmation, before/after Git status, changed paths, and expected changed-path classes.
+9. Keep profile modules universal and reusable; do not add app-specific setup logic to `contextpatch`.
 
 ## Native build and device expectation
 

@@ -342,11 +342,13 @@ Rules:
 
 - The caller must not supply raw `program` or `args`.
 - The profile must derive the exact planned command and expected changed-path classes.
+- The profile may select npm or pnpm from repository lockfiles, but callers still must not choose arbitrary package-manager commands.
 - Action params must be typed and validated by the profile.
 - The working directory must resolve inside the configured repository root.
 - Dry-run output must clearly mark the plan as an external mutator and not claim atomic contextpatch writes.
 - `dry_run=false` must require a clean worktree, exact confirmation, before/after status capture, changed-path reporting, and refusal for changed paths outside the profile's expected classes.
 - The tool must not broaden the `run_guarded_command` validation allowlist.
+- `pnpm` support for `node-capacitor-shell` remains profile-owned setup authority and must not make raw `pnpm add` available through `run_guarded_command`.
 
 ### `native_build_run`
 
