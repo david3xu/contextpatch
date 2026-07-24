@@ -24,6 +24,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
 | `native_device_run` | External device command | Dry-run default, typed action params, device-state confirmation gate, no raw `xcrun` or `adb` commands |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
+| `git_restore_exact` | Git worktree/index restore | Explicit dirty tracked paths only, dry-run default, explicit confirmation, never resets the whole worktree |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
 | `git_merge_readiness` | Optional remote-tracking ref update only | Validated refs, optional single-branch fetch, merge-base/ahead/diff-name analysis, no merge |
@@ -491,6 +492,28 @@ Rules:
 - The tool must verify that the staged path set exactly matches `paths` before committing.
 - On success, the tool returns the commit hash, short hash, committed paths, and post-commit short status.
 - Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
+
+### `git_restore_exact`
+
+Restores explicit dirty tracked paths from `HEAD` without exposing broad checkout, reset, clean, or stash operations. This is for generated-noise cleanup before exact commits.
+
+Required inputs:
+
+- `paths`: non-empty list of repository-relative dirty tracked paths
+
+Optional inputs:
+
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `restore exact paths` when `dry_run` is `false`
+
+Rules:
+
+- The tool must default to dry-run and perform no mutation unless `dry_run` is `false` and `confirm` exactly equals `restore exact paths`.
+- Every requested path must currently be dirty, tracked by Git, and normalized under the repository root.
+- The tool may restore a subset of dirty paths, but it must not touch any path not explicitly listed.
+- The tool must refuse untracked paths because restoring from `HEAD` cannot safely recreate/delete untracked files.
+- The tool may run only `git restore --staged --worktree -- <paths>` plus read-only Git status/tracking checks.
+- On success, the requested paths must no longer be dirty, and the response must report any remaining dirty paths.
 
 ### `git_remote_check`
 

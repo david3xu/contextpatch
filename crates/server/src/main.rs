@@ -517,6 +517,33 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::git_restore_exact::NAME,
+            "description": "Dry-run or restore exact dirty repository paths from HEAD. Use for generated noise cleanup before exact commits; never resets the whole worktree.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "Repository-relative dirty paths to restore from HEAD. Every path must currently be dirty."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Validate and preview without restoring. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `restore exact paths` when dry_run is false."
+                    }
+                },
+                "required": ["paths"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::git_remote_check::NAME,
             "description": "Fetch one remote branch and report whether the remote branch is ahead of HEAD. Does not modify source files.",
             "inputSchema": {
@@ -663,6 +690,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::native_build_run::NAME => call_native_build_run(repo_root, &arguments),
         tools::native_device_run::NAME => call_native_device_run(repo_root, &arguments),
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
+        tools::git_restore_exact::NAME => call_git_restore_exact(repo_root, &arguments),
         tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
         tools::git_branch_prepare::NAME => call_git_branch_prepare(repo_root, &arguments),
         tools::git_merge_readiness::NAME => call_git_merge_readiness(repo_root, &arguments),
@@ -717,6 +745,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "native_build_run": true,
             "native_device_run": true,
             "git_commit_exact": true,
+            "git_restore_exact": true,
             "git_remote_check": true,
             "git_branch_prepare": true,
             "git_merge_readiness": true,
@@ -724,6 +753,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
+            "restore_exact_paths": true,
             "remote_check": true,
             "branch_prepare": true,
             "merge_readiness": true,
@@ -733,6 +763,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "requires exact complete dirty-path set",
                 "defaults to dry_run",
                 "requires confirm literal for mutation",
+                "restores only explicit dirty paths from HEAD",
                 "stages only explicit paths",
                 "creates at most one local commit",
                 "fetches only explicit remote branch",
@@ -740,6 +771,16 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "merge readiness is read-only and reports changed-on-both-sides candidates",
                 "pushes only expected HEAD to matching remote branch",
                 "never force pushes"
+            ],
+            "examples": [
+                {
+                    "tool": "git_restore_exact",
+                    "description": "Restore generated dirty tracked paths before making an exact scoped commit.",
+                    "arguments": {
+                        "paths": ["data/processed/example.json"],
+                        "dry_run": true
+                    }
+                }
             ]
         },
         "process_execution": {
@@ -1502,7 +1543,7 @@ fn call_git_commit_exact(
     let root = repo_root.canonicalize().map_err(|error| {
         format!("git_commit_exact refused: failed to resolve repo root: {error}")
     })?;
-    let normalized_paths = normalize_git_paths(&root, &paths)?;
+    let normalized_paths = normalize_git_paths(tools::git_commit_exact::NAME, &root, &paths)?;
     let expected_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
     if expected_paths.len() != normalized_paths.len() {
         return Err("git_commit_exact refused: duplicate paths are not allowed".to_string());
@@ -1585,6 +1626,91 @@ fn call_git_commit_exact(
         "status_short": status
     }))
     .map_err(|error| format!("git_commit_exact refused: {error}"))
+}
+
+fn call_git_restore_exact(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "restore exact paths";
+    let paths = required_string_array(arguments, "paths")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    if paths.is_empty() {
+        return Err("git_restore_exact refused: paths must not be empty".to_string());
+    }
+    if paths.len() > 100 {
+        return Err("git_restore_exact refused: at most 100 paths may be restored".to_string());
+    }
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "git_restore_exact refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = repo_root.canonicalize().map_err(|error| {
+        format!("git_restore_exact refused: failed to resolve repo root: {error}")
+    })?;
+    let normalized_paths = normalize_git_paths(tools::git_restore_exact::NAME, &root, &paths)?;
+    let restore_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
+    if restore_paths.len() != normalized_paths.len() {
+        return Err("git_restore_exact refused: duplicate paths are not allowed".to_string());
+    }
+
+    let dirty_paths = git_status_paths_for_tool(tools::git_restore_exact::NAME, &root)?;
+    let missing_dirty = restore_paths
+        .difference(&dirty_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !missing_dirty.is_empty() {
+        return Err(format!(
+            "git_restore_exact refused: every requested path must currently be dirty\nnot_dirty_paths:\n{}",
+            format_set(&missing_dirty)
+        ));
+    }
+    ensure_restore_paths_are_tracked(&root, &normalized_paths)?;
+
+    if dry_run {
+        let remaining_dirty_paths = dirty_paths
+            .difference(&restore_paths)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::git_restore_exact::NAME,
+            "dry_run": true,
+            "would_restore_paths": normalized_paths,
+            "remaining_dirty_paths_after_restore": remaining_dirty_paths,
+            "required_confirm_for_restore": CONFIRMATION
+        }))
+        .map_err(|error| format!("git_restore_exact refused: {error}"));
+    }
+
+    git_success_for_tool(
+        tools::git_restore_exact::NAME,
+        &root,
+        git_restore_args(&normalized_paths),
+    )?;
+    let dirty_after = git_status_paths_for_tool(tools::git_restore_exact::NAME, &root)?;
+    let still_dirty = restore_paths
+        .intersection(&dirty_after)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !still_dirty.is_empty() {
+        return Err(format!(
+            "git_restore_exact refused after restore: requested paths are still dirty\n{}",
+            format_set(&still_dirty)
+        ));
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_restore_exact::NAME,
+        "dry_run": false,
+        "restored": true,
+        "restored_paths": normalized_paths,
+        "remaining_dirty_paths": dirty_after
+    }))
+    .map_err(|error| format!("git_restore_exact refused: {error}"))
 }
 
 fn call_git_remote_check(
@@ -2167,27 +2293,33 @@ fn validate_commit_body(body: &str) -> Result<String, String> {
     Ok(body.trim().to_string())
 }
 
-fn normalize_git_paths(root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
+fn normalize_git_paths(
+    tool_name: &str,
+    root: &Path,
+    paths: &[String],
+) -> Result<Vec<String>, String> {
     paths
         .iter()
-        .map(|path| normalize_git_path(root, path))
+        .map(|path| normalize_git_path(tool_name, root, path))
         .collect()
 }
 
-fn normalize_git_path(root: &Path, raw: &str) -> Result<String, String> {
+fn normalize_git_path(tool_name: &str, root: &Path, raw: &str) -> Result<String, String> {
     if raw.is_empty() || raw.contains('\0') {
-        return Err("git_commit_exact refused: path must not be empty or contain NUL".to_string());
+        return Err(format!(
+            "{tool_name} refused: path must not be empty or contain NUL"
+        ));
     }
     if raw.starts_with(':') || raw.contains('*') || raw.contains('?') || raw.contains('[') {
         return Err(format!(
-            "git_commit_exact refused: path `{raw}` contains Git pathspec metacharacters"
+            "{tool_name} refused: path `{raw}` contains Git pathspec metacharacters"
         ));
     }
 
     let path = Path::new(raw);
     if path.is_absolute() {
         return Err(format!(
-            "git_commit_exact refused: path `{raw}` must be repository-relative"
+            "{tool_name} refused: path `{raw}` must be repository-relative"
         ));
     }
     for component in path.components() {
@@ -2195,7 +2327,7 @@ fn normalize_git_path(root: &Path, raw: &str) -> Result<String, String> {
             std::path::Component::Normal(_) => {}
             _ => {
                 return Err(format!(
-                    "git_commit_exact refused: path `{raw}` must be a normalized relative path"
+                    "{tool_name} refused: path `{raw}` must be a normalized relative path"
                 ))
             }
         }
@@ -2204,24 +2336,24 @@ fn normalize_git_path(root: &Path, raw: &str) -> Result<String, String> {
     let candidate = root.join(path);
     let resolved = if candidate.exists() {
         candidate.canonicalize().map_err(|error| {
-            format!("git_commit_exact refused: failed to resolve path `{raw}`: {error}")
+            format!("{tool_name} refused: failed to resolve path `{raw}`: {error}")
         })?
     } else {
         let parent = candidate
             .parent()
-            .ok_or_else(|| format!("git_commit_exact refused: path `{raw}` has no parent"))?;
+            .ok_or_else(|| format!("{tool_name} refused: path `{raw}` has no parent"))?;
         let parent = parent.canonicalize().map_err(|error| {
-            format!("git_commit_exact refused: failed to resolve parent for `{raw}`: {error}")
+            format!("{tool_name} refused: failed to resolve parent for `{raw}`: {error}")
         })?;
         let file_name = candidate
             .file_name()
-            .ok_or_else(|| format!("git_commit_exact refused: path `{raw}` has no file name"))?;
+            .ok_or_else(|| format!("{tool_name} refused: path `{raw}` has no file name"))?;
         parent.join(file_name)
     };
 
     if !resolved.starts_with(root) {
         return Err(format!(
-            "git_commit_exact refused: path `{raw}` resolves outside repository root"
+            "{tool_name} refused: path `{raw}` resolves outside repository root"
         ));
     }
 
@@ -2229,11 +2361,16 @@ fn normalize_git_path(root: &Path, raw: &str) -> Result<String, String> {
 }
 
 fn git_status_paths(root: &Path) -> Result<BTreeSet<String>, String> {
-    let output = git_output(
+    git_status_paths_for_tool(tools::git_commit_exact::NAME, root)
+}
+
+fn git_status_paths_for_tool(tool_name: &str, root: &Path) -> Result<BTreeSet<String>, String> {
+    let output = git_output_for_tool(
+        tool_name,
         root,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
-    parse_porcelain_paths(&output.stdout, "git status")
+    parse_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
 }
 
 fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
@@ -2241,26 +2378,26 @@ fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
     parse_nul_paths(&output.stdout, "git diff --cached")
 }
 
-fn parse_porcelain_paths(bytes: &[u8], label: &str) -> Result<BTreeSet<String>, String> {
+fn parse_porcelain_paths_for_tool(
+    tool_name: &str,
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, String> {
     let mut paths = BTreeSet::new();
     let entries = bytes
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty());
     for entry in entries {
         if entry.len() < 4 || entry[2] != b' ' {
-            return Err(format!(
-                "git_commit_exact refused: unexpected {label} entry"
-            ));
+            return Err(format!("{tool_name} refused: unexpected {label} entry"));
         }
         if matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C') {
-            return Err(
-                "git_commit_exact refused: rename/copy entries require a future dedicated tool"
-                    .to_string(),
-            );
+            return Err(format!(
+                "{tool_name} refused: rename/copy entries require a future dedicated tool"
+            ));
         }
-        let path = std::str::from_utf8(&entry[3..]).map_err(|error| {
-            format!("git_commit_exact refused: {label} path is not UTF-8: {error}")
-        })?;
+        let path = std::str::from_utf8(&entry[3..])
+            .map_err(|error| format!("{tool_name} refused: {label} path is not UTF-8: {error}"))?;
         paths.insert(path.to_string());
     }
     Ok(paths)
@@ -2301,6 +2438,35 @@ fn git_args(subcommand: &str, paths: &[String]) -> Vec<String> {
         .chain(std::iter::once("--".to_string()))
         .chain(paths.iter().cloned())
         .collect()
+}
+
+fn git_restore_args(paths: &[String]) -> Vec<String> {
+    ["restore", "--staged", "--worktree", "--"]
+        .into_iter()
+        .map(ToString::to_string)
+        .chain(paths.iter().cloned())
+        .collect()
+}
+
+fn ensure_restore_paths_are_tracked(root: &Path, paths: &[String]) -> Result<(), String> {
+    let untracked = paths
+        .iter()
+        .filter_map(|path| {
+            let args = ["ls-files", "--error-unmatch", "--", path.as_str()];
+            match git_output_for_tool(tools::git_restore_exact::NAME, root, &args) {
+                Ok(_) => None,
+                Err(_) => Some(path.clone()),
+            }
+        })
+        .collect::<BTreeSet<_>>();
+
+    if !untracked.is_empty() {
+        return Err(format!(
+            "git_restore_exact refused: untracked paths cannot be restored from HEAD\n{}",
+            format_set(&untracked)
+        ));
+    }
+    Ok(())
 }
 
 fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {

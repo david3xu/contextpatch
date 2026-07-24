@@ -6,6 +6,7 @@ pub mod git_commit_exact;
 pub mod git_merge_readiness;
 pub mod git_push_exact;
 pub mod git_remote_check;
+pub mod git_restore_exact;
 pub mod native_build_run;
 pub mod native_device_run;
 pub mod preflight_health;

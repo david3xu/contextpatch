@@ -48,6 +48,7 @@ fn stage1_mcp_tools_work_together() {
         "native_build_run",
         "native_device_run",
         "git_commit_exact",
+        "git_restore_exact",
         "git_remote_check",
         "git_branch_prepare",
         "git_merge_readiness",
@@ -445,6 +446,37 @@ fn stage2_git_commit_exact_refuses_partial_dirty_path_set() {
     assert_eq!(responses[0]["result"]["isError"], true);
     assert_text(&responses[0], "provided paths must exactly match");
     assert_text(&responses[0], "two.txt");
+}
+
+#[test]
+fn stage2_git_restore_exact_restores_only_requested_tracked_dirty_paths() {
+    let root = git_repo("stage2_git_restore_exact_restores_only_requested_tracked_dirty_paths");
+    fs::write(root.join("generated.txt"), "old\n").unwrap();
+    fs::write(root.join("kept.txt"), "old\n").unwrap();
+    git(&root, &["add", "generated.txt", "kept.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("generated.txt"), "new\n").unwrap();
+    fs::write(root.join("kept.txt"), "new\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_restore_exact","arguments":{"paths":["generated.txt"]}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_restore_exact","arguments":{"paths":["generated.txt"],"dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_restore_exact","arguments":{"paths":["generated.txt"],"dry_run":false,"confirm":"restore exact paths"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "\"would_restore_paths\"");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
+    assert_text(&responses[2], "\"restored\": true");
+    assert_eq!(
+        fs::read_to_string(root.join("generated.txt")).unwrap(),
+        "old\n"
+    );
+    assert_eq!(fs::read_to_string(root.join("kept.txt")).unwrap(), "new\n");
 }
 
 #[test]
