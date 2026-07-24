@@ -655,6 +655,7 @@ fn stage2_native_device_run_plans_device_actions_and_requires_confirmation() {
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"android_install_app","params":{"apk_path":"../app.apk"},"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_create_simulator","params":{"name":"ContextPatch iPhone","device_type":"iPhone 16","runtime":"iOS 26.4"},"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_cap_run","params":{"target":"00000000-0000-0000-0000-000000000000"},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_read_logs","params":{"device":"booted","last":"30s"},"timeout_secs":30}}}"#,
         ],
     );
 
@@ -680,6 +681,11 @@ fn stage2_native_device_run_plans_device_actions_and_requires_confirmation() {
         &responses[5],
         "command: npm exec -- cap run ios --target 00000000-0000-0000-0000-000000000000 --no-sync",
     );
+    assert_text(
+        &responses[6],
+        "command: xcrun simctl spawn booted log show --style compact --last 30s",
+    );
+    assert_text(&responses[6], "changes_device_state: false");
 }
 
 #[test]

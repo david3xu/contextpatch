@@ -15,6 +15,10 @@ pub enum NativeDeviceParams {
     IosDevice {
         device: String,
     },
+    IosLogs {
+        device: String,
+        last: Option<String>,
+    },
     IosCreate {
         name: String,
         device_type: String,
@@ -263,10 +267,12 @@ fn plan_native_device(
             (package_manager.program(), args, true)
         }
         "ios_read_logs" => {
-            let NativeDeviceParams::IosDevice { device } = params else {
-                return Err(required(action, "device"));
+            let NativeDeviceParams::IosLogs { device, last } = params else {
+                return Err(required(action, "device and optional last"));
             };
             validate_device_id("device", &device)?;
+            let last = last.unwrap_or_else(|| "2m".to_string());
+            validate_log_last(&last)?;
             (
                 "xcrun",
                 vec![
@@ -274,9 +280,11 @@ fn plan_native_device(
                     "spawn".to_string(),
                     device,
                     "log".to_string(),
-                    "stream".to_string(),
+                    "show".to_string(),
                     "--style".to_string(),
                     "compact".to_string(),
+                    "--last".to_string(),
+                    last,
                 ],
                 false,
             )
@@ -465,6 +473,25 @@ fn validate_app_id(value: &str) -> Result<(), ContextPatchError> {
     Ok(())
 }
 
+fn validate_log_last(value: &str) -> Result<(), ContextPatchError> {
+    validate_non_empty_single_line("native_device_run", "last", value, 16)?;
+    let Some(unit) = value.chars().last() else {
+        return Err(ContextPatchError::new(
+            "native_device_run refused: last is invalid",
+        ));
+    };
+    let digits = &value[..value.len() - unit.len_utf8()];
+    if digits.is_empty()
+        || !digits.chars().all(|ch| ch.is_ascii_digit())
+        || !matches!(unit, 's' | 'm' | 'h' | 'd')
+    {
+        return Err(ContextPatchError::new(
+            "native_device_run refused: last must be a duration like 30s, 2m, 1h, or 1d",
+        ));
+    }
+    Ok(())
+}
+
 fn empty_label(value: &str) -> &str {
     if value.trim().is_empty() {
         "(empty)"
@@ -558,6 +585,25 @@ mod tests {
             ]
         );
         assert!(cap_run.plan.changes_device_state);
+
+        let ios_logs = native_device_run(
+            &root,
+            None,
+            "ios_read_logs",
+            NativeDeviceParams::IosLogs {
+                device: "booted".to_string(),
+                last: Some("30s".to_string()),
+            },
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            ios_logs.plan.args,
+            ["simctl", "spawn", "booted", "log", "show", "--style", "compact", "--last", "30s"]
+        );
+        assert!(!ios_logs.plan.changes_device_state);
 
         let android = native_device_run(
             &root,

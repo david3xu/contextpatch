@@ -457,7 +457,7 @@ fn tool_definitions() -> Value {
                     },
                     "params": {
                         "type": "object",
-                        "description": "Typed action parameters such as device, serial, app_id, app_path, apk_path, or lines."
+                        "description": "Typed action parameters such as device, serial, app_id, app_path, apk_path, Android lines, or iOS log last duration."
                     },
                     "cwd": {
                         "type": "string",
@@ -960,6 +960,18 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 },
                 {
                     "tool": "native_device_run",
+                    "description": "Read a finite iOS simulator log snapshot without starting an unbounded stream.",
+                    "arguments": {
+                        "action": "ios_read_logs",
+                        "params": {
+                            "device": "booted",
+                            "last": "2m"
+                        },
+                        "dry_run": true
+                    }
+                },
+                {
+                    "tool": "native_device_run",
                     "description": "Read recent Android logcat output without changing device state.",
                     "arguments": {
                         "action": "android_read_logcat",
@@ -1408,8 +1420,12 @@ fn native_device_params(action: &str, value: Option<&Value>) -> Result<NativeDev
                 )
             }
         }
-        "ios_boot_simulator" | "ios_read_logs" => Ok(NativeDeviceParams::IosDevice {
+        "ios_boot_simulator" => Ok(NativeDeviceParams::IosDevice {
             device: required_string(params, "device")?.to_string(),
+        }),
+        "ios_read_logs" => Ok(NativeDeviceParams::IosLogs {
+            device: required_string(params, "device")?.to_string(),
+            last: optional_string(params, "last")?.map(ToString::to_string),
         }),
         "ios_create_simulator" => Ok(NativeDeviceParams::IosCreate {
             name: required_string(params, "name")?.to_string(),
