@@ -17,6 +17,7 @@ The server should not expose broad filesystem write tools. In particular, the de
 - Git reset/checkout/stash/fetch/push
 - Git merge or merge-tree as generic commands
 - broad or automatic Git commits
+- generic package-manager or scaffold execution
 
 The expected agent workflow is:
 
@@ -31,6 +32,7 @@ The expected agent workflow is:
 9. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
 10. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
 11. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+12. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
 
 ## Build and configure Claude Desktop
 
@@ -96,13 +98,14 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `run_guarded_command`
 - `read_command_log`
 - `validation_profile_run`
+- `setup_profile_run`
 - `git_commit_exact`
 - `git_remote_check`
 - `git_branch_prepare`
 - `git_merge_readiness`
 - `git_push_exact`
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all fifteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all sixteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -124,6 +127,7 @@ The current server exposes the implemented safe primitives:
 - `run_guarded_command`
 - `read_command_log`
 - `validation_profile_run`
+- `setup_profile_run`
 - `git_commit_exact`
 - `git_remote_check`
 - `git_branch_prepare`
@@ -135,6 +139,8 @@ Other documented tools remain roadmap items until implemented.
 `run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata.
 
 Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, or `datacore-m6-vscode`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values. Use `read_command_log` only for logs that need inspection.
+
+Use `setup_profile_run` when a real project setup task needs a profile-owned command plan. It defaults to dry-run and requires `confirm: "run setup profile"` plus a clean worktree before executing an external setup command. The first supported profile is `node-capacitor-shell`, with typed actions for Capacitor dependency installation, init, adding iOS/Android projects, and sync. The caller never supplies raw commands, arbitrary package lists, or shell strings.
 
 Use `git_commit_exact` for the narrow local-commit case that previously required leaving contextpatch entirely: the tool validates that `paths` exactly equals the repository's full dirty-path set, defaults to dry-run, requires `confirm: "commit exact paths"` when `dry_run` is false, stages only those paths, creates one local commit, and reports the commit hash. It still does not run fetch or push.
 

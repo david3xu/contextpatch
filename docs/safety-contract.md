@@ -18,6 +18,7 @@ This document is normative. If implementation behavior conflicts with this file,
 8. If validation command execution is exposed, it must be no-shell, repo-root-confined, allowlisted, timeout-bound, and auditable.
 9. If local Git commit support is exposed, it must be an explicitly confirmed exact-path checkpoint, not broad Git authority.
 10. If remote Git support is exposed, it must be split into explicit remote-check, branch-preparation, merge-readiness, and exact-push tools, not added to generic command execution.
+11. If setup support is exposed, it must be declarative and profile-owned: callers choose a profile/action with typed params, never raw package-manager or shell commands.
 
 ## Required refusal cases
 
@@ -73,6 +74,21 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 10. Store only redacted command logs, address them by opaque ids, and read them back through `read_command_log` rather than exposing arbitrary paths.
 11. Add latency instrumentation with monotonic durations and response sizes so performance work is evidence-based, while never recording secrets, environment values, or unredacted command output in timing metadata.
 
+## Setup profile expectation
+
+`setup_profile_run` is a narrow external-mutator planning surface for real project setup workflows. It must not become a generic package-manager runner.
+
+Rules:
+
+1. Accept only server-owned `profile` and `action` names plus typed params.
+2. Refuse caller-supplied raw `program`, `args`, shell strings, environment overrides, or arbitrary package lists.
+3. Derive the exact command plan inside `core::setup`.
+4. Resolve `cwd` inside the configured repository root.
+5. Default to dry-run and clearly label planned commands as external mutators, not atomic contextpatch writes.
+6. Keep setup/package-manager commands out of `run_guarded_command`; validation and setup are separate trust boundaries.
+7. Refuse mutation until the implementation records clean-worktree preconditions, exact confirmation, before/after Git status, changed paths, and expected changed-path classes.
+8. Keep profile modules universal and reusable; do not add app-specific setup logic to `contextpatch`.
+
 ## Non-goals
 
 - No unrestricted shell execution
@@ -80,4 +96,5 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 - No silent formatting of unrelated files
 - No automatic or broad commits; only explicitly confirmed exact-path local checkpoints
 - No broad fetch, checkout, merge, or push; only `git_remote_check`, `git_branch_prepare`, `git_merge_readiness`, and `git_push_exact` under their explicit guards
+- No generic package-manager or scaffold runner; only declarative setup profiles under `setup_profile_run`
 - No hidden network calls for edit operations

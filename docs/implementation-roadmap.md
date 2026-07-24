@@ -65,8 +65,23 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `git_branch_prepare` | Prepare one local branch from one explicit remote base branch after clean-worktree and required-file gates |
 | `git_merge_readiness` | Analyze PR/merge readiness between two refs without exposing generic merge commands |
 | `git_push_exact` | Publish the exact current commit only after branch, clean-worktree, expected-HEAD, remote-divergence, and confirmation guards |
+| `setup_profile_run` | Plan typed, profile-owned setup actions for real projects without exposing generic package-manager or shell authority |
 
-Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, or broad automatic commits. Git mutation remains split by risk boundary: `git_commit_exact` is local only, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing.
+Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, broad automatic commits, or generic package-manager execution. Git mutation remains split by risk boundary: `git_commit_exact` is local only, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing. Setup support is split into `setup_profile_run`, which plans external-mutator commands from typed server-owned profiles and executes them only behind dry-run, clean-worktree, changed-path, and confirmation guards.
+
+## Stage 2A-setup: profile-driven setup mutation
+
+`setup_profile_run` may execute `dry_run=false` only under these gates:
+
+1. Exact `confirm: "run setup profile"`
+2. Clean worktree before execution
+3. No-shell execution through shared process runner
+4. Before/after Git status capture
+5. Changed-path reporting
+6. Refusal when changed paths fall outside the profile's expected changed-path classes
+7. Clear reporting that the external tool performed the mutation and contextpatch did not provide atomic edit semantics
+
+The first profile is `node-capacitor-shell` because it matches a real project setup need while staying universal: the profile owns dependency names and Capacitor actions, and callers never provide arbitrary package lists or commands.
 
 ## Stage 2B: latency and workflow compression
 
@@ -104,3 +119,4 @@ The goal is to stop guessing whether latency comes from JSON-RPC handling, proce
 - Unrestricted shell execution
 - Broad or automatic Git commits
 - Git fetch/push, resets, checkouts, or stashes
+- Generic package-manager or scaffold execution outside declarative setup profiles

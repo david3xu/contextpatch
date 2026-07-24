@@ -8,7 +8,7 @@ The architecture supports one product goal: provide a reusable safe patch layer 
 
 | Layer | Package | Responsibility |
 | --- | --- | --- |
-| Core | `core` | Filesystem, patch, replacement, policy, and Git guard logic |
+| Core | `core` | Filesystem, patch, replacement, policy, process-runner, setup-profile planning, and Git guard logic |
 | CLI | `cli` | Human-facing command-line UX |
 | Server | `server` | Context-server protocol adapter and tool schema |
 
@@ -33,6 +33,8 @@ Owns:
 - Diff generation semantics
 - Git status inspection and tracked move behavior
 - Guarded validation command policy and execution
+- Shared no-shell process execution machinery for guarded workflows
+- Declarative setup-profile planning and profile-owned command derivation
 - Error types shared by CLI and server
 
 Must not own:
@@ -41,6 +43,7 @@ Must not own:
 - JSON-RPC framing
 - Claude Desktop configuration
 - Human CLI argument parsing
+- MCP tool schemas or setup-profile JSON adaptation
 
 ### `cli`
 
@@ -63,6 +66,22 @@ Owns:
 - Server startup and client transport
 
 Must call `core` for edit behavior instead of owning filesystem mutation logic.
+
+Server setup tools are adapters only: they parse JSON into typed core setup params, call `core::setup`, and format MCP responses. They must not derive package-manager commands directly.
+
+## Core feature organization
+
+Core code is grouped by product capability rather than adapter:
+
+| Module | Owns |
+| --- | --- |
+| `fs` | Repo-root-confined reads and create-only atomic writes |
+| `patch` / `replace` | Anchored edit and diff semantics |
+| `git` | Git status and guarded Git workflow helpers |
+| `process` | Shared no-shell, timeout-bound, redacted command execution machinery |
+| `setup` | Declarative setup profiles and typed command-plan derivation |
+
+`process` is infrastructure, not a public shell surface. `setup` may plan external mutators, but profile modules own the action vocabulary and command plans.
 
 ## Dependency direction
 
@@ -87,3 +106,4 @@ Repository-level integration tests should cover:
 5. Path traversal refusal
 6. Dirty-repository guard behavior
 7. Capability discovery and guarded command refusal behavior
+8. Setup-profile dry-run planning and refusal behavior

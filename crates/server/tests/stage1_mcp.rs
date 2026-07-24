@@ -42,6 +42,7 @@ fn stage1_mcp_tools_work_together() {
         "run_guarded_command",
         "read_command_log",
         "validation_profile_run",
+        "setup_profile_run",
         "git_commit_exact",
         "git_remote_check",
         "git_branch_prepare",
@@ -480,11 +481,57 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
 
     assert_text(&responses[0], "\"process_execution\"");
     assert_text(&responses[0], "\"mode\": \"allowlisted_no_shell\"");
+    assert_text(&responses[0], "\"setup_profiles\"");
+    assert_text(&responses[0], "\"node-capacitor-shell\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
+    assert_text(&responses[1], "\"setup_profiles\"");
     assert_text(&responses[2], "allowlist: git/status");
     assert_text(&responses[2], "exit_code: 0");
     assert_eq!(responses[3]["result"]["isError"], true);
     assert_text(&responses[3], "not allowlisted");
+}
+
+#[test]
+fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
+    let root = git_repo("stage2_setup_profile_run_plans_capacitor_shell_without_mutating");
+    fs::write(root.join("package.json"), "{}\n").unwrap();
+    git(&root, &["add", "package.json"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_init","params":{"app_id":"com.example.app","app_name":"Example","web_dir":"dist"},"dry_run":true,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","params":{"platform":"ios"}}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","params":{"platform":"windows"}}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"npm","args":["install","@capacitor/core"],"timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "profile: node-capacitor-shell");
+    assert_text(&responses[0], "action: cap_init");
+    assert_text(
+        &responses[0],
+        "command: npm exec -- cap init Example com.example.app --web-dir dist",
+    );
+    assert_text(&responses[0], "external_mutator: true");
+    assert_text(
+        &responses[0],
+        "required_confirm_for_mutation: \"run setup profile\"",
+    );
+    assert_text(&responses[1], "command: npm exec -- cap sync ios");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "requires confirm");
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "unsupported cap_sync platform");
+    assert_eq!(responses[4]["result"]["isError"], true);
+    assert_text(&responses[4], "not allowlisted");
+    assert_eq!(
+        git_stdout(&root, &["status", "--short"]),
+        "",
+        "setup_profile_run dry-runs must not mutate the repository"
+    );
 }
 
 #[test]

@@ -10,6 +10,7 @@ pub mod read_command_log;
 pub mod read_range;
 pub mod replace_exact;
 pub mod run_guarded_command;
+pub mod setup_profile_run;
 pub mod status_guard;
 pub mod validation_profile_run;
 pub mod write_new_file;

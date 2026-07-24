@@ -19,6 +19,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
+| `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
@@ -46,6 +47,7 @@ Rules:
 - Must distinguish the narrow local `git_commit_exact` checkpoint and guarded `git_remote_check`/`git_push_exact` workflow from unsupported broad Git/destructive workflows.
 - Must report `git_branch_prepare` honestly when available and distinguish it from broad checkout/rebase/reset authority.
 - Must report `git_merge_readiness` honestly when available and distinguish it from generic merge authority.
+- Must report setup profiles honestly when available and distinguish declarative profile planning from generic package-manager or shell authority.
 - Must not mutate repository state.
 
 ### `preflight_health`
@@ -59,6 +61,7 @@ Rules:
 - Must report repository cleanliness using the same Git guard semantics as `status_guard`.
 - Must report whether guarded process execution is available.
 - Must report local availability of expected validation tools without treating missing optional tools as server failure.
+- Must report setup-profile prerequisites without running setup commands.
 - Must not mutate repository state.
 
 ### `read_range`
@@ -303,6 +306,43 @@ Rules:
 - The first response should be compact: per-command status, duration, timeout state, and log id.
 - Full command output should be retrieved with `read_command_log` only when needed.
 - Profiles must not commit, push, reset, checkout, clean, stash, or mutate product files.
+
+### `setup_profile_run`
+
+Plans or runs a predefined repository setup action from a typed profile.
+
+This tool exists for real project setup cases that need package-manager or scaffold commands without turning `run_guarded_command` into a broad shell/package-manager gateway.
+
+Required inputs:
+
+- `profile`: currently `node-capacitor-shell`
+- `action`: profile-owned action name
+
+Optional inputs:
+
+- `params`: typed action parameters
+- `cwd`: working directory relative to the repository root
+- `timeout_secs`: future execution timeout, from 1 to 600
+- `dry_run`: defaults to `true`
+- `confirm`: required mutation confirmation literal `run setup profile` when `dry_run` is `false`
+
+Supported `node-capacitor-shell` actions:
+
+- `install_capacitor_dependencies`
+- `cap_init` with `app_id`, `app_name`, and `web_dir`
+- `cap_add_ios`
+- `cap_add_android`
+- `cap_sync` with optional `platform`: `ios`, `android`, or `all`
+
+Rules:
+
+- The caller must not supply raw `program` or `args`.
+- The profile must derive the exact planned command and expected changed-path classes.
+- Action params must be typed and validated by the profile.
+- The working directory must resolve inside the configured repository root.
+- Dry-run output must clearly mark the plan as an external mutator and not claim atomic contextpatch writes.
+- `dry_run=false` must require a clean worktree, exact confirmation, before/after status capture, changed-path reporting, and refusal for changed paths outside the profile's expected classes.
+- The tool must not broaden the `run_guarded_command` validation allowlist.
 
 ### `git_commit_exact`
 

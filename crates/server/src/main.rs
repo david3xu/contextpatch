@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use contextpatch_core::fs::read_range::read_range_in_root;
@@ -14,6 +14,7 @@ use contextpatch_core::git::status::{status_summary, status_summary_for_path};
 use contextpatch_core::patch::diff::preview_exact_replacement_in_root;
 use contextpatch_core::process::guarded_command::run_guarded_command;
 use contextpatch_core::replace::exact::replace_exact_in_root;
+use contextpatch_core::setup::profile::{setup_profile_run, CapacitorPlatform, SetupActionParams};
 use serde_json::{json, Value};
 
 fn main() -> ExitCode {
@@ -350,6 +351,47 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::setup_profile_run::NAME,
+            "description": "Plan or run a predefined repository setup action from a typed profile. Callers do not provide raw commands.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": {
+                        "type": "string",
+                        "description": "Setup profile name. Supported: node-capacitor-shell."
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "Profile action, such as install_capacitor_dependencies, cap_init, cap_add_ios, cap_add_android, or cap_sync."
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Typed action parameters. cap_init requires app_id, app_name, and web_dir; cap_sync accepts platform: ios, android, or all."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory relative to the configured repository root."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Optional timeout for the planned command. Defaults to 120, maximum 600."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Plan only without mutating. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required mutation confirmation literal `run setup profile` when dry_run is false."
+                    }
+                },
+                "required": ["profile", "action"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::git_commit_exact::NAME,
             "description": "Dry-run or create one local Git commit from an exact full dirty-path set. Never pushes.",
             "inputSchema": {
@@ -526,6 +568,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::run_guarded_command::NAME => call_run_guarded_command(repo_root, &arguments),
         tools::read_command_log::NAME => call_read_command_log(&arguments),
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
+        tools::setup_profile_run::NAME => call_setup_profile_run(repo_root, &arguments),
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
         tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
         tools::git_branch_prepare::NAME => call_git_branch_prepare(repo_root, &arguments),
@@ -576,6 +619,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "write_new_file": true,
             "status_guard": true,
             "read_command_log": true,
+            "setup_profile_run": true,
             "git_commit_exact": true,
             "git_remote_check": true,
             "git_branch_prepare": true,
@@ -630,6 +674,33 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "secret-printing environment inspection"
             ]
         }
+        ,
+        "setup_profiles": {
+            "mode": "declarative_profile_actions",
+            "profiles": {
+                "node-capacitor-shell": {
+                    "actions": [
+                        "install_capacitor_dependencies",
+                        "cap_init",
+                        "cap_add_ios",
+                        "cap_add_android",
+                        "cap_sync"
+                    ],
+                    "external_mutator": true,
+                    "caller_supplies_raw_command": false,
+                    "mutation_enabled": true,
+                    "required_confirm_for_mutation": "run setup profile"
+                }
+            },
+            "guards": [
+                "profile derives exact command plan",
+                "typed action parameters only",
+                "repo-root-confined cwd",
+                "dry-run first",
+                "mutation requires clean worktree and exact confirmation",
+                "mutation reports before/after Git status and changed paths"
+            ]
+        }
     }))
     .map_err(|error| format!("capability_manifest refused: {error}"))?)
 }
@@ -659,6 +730,15 @@ fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
             "bun": executable_available("bun"),
             "npm": executable_available("npm"),
             "rg": executable_available("rg")
+        },
+        "setup_profiles": {
+            "node-capacitor-shell": {
+                "available": executable_is_available("npm"),
+                "required_tools": {
+                    "npm": executable_available("npm")
+                },
+                "mutation_enabled": true
+            }
         }
     }))
     .map_err(|error| format!("preflight_health refused: {error}"))?)
@@ -829,6 +909,83 @@ fn call_validation_profile_run(
     lines.insert(4, format!("failed: {failed}"));
     lines.push(format!("duration_ms: {}", started.elapsed().as_millis()));
     Ok(lines.join("\n"))
+}
+
+fn call_setup_profile_run(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let profile = required_string(arguments, "profile")?;
+    let action = required_string(arguments, "action")?;
+    let params = setup_action_params(action, arguments.get("params"))?;
+    let cwd = optional_string(arguments, "cwd")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    let result = setup_profile_run(
+        repo_root,
+        cwd.map(Path::new),
+        profile,
+        action,
+        params,
+        timeout_secs,
+        dry_run,
+        confirm,
+    )
+    .map_err(|error| format!("setup_profile_run refused: {error}"))?;
+    let summary = result.summary();
+    let log_id = write_command_log(&summary)
+        .map_err(|error| format!("setup_profile_run log write failed: {error}"))?;
+    Ok(format!("log_id: {log_id}\n{summary}"))
+}
+
+fn setup_action_params(action: &str, value: Option<&Value>) -> Result<SetupActionParams, String> {
+    let params = match value {
+        Some(value) => value
+            .as_object()
+            .ok_or_else(|| "invalid object argument: params".to_string())?,
+        None => {
+            return match action {
+                "cap_sync" => Ok(SetupActionParams::CapSync { platform: None }),
+                _ => Ok(SetupActionParams::None),
+            };
+        }
+    };
+
+    match action {
+        "cap_init" => Ok(SetupActionParams::CapInit {
+            app_id: required_string(params, "app_id")?.to_string(),
+            app_name: required_string(params, "app_name")?.to_string(),
+            web_dir: required_string(params, "web_dir")?.to_string(),
+        }),
+        "cap_sync" => {
+            let platform = optional_string(params, "platform")?
+                .map(parse_capacitor_platform)
+                .transpose()?;
+            Ok(SetupActionParams::CapSync { platform })
+        }
+        "install_capacitor_dependencies" | "cap_add_ios" | "cap_add_android"
+            if params.is_empty() =>
+        {
+            Ok(SetupActionParams::None)
+        }
+        "install_capacitor_dependencies" | "cap_add_ios" | "cap_add_android" => Err(format!(
+            "setup_profile_run refused: action `{action}` does not accept params"
+        )),
+        _ => Ok(SetupActionParams::None),
+    }
+}
+
+fn parse_capacitor_platform(value: &str) -> Result<CapacitorPlatform, String> {
+    match value {
+        "ios" => Ok(CapacitorPlatform::Ios),
+        "android" => Ok(CapacitorPlatform::Android),
+        "all" => Ok(CapacitorPlatform::All),
+        _ => Err(format!(
+            "setup_profile_run refused: unsupported cap_sync platform `{value}`"
+        )),
+    }
 }
 
 fn call_git_commit_exact(
@@ -2169,6 +2326,15 @@ fn executable_available(program: &str) -> Value {
             "error": error.to_string()
         }),
     }
+}
+
+fn executable_is_available(program: &str) -> bool {
+    std::process::Command::new(program)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn success_response(id: Value, result: Value) -> String {

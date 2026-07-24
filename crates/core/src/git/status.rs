@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -7,46 +8,45 @@ pub fn status_summary(repo_root: &Path) -> Result<String, ContextPatchError> {
     status_summary_for_path(repo_root, None)
 }
 
+pub fn status_short(repo_root: &Path) -> Result<String, ContextPatchError> {
+    let root = canonical_repo_root(repo_root)?;
+    let output = git_output(
+        &root,
+        &["status", "--short", "--untracked-files=all"],
+        "git status --short",
+    )?;
+    String::from_utf8(output.stdout).map_err(|error| {
+        ContextPatchError::new(format!("git status output was not valid UTF-8: {error}"))
+    })
+}
+
+pub fn dirty_paths(repo_root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
+    let root = canonical_repo_root(repo_root)?;
+    let output = git_output(
+        &root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        "git status",
+    )?;
+    parse_porcelain_paths(&output.stdout, "git status")
+}
+
 pub fn status_summary_for_path(
     repo_root: &Path,
     path: Option<&Path>,
 ) -> Result<String, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
+    let root = canonical_repo_root(repo_root)?;
     let scope = path
         .map(|path| guarded_relative_path(&root, path))
         .transpose()?;
 
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(&root)
-        .arg("status")
-        .arg("--porcelain=v1")
-        .arg("--untracked-files=all");
-
+    let mut args = vec!["status", "--porcelain=v1", "--untracked-files=all"];
+    let scope_string;
     if let Some(scope) = &scope {
-        command.arg("--").arg(scope);
+        scope_string = scope.to_string_lossy().into_owned();
+        args.push("--");
+        args.push(&scope_string);
     }
-
-    let output = command.output().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to run git status for {}: {error}",
-            root.display()
-        ))
-    })?;
-
-    if !output.status.success() {
-        return Err(ContextPatchError::new(format!(
-            "git status failed for {}: {}",
-            root.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
+    let output = git_output(&root, &args, "git status")?;
 
     let stdout = String::from_utf8(output.stdout).map_err(|error| {
         ContextPatchError::new(format!("git status output was not valid UTF-8: {error}"))
@@ -68,6 +68,69 @@ pub fn status_summary_for_path(
         "repository has uncommitted changes{scope_label}:\n{}",
         changes.join("\n")
     )))
+}
+
+fn canonical_repo_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+    repo_root.canonicalize().map_err(|error| {
+        ContextPatchError::new(format!(
+            "failed to resolve repository root {}: {error}",
+            repo_root.display()
+        ))
+    })
+}
+
+fn git_output(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+) -> Result<std::process::Output, ContextPatchError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_PAGER", "cat")
+        .env("NO_COLOR", "1")
+        .output()
+        .map_err(|error| {
+            ContextPatchError::new(format!(
+                "failed to run {label} for {}: {error}",
+                root.display()
+            ))
+        })?;
+
+    if !output.status.success() {
+        return Err(ContextPatchError::new(format!(
+            "{label} failed for {}: {}",
+            root.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    Ok(output)
+}
+
+fn parse_porcelain_paths(bytes: &[u8], label: &str) -> Result<BTreeSet<String>, ContextPatchError> {
+    let mut paths = BTreeSet::new();
+    let mut entries = bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
+    while let Some(entry) = entries.next() {
+        if entry.len() < 4 || entry[2] != b' ' {
+            return Err(ContextPatchError::new(format!(
+                "unexpected {label} porcelain entry"
+            )));
+        }
+        if matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C') {
+            return Err(ContextPatchError::new(
+                "rename/copy status entries require a dedicated tracked-move workflow",
+            ));
+        }
+        let path = std::str::from_utf8(&entry[3..]).map_err(|error| {
+            ContextPatchError::new(format!("{label} path is not UTF-8: {error}"))
+        })?;
+        paths.insert(path.to_string());
+    }
+    Ok(paths)
 }
 
 fn guarded_relative_path(root: &Path, path: &Path) -> Result<PathBuf, ContextPatchError> {
@@ -130,7 +193,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{status_summary, status_summary_for_path};
+    use super::{dirty_paths, status_short, status_summary, status_summary_for_path};
 
     #[test]
     fn returns_clean_summary_for_clean_repository() {
@@ -183,6 +246,29 @@ mod tests {
         let error = status_summary_for_path(&root, Some(&outside)).unwrap_err();
 
         assert!(error.to_string().contains("outside repository root"));
+    }
+
+    #[test]
+    fn returns_short_status_and_dirty_paths() {
+        let root = git_root("returns_short_status_and_dirty_paths");
+        fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        run_git(&root, &["add", "tracked.txt"]);
+        run_git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+        fs::write(root.join("tracked.txt"), "changed\n").unwrap();
+        fs::write(root.join("new.txt"), "new\n").unwrap();
+
+        let status = status_short(&root).unwrap();
+        let paths = dirty_paths(&root).unwrap();
+
+        assert!(status.contains(" M tracked.txt"));
+        assert!(status.contains("?? new.txt"));
+        assert_eq!(
+            paths,
+            ["new.txt".to_string(), "tracked.txt".to_string()]
+                .into_iter()
+                .collect()
+        );
     }
 
     fn git_root(name: &str) -> std::path::PathBuf {
