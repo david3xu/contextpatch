@@ -344,6 +344,7 @@ Rules:
 - The profile must derive the exact planned command and expected changed-path classes.
 - The profile may select npm or pnpm from repository lockfiles, but callers still must not choose arbitrary package-manager commands.
 - The `node-capacitor-shell` dependency install action installs `@capacitor/core`, `@capacitor/ios`, and `@capacitor/android` as dependencies, and `@capacitor/cli` as a dev dependency.
+- `ios_pod_install` must refuse when the cwd has no `Podfile`; Swift Package Manager based Capacitor projects do not need CocoaPods.
 - Action params must be typed and validated by the profile.
 - The working directory must resolve inside the configured repository root.
 - Dry-run output must clearly mark the plan as an external mutator and not claim atomic contextpatch writes.
@@ -394,7 +395,7 @@ Plans or runs a typed native simulator/emulator/device action without exposing r
 
 Required inputs:
 
-- `action`: one of `ios_list_simulators`, `ios_boot_simulator`, `ios_install_app`, `ios_launch_app`, `ios_read_logs`, `android_list_devices`, `android_install_app`, `android_launch_app`, or `android_read_logcat`
+- `action`: one of `ios_list_simulators`, `ios_create_simulator`, `ios_boot_simulator`, `ios_install_app`, `ios_launch_app`, `ios_read_logs`, `android_list_devices`, `android_install_app`, `android_launch_app`, or `android_read_logcat`
 
 Optional inputs:
 
@@ -406,6 +407,7 @@ Optional inputs:
 
 Params by action:
 
+- `ios_create_simulator`: `name`, `device_type`, optional `runtime`
 - `ios_boot_simulator`, `ios_read_logs`: `device`
 - `ios_install_app`: `device`, `app_path`
 - `ios_launch_app`: `device`, `app_id`

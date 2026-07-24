@@ -509,7 +509,9 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
 fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
     let root = git_repo("stage2_setup_profile_run_plans_capacitor_shell_without_mutating");
     fs::write(root.join("package.json"), "{}\n").unwrap();
-    git(&root, &["add", "package.json"]);
+    fs::create_dir_all(root.join("ios/App")).unwrap();
+    fs::write(root.join("ios/App/Podfile"), "target 'App' do\nend\n").unwrap();
+    git(&root, &["add", "package.json", "ios/App/Podfile"]);
     git(&root, &["commit", "--quiet", "-m", "initial"]);
 
     let responses = run_server(
@@ -520,9 +522,10 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","dry_run":false}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","params":{"platform":"windows"}}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"npm","args":["install","@capacitor/core"],"timeout_secs":30}}}"#,
-            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"ios_pod_install"}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"ios_pod_install","cwd":"ios/App"}}}"#,
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"pnpm","args":["add","@capacitor/core"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"install_capacitor_dependencies","dry_run":true,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"ios_pod_install"}}}"#,
         ],
     );
 
@@ -552,6 +555,8 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
         "commands: npm install \"@capacitor/core\" \"@capacitor/ios\" \"@capacitor/android\"",
     );
     assert_text(&responses[7], "npm install --save-dev \"@capacitor/cli\"");
+    assert_eq!(responses[8]["result"]["isError"], true);
+    assert_text(&responses[8], "requires a Podfile");
     assert_eq!(
         git_stdout(&root, &["status", "--short"]),
         "",
@@ -635,6 +640,7 @@ fn stage2_native_device_run_plans_device_actions_and_requires_confirmation() {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"android_read_logcat","params":{"serial":"emulator-5554","lines":50},"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_boot_simulator","params":{"device":"booted"},"dry_run":false,"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"android_install_app","params":{"apk_path":"../app.apk"},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_create_simulator","params":{"name":"ContextPatch iPhone","device_type":"iPhone 16","runtime":"iOS 26.4"},"timeout_secs":30}}}"#,
         ],
     );
 
@@ -652,6 +658,10 @@ fn stage2_native_device_run_plans_device_actions_and_requires_confirmation() {
     assert_text(&responses[2], "requires confirm");
     assert_eq!(responses[3]["result"]["isError"], true);
     assert_text(&responses[3], "repository-relative path");
+    assert_text(
+        &responses[4],
+        "command: xcrun simctl create \"ContextPatch iPhone\" \"iPhone 16\" \"iOS 26.4\"",
+    );
 }
 
 #[test]

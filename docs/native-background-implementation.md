@@ -299,7 +299,7 @@ Guardrails:
 
 ### Later profiles or policy additions
 
-- `pod install`
+- `pod install` for CocoaPods projects with a `Podfile`; skip for Swift Package Manager based Capacitor projects
 - `xcodebuild` build/test invocations
 - `xcrun simctl ...`
 - `./gradlew` or `gradle` build/test invocations
@@ -309,7 +309,7 @@ Guardrails:
 
 Guardrails:
 
-- `pod install` is setup/mutation, not validation; require clean worktree and report changed files.
+- `pod install` is setup/mutation, not validation; require a `Podfile`, clean worktree, and changed-file reporting.
 - `xcodebuild`, `gradle`, `swift`, and `kotlinc` can be treated as build/test validation when args are restricted to build/test tasks.
 - `xcrun` should be limited to `simctl` subcommands needed for simulator boot/install/launch.
 - `adb` should be limited to device/emulator inspection, install, launch, and bounded logcat.
@@ -333,7 +333,7 @@ Recommended next surfaces:
 
 | Capability | Purpose | Programs covered | Public shape |
 | --- | --- | --- | --- |
-| Extend `setup_profile_run` | Native dependency setup that may mutate repo files | `pod install`, narrowly scoped Gradle sync if needed | Profile/action such as `ios_pod_install`; clean-worktree plus confirmation |
+| Extend `setup_profile_run` | Native dependency setup that may mutate repo files | `pod install` when a `Podfile` exists, narrowly scoped Gradle sync if needed | Profile/action such as `ios_pod_install`; clean-worktree plus confirmation |
 | Add `native_build_run` | Typed native build/test validation | `xcodebuild`, `./gradlew`, optionally `swift`/`kotlinc` later | Platform/action such as `ios_build`, `ios_test`, `android_assemble_debug`, `android_unit_test` |
 | Add `native_device_run` | Bounded simulator/emulator/device smoke operations | `xcrun simctl`, `adb` | Platform/action such as `list_devices`, `boot_simulator`, `install_app`, `launch_app`, `read_logs` |
 
@@ -345,6 +345,7 @@ Add native setup actions only when they are repository setup mutators:
 
 - `ios_pod_install`
   - command plan: `pod install`
+  - refuse when cwd has no `Podfile`; Swift Package Manager based Capacitor projects do not need CocoaPods
   - allowed cwd: an iOS project directory under the repository, usually `ios/App`
   - mutation policy: clean worktree and `confirm: "run setup profile"`
   - expected changed-path classes: `ios_project`, CocoaPods lockfiles, workspace/project metadata
@@ -400,6 +401,7 @@ Initial action set:
 
 - iOS simulator:
   - `ios_list_simulators`
+  - `ios_create_simulator`
   - `ios_boot_simulator`
   - `ios_install_app`
   - `ios_launch_app`

@@ -15,6 +15,11 @@ pub enum NativeDeviceParams {
     IosDevice {
         device: String,
     },
+    IosCreate {
+        name: String,
+        device_type: String,
+        runtime: Option<String>,
+    },
     IosInstall {
         device: String,
         app_path: String,
@@ -184,6 +189,29 @@ fn plan_native_device(
                 vec!["simctl".to_string(), "boot".to_string(), device],
                 true,
             )
+        }
+        "ios_create_simulator" => {
+            let NativeDeviceParams::IosCreate {
+                name,
+                device_type,
+                runtime,
+            } = params
+            else {
+                return Err(required(action, "name and device_type"));
+            };
+            validate_simctl_label("name", &name)?;
+            validate_simctl_label("device_type", &device_type)?;
+            let mut args = vec![
+                "simctl".to_string(),
+                "create".to_string(),
+                name,
+                device_type,
+            ];
+            if let Some(runtime) = runtime {
+                validate_simctl_label("runtime", &runtime)?;
+                args.push(runtime);
+            }
+            ("xcrun", args, true)
         }
         "ios_install_app" => {
             let NativeDeviceParams::IosInstall { device, app_path } = params else {
@@ -358,6 +386,19 @@ fn validate_device_id(field: &str, value: &str) -> Result<(), ContextPatchError>
             "native_device_run refused: {field} contains unsupported characters"
         )));
     }
+
+    Ok(())
+}
+
+fn validate_simctl_label(field: &str, value: &str) -> Result<(), ContextPatchError> {
+    validate_non_empty_single_line("native_device_run", field, value, 160)?;
+    if !value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.' | ':' | '(' | ')')
+    }) {
+        return Err(ContextPatchError::new(format!(
+            "native_device_run refused: {field} contains unsupported characters"
+        )));
+    }
     Ok(())
 }
 
@@ -413,6 +454,32 @@ mod tests {
             ["simctl", "launch", "booted", "com.example.app"]
         );
         assert!(ios.plan.changes_device_state);
+
+        let create = native_device_run(
+            &root,
+            None,
+            "ios_create_simulator",
+            NativeDeviceParams::IosCreate {
+                name: "ContextPatch iPhone".to_string(),
+                device_type: "iPhone 16".to_string(),
+                runtime: Some("iOS 26.4".to_string()),
+            },
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            create.plan.args,
+            [
+                "simctl",
+                "create",
+                "ContextPatch iPhone",
+                "iPhone 16",
+                "iOS 26.4"
+            ]
+        );
+        assert!(create.plan.changes_device_state);
 
         let android = native_device_run(
             &root,

@@ -433,7 +433,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "Native device action such as ios_list_simulators, ios_boot_simulator, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat."
+                        "description": "Native device action such as ios_list_simulators, ios_create_simulator, ios_boot_simulator, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat."
                     },
                     "params": {
                         "type": "object",
@@ -763,6 +763,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                     ],
                     "external_mutator": true,
                     "caller_supplies_raw_command": false,
+                    "ios_pod_install_requirement": "requires Podfile in cwd; Swift Package Manager based Capacitor projects do not need this action",
                     "supported_package_managers": ["npm", "pnpm"],
                     "package_manager_selection": "uses pnpm when pnpm-lock.yaml exists in cwd; otherwise npm",
                     "dependency_layout": {
@@ -852,6 +853,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "mode": "typed_native_device_actions",
             "actions": [
                 "ios_list_simulators",
+                "ios_create_simulator",
                 "ios_boot_simulator",
                 "ios_install_app",
                 "ios_launch_app",
@@ -871,6 +873,19 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                         "params": {
                             "device": "booted",
                             "app_id": "com.example.app"
+                        },
+                        "dry_run": true
+                    }
+                },
+                {
+                    "tool": "native_device_run",
+                    "description": "Create a named iOS simulator when runtimes exist but no devices are configured.",
+                    "arguments": {
+                        "action": "ios_create_simulator",
+                        "params": {
+                            "name": "ContextPatch iPhone",
+                            "device_type": "iPhone 16",
+                            "runtime": "iOS 26.4"
                         },
                         "dry_run": true
                     }
@@ -929,9 +944,11 @@ fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
         "setup_profiles": {
             "node-capacitor-shell": {
                 "available": executable_is_available("npm") || executable_is_available("pnpm"),
-                "required_tools": {
+                "package_managers": {
                     "npm": executable_available("npm"),
-                    "pnpm": executable_available("pnpm"),
+                    "pnpm": executable_available("pnpm")
+                },
+                "optional_tools": {
                     "pod": executable_available("pod")
                 },
                 "mutation_enabled": true
@@ -941,6 +958,7 @@ fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
             "available": executable_is_available("xcodebuild") || gradlew_available(&root),
             "required_tools": {
                 "xcodebuild": executable_available("xcodebuild"),
+                "xcode_select": xcode_select_available(),
                 "gradlew": gradlew_available(&root),
                 "swift": executable_available("swift"),
                 "kotlinc": executable_available("kotlinc")
@@ -1303,6 +1321,11 @@ fn native_device_params(action: &str, value: Option<&Value>) -> Result<NativeDev
         }
         "ios_boot_simulator" | "ios_read_logs" => Ok(NativeDeviceParams::IosDevice {
             device: required_string(params, "device")?.to_string(),
+        }),
+        "ios_create_simulator" => Ok(NativeDeviceParams::IosCreate {
+            name: required_string(params, "name")?.to_string(),
+            device_type: required_string(params, "device_type")?.to_string(),
+            runtime: optional_string(params, "runtime")?.map(ToString::to_string),
         }),
         "ios_install_app" => Ok(NativeDeviceParams::IosInstall {
             device: required_string(params, "device")?.to_string(),
@@ -2672,6 +2695,23 @@ fn executable_available(program: &str) -> Value {
         Ok(output) => json!({
             "available": output.status.success(),
             "exit_code": output.status.code().unwrap_or(-1)
+        }),
+        Err(error) => json!({
+            "available": false,
+            "error": error.to_string()
+        }),
+    }
+}
+
+fn xcode_select_available() -> Value {
+    let output = std::process::Command::new("xcode-select")
+        .arg("-p")
+        .output();
+    match output {
+        Ok(output) => json!({
+            "available": output.status.success(),
+            "exit_code": output.status.code().unwrap_or(-1),
+            "path": String::from_utf8_lossy(&output.stdout).trim()
         }),
         Err(error) => json!({
             "available": false,

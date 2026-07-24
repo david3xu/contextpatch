@@ -98,6 +98,11 @@ pub(crate) fn plan(
         }
         "ios_pod_install" => {
             require_no_params(action, params)?;
+            if !cwd.join("Podfile").is_file() {
+                return Err(ContextPatchError::new(
+                    "setup_profile_run refused: ios_pod_install requires a Podfile in cwd; Swift Package Manager based Capacitor projects do not need CocoaPods",
+                ));
+            }
             Ok(CommandPlan::new(
                 "pod",
                 vec!["install".to_string()],

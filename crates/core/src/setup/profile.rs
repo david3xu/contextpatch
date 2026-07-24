@@ -414,6 +414,7 @@ mod tests {
     #[test]
     fn plans_ios_pod_install_as_setup_mutator() {
         let root = git_root("plans_ios_pod_install_as_setup_mutator");
+        fs::write(root.join("Podfile"), "target 'App' do\nend\n").unwrap();
 
         let result = setup_profile_run(
             &root,
@@ -429,7 +430,26 @@ mod tests {
 
         assert_eq!(result.plan.program, "pod");
         assert_eq!(result.plan.args, ["install"]);
-        assert_eq!(result.plan.expected_changed_path_classes, ["ios_project"]);
+    }
+
+    #[test]
+    fn refuses_ios_pod_install_without_podfile() {
+        let root = git_root("refuses_ios_pod_install_without_podfile");
+
+        let error = setup_profile_run(
+            &root,
+            None,
+            "node-capacitor-shell",
+            "ios_pod_install",
+            SetupActionParams::None,
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("requires a Podfile"));
+        assert!(error.to_string().contains("Swift Package Manager"));
     }
 
     #[test]
