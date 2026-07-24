@@ -487,6 +487,12 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"node-capacitor-shell\"");
     assert_text(&responses[0], "\"native_build\"");
     assert_text(&responses[0], "\"native_device\"");
+    assert_text(&responses[0], "\"examples\"");
+    assert_text(&responses[0], "\"tool\": \"setup_profile_run\"");
+    assert_text(&responses[0], "\"tool\": \"native_build_run\"");
+    assert_text(&responses[0], "\"tool\": \"native_device_run\"");
+    assert_text(&responses[0], "\"action\": \"ios_build\"");
+    assert_text(&responses[0], "\"action\": \"android_read_logcat\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
     assert_text(&responses[1], "\"setup_profiles\"");
     assert_text(&responses[1], "\"native_build\"");

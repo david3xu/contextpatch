@@ -153,6 +153,8 @@ Use `native_build_run` for native build/test validation. It supports typed iOS a
 
 Use `native_device_run` for bounded simulator/emulator/device smoke actions. It supports listing, boot/install/launch/log actions for iOS simulators and listing/install/launch/logcat actions for Android devices. Device-state-changing execution requires `confirm: "run native device"`; raw `xcrun` and `adb` access remains unsupported.
 
+The `capability_manifest` includes compact examples for setup, native build, and native device actions. Claude Desktop should prefer those examples over guessing raw command syntax.
+
 Use `git_commit_exact` for the narrow local-commit case that previously required leaving contextpatch entirely: the tool validates that `paths` exactly equals the repository's full dirty-path set, defaults to dry-run, requires `confirm: "commit exact paths"` when `dry_run` is false, stages only those paths, creates one local commit, and reports the commit hash. It still does not run fetch or push.
 
 Use `git_remote_check` and `git_push_exact` for the separate remote-publishing boundary. `git_remote_check` fetches one explicit remote branch and reports whether the remote is ahead without source changes. `git_push_exact` requires `confirm: "push exact commit"`, a clean worktree, current branch equal to the requested branch, `expected_head` equal to current `HEAD`, and no remote-ahead divergence after fetch; it pushes only `HEAD:refs/heads/<branch>` and never force-pushes.

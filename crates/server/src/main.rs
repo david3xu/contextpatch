@@ -767,6 +767,32 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                     "required_confirm_for_mutation": "run setup profile"
                 }
             },
+            "examples": [
+                {
+                    "tool": "setup_profile_run",
+                    "description": "Initialize Capacitor shell files without raw npx/cap commands.",
+                    "arguments": {
+                        "profile": "node-capacitor-shell",
+                        "action": "cap_init",
+                        "params": {
+                            "app_id": "com.example.app",
+                            "app_name": "Example",
+                            "web_dir": "dist"
+                        },
+                        "dry_run": true
+                    }
+                },
+                {
+                    "tool": "setup_profile_run",
+                    "description": "Install iOS CocoaPods dependencies without raw pod access.",
+                    "arguments": {
+                        "profile": "node-capacitor-shell",
+                        "action": "ios_pod_install",
+                        "cwd": "ios/App",
+                        "dry_run": true
+                    }
+                }
+            ],
             "guards": [
                 "profile derives exact command plan",
                 "typed action parameters only",
@@ -784,6 +810,29 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "android_assemble_debug": { "program": "./gradlew", "caller_supplies_raw_command": false },
                 "android_unit_test": { "program": "./gradlew", "caller_supplies_raw_command": false }
             },
+            "examples": [
+                {
+                    "tool": "native_build_run",
+                    "description": "Plan an iOS simulator build.",
+                    "arguments": {
+                        "action": "ios_build",
+                        "params": {
+                            "workspace": "ios/App/App.xcworkspace",
+                            "scheme": "App"
+                        },
+                        "dry_run": true
+                    }
+                },
+                {
+                    "tool": "native_build_run",
+                    "description": "Plan an Android debug build using the repository Gradle wrapper.",
+                    "arguments": {
+                        "action": "android_assemble_debug",
+                        "params": {},
+                        "dry_run": true
+                    }
+                }
+            ],
             "guards": [
                 "typed action parameters only",
                 "repo-root-confined cwd",
@@ -806,6 +855,32 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "android_read_logcat"
             ],
             "required_confirm_for_device_state": "run native device",
+            "examples": [
+                {
+                    "tool": "native_device_run",
+                    "description": "Plan an iOS app launch on the booted simulator.",
+                    "arguments": {
+                        "action": "ios_launch_app",
+                        "params": {
+                            "device": "booted",
+                            "app_id": "com.example.app"
+                        },
+                        "dry_run": true
+                    }
+                },
+                {
+                    "tool": "native_device_run",
+                    "description": "Read recent Android logcat output without changing device state.",
+                    "arguments": {
+                        "action": "android_read_logcat",
+                        "params": {
+                            "serial": "emulator-5554",
+                            "lines": 200
+                        },
+                        "dry_run": true
+                    }
+                }
+            ],
             "guards": [
                 "typed action parameters only",
                 "no arbitrary xcrun or adb",

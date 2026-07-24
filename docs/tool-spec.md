@@ -50,6 +50,7 @@ Rules:
 - Must report `git_branch_prepare` honestly when available and distinguish it from broad checkout/rebase/reset authority.
 - Must report `git_merge_readiness` honestly when available and distinguish it from generic merge authority.
 - Must report setup profiles honestly when available and distinguish declarative profile planning from generic package-manager or shell authority.
+- Must include compact examples for typed setup, native build, and native device actions so clients can choose correct params without raw command knowledge.
 - Must not mutate repository state.
 
 ### `preflight_health`
