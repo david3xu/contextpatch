@@ -151,7 +151,7 @@ The caller should not provide `program` or raw `args`. Core should derive an exa
 
 Typed parameter implications for the first profile:
 
-- `install_capacitor_dependencies`: no caller-supplied package list at first; the profile owns the exact package list and selects npm or pnpm from the project lockfile.
+- `install_capacitor_dependencies`: no caller-supplied package list at first; the profile owns the exact package list, selects npm or pnpm from the project lockfile, and keeps `@capacitor/cli` in dev dependencies.
 - `cap_init`: require explicit `app_id`, `app_name`, and `web_dir`; do not hardcode downstream-project placeholders in contextpatch.
 - `cap_add_ios`: no untyped args.
 - `cap_add_android`: no untyped args.
@@ -281,7 +281,7 @@ This profile is justified by the immediate real project need, but should be repr
 
 Candidate commands:
 
-- `npm install @capacitor/core @capacitor/cli @capacitor/ios @capacitor/android`, or `pnpm add ...` when `pnpm-lock.yaml` is present
+- `npm install @capacitor/core @capacitor/ios @capacitor/android` plus `npm install --save-dev @capacitor/cli`, or equivalent `pnpm add ...` commands when `pnpm-lock.yaml` is present
 - `npm exec -- cap init ...`, or `pnpm exec cap init ...` when `pnpm-lock.yaml` is present
 - `npm exec -- cap add ios`, or `pnpm exec cap add ios`
 - `npm exec -- cap add android`, or `pnpm exec cap add android`

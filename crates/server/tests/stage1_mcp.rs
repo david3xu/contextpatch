@@ -522,6 +522,7 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"npm","args":["install","@capacitor/core"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"ios_pod_install"}}}"#,
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"pnpm","args":["add","@capacitor/core"],"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"install_capacitor_dependencies","dry_run":true,"timeout_secs":30}}}"#,
         ],
     );
 
@@ -546,6 +547,11 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
     assert_text(&responses[5], "command: pod install");
     assert_eq!(responses[6]["result"]["isError"], true);
     assert_text(&responses[6], "not allowlisted");
+    assert_text(
+        &responses[7],
+        "commands: npm install \"@capacitor/core\" \"@capacitor/ios\" \"@capacitor/android\"",
+    );
+    assert_text(&responses[7], "npm install --save-dev \"@capacitor/cli\"");
     assert_eq!(
         git_stdout(&root, &["status", "--short"]),
         "",
@@ -573,8 +579,9 @@ fn stage2_setup_profile_run_uses_pnpm_for_pnpm_projects_without_raw_allowlist() 
 
     assert_text(
         &responses[0],
-        "command: pnpm add \"@capacitor/core\" \"@capacitor/cli\" \"@capacitor/ios\" \"@capacitor/android\"",
+        "commands: pnpm add \"@capacitor/core\" \"@capacitor/ios\" \"@capacitor/android\"",
     );
+    assert_text(&responses[0], "pnpm add --save-dev \"@capacitor/cli\"");
     assert_text(&responses[1], "command: pnpm exec cap sync ios");
     assert_eq!(responses[2]["result"]["isError"], true);
     assert_text(&responses[2], "not allowlisted");

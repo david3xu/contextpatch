@@ -74,7 +74,9 @@ pub fn setup_profile_run(
             )));
         }
     };
-    validate_common_command_shape(&plan.program, &plan.args)?;
+    for command in &plan.commands {
+        validate_common_command_shape(&command.program, &command.args)?;
+    }
 
     let execution = if dry_run {
         None
@@ -87,13 +89,19 @@ pub fn setup_profile_run(
             )));
         }
         let status_before = status_short(&root)?;
-        let output = run_no_shell_command(
-            &cwd,
-            &plan.program,
-            &plan.args,
-            timeout,
-            "setup_profile_run",
-        )?;
+        let outputs = plan
+            .commands
+            .iter()
+            .map(|command| {
+                run_no_shell_command(
+                    &cwd,
+                    &command.program,
+                    &command.args,
+                    timeout,
+                    "setup_profile_run",
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let status_after = status_short(&root)?;
         let changed_paths = dirty_paths(&root)?.into_iter().collect::<Vec<_>>();
         let unexpected =
@@ -105,7 +113,10 @@ pub fn setup_profile_run(
                 plan.expected_changed_path_classes.join("\n")
             )));
         }
-        if output.timed_out || output.exit_code != 0 {
+        if let Some(output) = outputs
+            .iter()
+            .find(|output| output.timed_out || output.exit_code != 0)
+        {
             return Err(ContextPatchError::new(format!(
                 "setup_profile_run external command failed after execution\nexit_code: {}\ntimed_out: {}\nchanged_paths:\n{}\nstdout:\n{}\nstderr:\n{}",
                 output.exit_code,
@@ -115,12 +126,27 @@ pub fn setup_profile_run(
                 empty_label(&output.stderr)
             )));
         }
+        let exit_code = outputs.last().map(|output| output.exit_code).unwrap_or(0);
+        let timed_out = outputs.iter().any(|output| output.timed_out);
+        let duration_ms = outputs.iter().map(|output| output.duration_ms).sum();
+        let stdout = outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| format!("command {} stdout:\n{}", index + 1, output.stdout))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let stderr = outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| format!("command {} stderr:\n{}", index + 1, output.stderr))
+            .collect::<Vec<_>>()
+            .join("\n");
         Some(SetupExecution {
-            exit_code: output.exit_code,
-            timed_out: output.timed_out,
-            duration_ms: output.duration_ms,
-            stdout: output.stdout,
-            stderr: output.stderr,
+            exit_code,
+            timed_out,
+            duration_ms,
+            stdout,
+            stderr,
             status_before,
             status_after,
             changed_paths,
@@ -264,12 +290,19 @@ mod tests {
             [
                 "install",
                 "@capacitor/core",
-                "@capacitor/cli",
                 "@capacitor/ios",
                 "@capacitor/android"
             ]
         );
+        assert_eq!(
+            result.plan.commands[1].args,
+            ["install", "--save-dev", "@capacitor/cli"]
+        );
         assert!(result.summary().contains("external_mutator: true"));
+        assert!(result.summary().contains("commands: npm install"));
+        assert!(result
+            .summary()
+            .contains("npm install --save-dev \"@capacitor/cli\""));
     }
 
     #[test]
@@ -295,10 +328,13 @@ mod tests {
             [
                 "add",
                 "@capacitor/core",
-                "@capacitor/cli",
                 "@capacitor/ios",
                 "@capacitor/android"
             ]
+        );
+        assert_eq!(
+            install.plan.commands[1].args,
+            ["add", "--save-dev", "@capacitor/cli"]
         );
 
         let sync = setup_profile_run(

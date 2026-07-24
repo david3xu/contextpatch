@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::ContextPatchError;
-use crate::setup::plan::CommandPlan;
+use crate::setup::plan::{CommandPlan, PlannedCommand};
 use crate::setup::profile::{
     require_no_params, validate_non_empty_single_line, validate_relative_path_param,
     CapacitorPlatform, SetupActionParams,
@@ -18,14 +18,8 @@ pub(crate) fn plan(
     match action {
         "install_capacitor_dependencies" => {
             require_no_params(action, params)?;
-            Ok(CommandPlan::new(
-                package_manager.program(),
-                package_manager.add_args(&[
-                    "@capacitor/core",
-                    "@capacitor/cli",
-                    "@capacitor/ios",
-                    "@capacitor/android",
-                ]),
+            Ok(CommandPlan::sequence(
+                package_manager.install_capacitor_dependency_commands(),
                 vec![
                     "package_manifest".to_string(),
                     "package_lock".to_string(),
@@ -148,14 +142,17 @@ impl PackageManager {
         }
     }
 
-    fn add_args(self, packages: &[&str]) -> Vec<String> {
+    fn add_args(self, packages: &[&str], save_dev: bool) -> Vec<String> {
         let command = match self {
             Self::Npm => "install",
             Self::Pnpm => "add",
         };
-        std::iter::once(command.to_string())
-            .chain(packages.iter().map(|package| package.to_string()))
-            .collect()
+        let mut args = vec![command.to_string()];
+        if save_dev {
+            args.push("--save-dev".to_string());
+        }
+        args.extend(packages.iter().map(|package| package.to_string()));
+        args
     }
 
     fn cap_exec_args(self) -> Vec<String> {
@@ -163,6 +160,15 @@ impl PackageManager {
             Self::Npm => vec!["exec".to_string(), "--".to_string(), "cap".to_string()],
             Self::Pnpm => vec!["exec".to_string(), "cap".to_string()],
         }
+    }
+
+    fn install_capacitor_dependency_commands(self) -> Vec<PlannedCommand> {
+        let runtime_packages = ["@capacitor/core", "@capacitor/ios", "@capacitor/android"];
+        let dev_packages = ["@capacitor/cli"];
+        vec![
+            PlannedCommand::new(self.program(), self.add_args(&runtime_packages, false)),
+            PlannedCommand::new(self.program(), self.add_args(&dev_packages, true)),
+        ]
     }
 }
 

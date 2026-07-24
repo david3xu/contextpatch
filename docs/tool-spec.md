@@ -343,6 +343,7 @@ Rules:
 - The caller must not supply raw `program` or `args`.
 - The profile must derive the exact planned command and expected changed-path classes.
 - The profile may select npm or pnpm from repository lockfiles, but callers still must not choose arbitrary package-manager commands.
+- The `node-capacitor-shell` dependency install action installs `@capacitor/core`, `@capacitor/ios`, and `@capacitor/android` as dependencies, and `@capacitor/cli` as a dev dependency.
 - Action params must be typed and validated by the profile.
 - The working directory must resolve inside the configured repository root.
 - Dry-run output must clearly mark the plan as an external mutator and not claim atomic contextpatch writes.

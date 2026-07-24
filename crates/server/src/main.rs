@@ -765,6 +765,10 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                     "caller_supplies_raw_command": false,
                     "supported_package_managers": ["npm", "pnpm"],
                     "package_manager_selection": "uses pnpm when pnpm-lock.yaml exists in cwd; otherwise npm",
+                    "dependency_layout": {
+                        "dependencies": ["@capacitor/core", "@capacitor/ios", "@capacitor/android"],
+                        "dev_dependencies": ["@capacitor/cli"]
+                    },
                     "mutation_enabled": true,
                     "required_confirm_for_mutation": "run setup profile"
                 }

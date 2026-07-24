@@ -3,9 +3,29 @@ use std::path::PathBuf;
 use crate::process::runner::display_command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedCommand {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+impl PlannedCommand {
+    pub(crate) fn new(program: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            program: program.into(),
+            args,
+        }
+    }
+
+    pub fn display(&self) -> String {
+        display_command(&self.program, &self.args)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPlan {
     pub program: String,
     pub args: Vec<String>,
+    pub commands: Vec<PlannedCommand>,
     pub mutates_repo: bool,
     pub external_mutator: bool,
     pub expected_changed_path_classes: Vec<String>,
@@ -17,9 +37,23 @@ impl CommandPlan {
         args: Vec<String>,
         expected_changed_path_classes: Vec<String>,
     ) -> Self {
+        let command = PlannedCommand::new(program, args);
+        Self::sequence(vec![command], expected_changed_path_classes)
+    }
+
+    pub(crate) fn sequence(
+        commands: Vec<PlannedCommand>,
+        expected_changed_path_classes: Vec<String>,
+    ) -> Self {
+        assert!(
+            !commands.is_empty(),
+            "setup command plan must contain at least one command"
+        );
+        let first = commands[0].clone();
         Self {
-            program: program.into(),
-            args,
+            program: first.program,
+            args: first.args,
+            commands,
             mutates_repo: true,
             external_mutator: true,
             expected_changed_path_classes,
@@ -27,7 +61,11 @@ impl CommandPlan {
     }
 
     pub fn display(&self) -> String {
-        display_command(&self.program, &self.args)
+        self.commands
+            .iter()
+            .map(PlannedCommand::display)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -44,13 +82,19 @@ pub struct SetupProfileResult {
 
 impl SetupProfileResult {
     pub fn summary(&self) -> String {
+        let command_label = if self.plan.commands.len() == 1 {
+            "command"
+        } else {
+            "commands"
+        };
         let mut summary = format!(
-            "profile: {}\naction: {}\ndry_run: {}\nexternal_mutator: {}\nmutates_repo: {}\ncommand: {}\ncwd: {}\nexpected_changed_path_classes:\n{}\nrequired_confirm_for_mutation: {:?}",
+            "profile: {}\naction: {}\ndry_run: {}\nexternal_mutator: {}\nmutates_repo: {}\n{}: {}\ncwd: {}\nexpected_changed_path_classes:\n{}\nrequired_confirm_for_mutation: {:?}",
             self.profile,
             self.action,
             self.dry_run,
             self.plan.external_mutator,
             self.plan.mutates_repo,
+            command_label,
             self.plan.display(),
             self.cwd.display(),
             self.plan.expected_changed_path_classes.join("\n"),
