@@ -425,7 +425,7 @@ fn tool_definitions() -> Value {
                     },
                     "params": {
                         "type": "object",
-                        "description": "Typed action parameters. iOS uses workspace, scheme, optional configuration/sdk/destination. Android accepts optional gradlew path."
+                        "description": "Typed action parameters. iOS uses workspace, scheme, optional configuration/sdk/destination/derived_data_path. Android accepts optional gradlew path."
                     },
                     "cwd": {
                         "type": "string",
@@ -848,8 +848,16 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
         "native_build": {
             "mode": "typed_native_build_actions",
             "actions": {
-                "ios_build": { "program": "xcodebuild", "caller_supplies_raw_command": false },
-                "ios_test": { "program": "xcodebuild", "caller_supplies_raw_command": false },
+                "ios_build": {
+                    "program": "xcodebuild",
+                    "caller_supplies_raw_command": false,
+                    "supports_repo_relative_derived_data_path": true
+                },
+                "ios_test": {
+                    "program": "xcodebuild",
+                    "caller_supplies_raw_command": false,
+                    "supports_repo_relative_derived_data_path": true
+                },
                 "android_assemble_debug": { "program": "./gradlew", "caller_supplies_raw_command": false },
                 "android_unit_test": { "program": "./gradlew", "caller_supplies_raw_command": false }
             },
@@ -861,7 +869,8 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                         "action": "ios_build",
                         "params": {
                             "workspace": "ios/App/App.xcworkspace",
-                            "scheme": "App"
+                            "scheme": "App",
+                            "derived_data_path": ".contextpatch-derived-data"
                         },
                         "dry_run": true
                     }
@@ -901,6 +910,18 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             ],
             "required_confirm_for_device_state": "run native device",
             "examples": [
+                {
+                    "tool": "native_device_run",
+                    "description": "Plan an iOS app install from repo-relative Xcode DerivedData output.",
+                    "arguments": {
+                        "action": "ios_install_app",
+                        "params": {
+                            "device": "booted",
+                            "app_path": ".contextpatch-derived-data/Build/Products/Debug-iphonesimulator/App.app"
+                        },
+                        "dry_run": true
+                    }
+                },
                 {
                     "tool": "native_device_run",
                     "description": "Plan an iOS app launch on the booted simulator.",
@@ -1327,6 +1348,8 @@ fn native_build_params(action: &str, value: Option<&Value>) -> Result<NativeBuil
             configuration: optional_string(params, "configuration")?.map(ToString::to_string),
             sdk: optional_string(params, "sdk")?.map(ToString::to_string),
             destination: optional_string(params, "destination")?.map(ToString::to_string),
+            derived_data_path: optional_string(params, "derived_data_path")?
+                .map(ToString::to_string),
         }),
         "android_assemble_debug" | "android_unit_test" => Ok(NativeBuildParams::Android {
             gradlew: optional_string(params, "gradlew")?.map(ToString::to_string),

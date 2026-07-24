@@ -16,6 +16,7 @@ pub enum NativeBuildParams {
         configuration: Option<String>,
         sdk: Option<String>,
         destination: Option<String>,
+        derived_data_path: Option<String>,
     },
     Android {
         gradlew: Option<String>,
@@ -172,6 +173,7 @@ fn plan_ios(action: &str, params: NativeBuildParams) -> Result<NativeBuildPlan, 
         configuration,
         sdk,
         destination,
+        derived_data_path,
     } = params
     else {
         return Err(ContextPatchError::new(format!(
@@ -207,6 +209,11 @@ fn plan_ios(action: &str, params: NativeBuildParams) -> Result<NativeBuildPlan, 
         validate_non_empty_single_line("native_build_run", "destination", &destination, 240)?;
         args.push("-destination".to_string());
         args.push(destination);
+    }
+    if let Some(derived_data_path) = derived_data_path {
+        validate_relative_path_param("native_build_run", "derived_data_path", &derived_data_path)?;
+        args.push("-derivedDataPath".to_string());
+        args.push(derived_data_path);
     }
     args.push(
         match action {
@@ -324,6 +331,7 @@ mod tests {
                 configuration: None,
                 sdk: None,
                 destination: None,
+                derived_data_path: Some(".contextpatch-derived-data".to_string()),
             },
             Some(30),
             true,
@@ -342,6 +350,8 @@ mod tests {
                 "Debug",
                 "-sdk",
                 "iphonesimulator",
+                "-derivedDataPath",
+                ".contextpatch-derived-data",
                 "build"
             ]
         );
@@ -380,6 +390,7 @@ mod tests {
                 configuration: None,
                 sdk: None,
                 destination: None,
+                derived_data_path: None,
             },
             Some(30),
             true,
@@ -397,6 +408,26 @@ mod tests {
         )
         .unwrap_err();
         assert!(unknown.to_string().contains("unknown action"));
+
+        let invalid_derived_data = native_build_run(
+            &root,
+            None,
+            "ios_build",
+            NativeBuildParams::Ios {
+                workspace: "ios/App/App.xcodeproj".to_string(),
+                scheme: "App".to_string(),
+                configuration: None,
+                sdk: None,
+                destination: None,
+                derived_data_path: Some("../DerivedData".to_string()),
+            },
+            Some(30),
+            true,
+        )
+        .unwrap_err();
+        assert!(invalid_derived_data
+            .to_string()
+            .contains("repository-relative path"));
     }
 
     fn git_root(name: &str) -> PathBuf {

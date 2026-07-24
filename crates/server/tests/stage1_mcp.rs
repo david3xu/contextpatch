@@ -620,7 +620,7 @@ fn stage2_native_build_run_plans_builds_without_raw_commands() {
     let responses = run_server(
         &root,
         &[
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"native_build_run","arguments":{"action":"ios_build","params":{"workspace":"ios/App/App.xcworkspace","scheme":"App"},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"native_build_run","arguments":{"action":"ios_build","params":{"workspace":"ios/App/App.xcworkspace","scheme":"App","derived_data_path":".contextpatch-derived-data"},"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"native_build_run","arguments":{"action":"android_assemble_debug","params":{},"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"native_build_run","arguments":{"action":"ios_build","params":{"workspace":"../App.xcworkspace","scheme":"App"},"timeout_secs":30}}}"#,
         ],
@@ -629,7 +629,7 @@ fn stage2_native_build_run_plans_builds_without_raw_commands() {
     assert_text(&responses[0], "action: ios_build");
     assert_text(
         &responses[0],
-        "command: xcodebuild -workspace \"ios/App/App.xcworkspace\" -scheme App -configuration Debug -sdk iphonesimulator build",
+        "command: xcodebuild -workspace \"ios/App/App.xcworkspace\" -scheme App -configuration Debug -sdk iphonesimulator -derivedDataPath .contextpatch-derived-data build",
     );
     assert_text(&responses[0], "repo_validation: true");
     assert_text(&responses[1], "command: ./gradlew assembleDebug");

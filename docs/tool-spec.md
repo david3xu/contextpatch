@@ -405,6 +405,7 @@ iOS params:
 - optional `configuration`, default `Debug`
 - optional `sdk`, default `iphonesimulator`
 - optional `destination`
+- optional `derived_data_path`: repository-relative Xcode DerivedData directory, useful when a later `ios_install_app` needs a repository-relative `.app` path
 
 Android params:
 
@@ -415,6 +416,7 @@ Rules:
 - The caller must not supply raw `program` or `args`.
 - Core must derive exact `xcodebuild` or Gradle wrapper command plans from typed params.
 - `preflight_health` must probe Xcode with `xcodebuild -version`, not a generic `--version` flag, and should report `xcode-select -p` so callers can diagnose missing Xcode or unaccepted-license states.
+- `derived_data_path`, when supplied, must be repository-relative and is passed as `-derivedDataPath`; use a gitignored/cache path so the source-status guard can still verify the build did not change tracked or visible source state.
 - Android Gradle wrapper execution is allowed only through this native build policy and must resolve to a file inside the repository.
 - The tool must not broaden the `run_guarded_command` validation allowlist or global executable-name validation.
 - Dry-run must not execute native tools.
@@ -448,6 +450,8 @@ Params by action:
 - `android_install_app`: optional `serial`, `apk_path`
 - `android_launch_app`: optional `serial`, `app_id`
 - `android_read_logcat`: optional `serial`, optional `lines`
+
+`ios_install_app` requires `app_path` to be repository-relative. For Xcode builds, pair this with `native_build_run`'s `derived_data_path`; for example, a build using `derived_data_path: ".contextpatch-derived-data"` can install `.contextpatch-derived-data/Build/Products/Debug-iphonesimulator/App.app`.
 
 Rules:
 

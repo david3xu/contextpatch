@@ -100,7 +100,7 @@ The profile also includes `ios_pod_install` for CocoaPods-based native dependenc
 3. `android_assemble_debug`
 4. `android_unit_test`
 
-Build actions derive exact `xcodebuild` or repo-relative Gradle wrapper plans from typed params. They default to dry-run and, when executed, compare Git source status before and after the build so generated source changes are reported as refusals instead of silent success.
+Build actions derive exact `xcodebuild` or repo-relative Gradle wrapper plans from typed params. iOS builds support a repo-relative `derived_data_path` for workflows that need a later guarded simulator install from the built `.app`; callers should choose a gitignored/cache path. Build actions default to dry-run and, when executed, compare Git source status before and after the build so generated source changes are reported as refusals instead of silent success.
 
 `native_device_run` supports:
 
