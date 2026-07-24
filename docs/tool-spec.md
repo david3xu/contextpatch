@@ -20,6 +20,8 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
 | `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
+| `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
+| `native_device_run` | External device command | Dry-run default, typed action params, device-state confirmation gate, no raw `xcrun` or `adb` commands |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
@@ -333,6 +335,7 @@ Supported `node-capacitor-shell` actions:
 - `cap_add_ios`
 - `cap_add_android`
 - `cap_sync` with optional `platform`: `ios`, `android`, or `all`
+- `ios_pod_install`
 
 Rules:
 
@@ -343,6 +346,79 @@ Rules:
 - Dry-run output must clearly mark the plan as an external mutator and not claim atomic contextpatch writes.
 - `dry_run=false` must require a clean worktree, exact confirmation, before/after status capture, changed-path reporting, and refusal for changed paths outside the profile's expected classes.
 - The tool must not broaden the `run_guarded_command` validation allowlist.
+
+### `native_build_run`
+
+Plans or runs a typed native build/test action without exposing raw native build tools.
+
+Required inputs:
+
+- `action`: one of `ios_build`, `ios_test`, `android_assemble_debug`, or `android_unit_test`
+- `params`: typed action parameters
+
+Optional inputs:
+
+- `cwd`: working directory relative to the repository root
+- `timeout_secs`: timeout from 1 to 600
+- `dry_run`: defaults to `true`
+
+iOS params:
+
+- `workspace`: repository-relative `.xcworkspace` or `.xcodeproj`
+- `scheme`
+- optional `configuration`, default `Debug`
+- optional `sdk`, default `iphonesimulator`
+- optional `destination`
+
+Android params:
+
+- optional `gradlew`: repository-relative Gradle wrapper path, default `gradlew`
+
+Rules:
+
+- The caller must not supply raw `program` or `args`.
+- Core must derive exact `xcodebuild` or Gradle wrapper command plans from typed params.
+- Android Gradle wrapper execution is allowed only through this native build policy and must resolve to a file inside the repository.
+- The tool must not broaden the `run_guarded_command` validation allowlist or global executable-name validation.
+- Dry-run must not execute native tools.
+- Executed builds must compare Git source status before and after execution and refuse if source status changes.
+- Native build output is external validator output; the tool must not claim atomic edit semantics for build products or caches.
+
+### `native_device_run`
+
+Plans or runs a typed native simulator/emulator/device action without exposing raw device tools.
+
+Required inputs:
+
+- `action`: one of `ios_list_simulators`, `ios_boot_simulator`, `ios_install_app`, `ios_launch_app`, `ios_read_logs`, `android_list_devices`, `android_install_app`, `android_launch_app`, or `android_read_logcat`
+
+Optional inputs:
+
+- `params`: typed action parameters
+- `cwd`: working directory relative to the repository root
+- `timeout_secs`: timeout from 1 to 600
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `run native device` when `dry_run` is `false` for device-state-changing actions
+
+Params by action:
+
+- `ios_boot_simulator`, `ios_read_logs`: `device`
+- `ios_install_app`: `device`, `app_path`
+- `ios_launch_app`: `device`, `app_id`
+- `android_list_devices`: optional `serial`
+- `android_install_app`: optional `serial`, `apk_path`
+- `android_launch_app`: optional `serial`, `app_id`
+- `android_read_logcat`: optional `serial`, optional `lines`
+
+Rules:
+
+- The caller must not supply raw `program` or `args`.
+- Core must derive exact `xcrun simctl` or `adb` command plans from typed params.
+- Artifact paths such as `app_path` and `apk_path` must be repository-relative paths.
+- Device ids, serials, and app ids must be single-line bounded values with only supported characters.
+- Dry-run must not touch simulator, emulator, or device state.
+- `dry_run=false` for device-state-changing actions must require exact confirmation `run native device`.
+- Device operations must not mutate repository source and must not claim atomic edit semantics.
 
 ### `git_commit_exact`
 
@@ -524,5 +600,8 @@ Stage 1 ships:
 13. `git_branch_prepare`
 14. `git_merge_readiness`
 15. `git_push_exact`
+16. `setup_profile_run`
+17. `native_build_run`
+18. `native_device_run`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

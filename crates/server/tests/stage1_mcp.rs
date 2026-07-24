@@ -43,6 +43,8 @@ fn stage1_mcp_tools_work_together() {
         "read_command_log",
         "validation_profile_run",
         "setup_profile_run",
+        "native_build_run",
+        "native_device_run",
         "git_commit_exact",
         "git_remote_check",
         "git_branch_prepare",
@@ -483,8 +485,12 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"mode\": \"allowlisted_no_shell\"");
     assert_text(&responses[0], "\"setup_profiles\"");
     assert_text(&responses[0], "\"node-capacitor-shell\"");
+    assert_text(&responses[0], "\"native_build\"");
+    assert_text(&responses[0], "\"native_device\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
     assert_text(&responses[1], "\"setup_profiles\"");
+    assert_text(&responses[1], "\"native_build\"");
+    assert_text(&responses[1], "\"native_device\"");
     assert_text(&responses[2], "allowlist: git/status");
     assert_text(&responses[2], "exit_code: 0");
     assert_eq!(responses[3]["result"]["isError"], true);
@@ -506,6 +512,7 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","dry_run":false}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"cap_sync","params":{"platform":"windows"}}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"npm","args":["install","@capacitor/core"],"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"setup_profile_run","arguments":{"profile":"node-capacitor-shell","action":"ios_pod_install"}}}"#,
         ],
     );
 
@@ -527,11 +534,74 @@ fn stage2_setup_profile_run_plans_capacitor_shell_without_mutating() {
     assert_text(&responses[3], "unsupported cap_sync platform");
     assert_eq!(responses[4]["result"]["isError"], true);
     assert_text(&responses[4], "not allowlisted");
+    assert_text(&responses[5], "command: pod install");
     assert_eq!(
         git_stdout(&root, &["status", "--short"]),
         "",
         "setup_profile_run dry-runs must not mutate the repository"
     );
+}
+
+#[test]
+fn stage2_native_build_run_plans_builds_without_raw_commands() {
+    let root = git_repo("stage2_native_build_run_plans_builds_without_raw_commands");
+    fs::write(root.join("gradlew"), "#!/bin/sh\nexit 0\n").unwrap();
+    git(&root, &["add", "gradlew"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"native_build_run","arguments":{"action":"ios_build","params":{"workspace":"ios/App/App.xcworkspace","scheme":"App"},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"native_build_run","arguments":{"action":"android_assemble_debug","params":{},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"native_build_run","arguments":{"action":"ios_build","params":{"workspace":"../App.xcworkspace","scheme":"App"},"timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "action: ios_build");
+    assert_text(
+        &responses[0],
+        "command: xcodebuild -workspace \"ios/App/App.xcworkspace\" -scheme App -configuration Debug -sdk iphonesimulator build",
+    );
+    assert_text(&responses[0], "repo_validation: true");
+    assert_text(&responses[1], "command: ./gradlew assembleDebug");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "repository-relative path");
+    assert_eq!(
+        git_stdout(&root, &["status", "--short"]),
+        "",
+        "native_build_run dry-runs must not mutate the repository"
+    );
+}
+
+#[test]
+fn stage2_native_device_run_plans_device_actions_and_requires_confirmation() {
+    let root = git_repo("stage2_native_device_run_plans_device_actions_and_requires_confirmation");
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_launch_app","params":{"device":"booted","app_id":"com.example.app"},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"android_read_logcat","params":{"serial":"emulator-5554","lines":50},"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"ios_boot_simulator","params":{"device":"booted"},"dry_run":false,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"native_device_run","arguments":{"action":"android_install_app","params":{"apk_path":"../app.apk"},"timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(
+        &responses[0],
+        "command: xcrun simctl launch booted com.example.app",
+    );
+    assert_text(&responses[0], "changes_device_state: true");
+    assert_text(
+        &responses[1],
+        "command: adb -s emulator-5554 logcat -d -t 50",
+    );
+    assert_text(&responses[1], "changes_device_state: false");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "requires confirm");
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "repository-relative path");
 }
 
 #[test]
@@ -579,12 +649,12 @@ fn stage2_guarded_command_returns_while_mcp_stdin_stays_open() {
 
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
-    writeln!(
-        stdin,
-        "{}",
-        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status","--branch","--short"],"timeout_secs":30}}}"#
-    )
-    .unwrap();
+    stdin
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status","--branch","--short"],"timeout_secs":30}}}
+"#,
+        )
+        .unwrap();
     stdin.flush().unwrap();
 
     let mut line = String::new();
@@ -624,12 +694,12 @@ fn stage2_rg_files_returns_while_mcp_stdin_stays_open() {
 
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
-    writeln!(
-        stdin,
-        "{}",
-        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"rg","args":["--files","clients/vscode/test"],"timeout_secs":30}}}"#
-    )
-    .unwrap();
+    stdin
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"rg","args":["--files","clients/vscode/test"],"timeout_secs":30}}}
+"#,
+        )
+        .unwrap();
     stdin.flush().unwrap();
 
     let mut line = String::new();

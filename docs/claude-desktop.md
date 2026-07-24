@@ -18,6 +18,7 @@ The server should not expose broad filesystem write tools. In particular, the de
 - Git merge or merge-tree as generic commands
 - broad or automatic Git commits
 - generic package-manager or scaffold execution
+- generic native build, simulator, emulator, or device command execution
 
 The expected agent workflow is:
 
@@ -33,6 +34,8 @@ The expected agent workflow is:
 10. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
 11. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
 12. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+13. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
+14. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
 
 ## Build and configure Claude Desktop
 
@@ -99,13 +102,15 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `read_command_log`
 - `validation_profile_run`
 - `setup_profile_run`
+- `native_build_run`
+- `native_device_run`
 - `git_commit_exact`
 - `git_remote_check`
 - `git_branch_prepare`
 - `git_merge_readiness`
 - `git_push_exact`
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all sixteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all eighteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -128,6 +133,8 @@ The current server exposes the implemented safe primitives:
 - `read_command_log`
 - `validation_profile_run`
 - `setup_profile_run`
+- `native_build_run`
+- `native_device_run`
 - `git_commit_exact`
 - `git_remote_check`
 - `git_branch_prepare`
@@ -140,7 +147,11 @@ Other documented tools remain roadmap items until implemented.
 
 Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, or `datacore-m6-vscode`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values. Use `read_command_log` only for logs that need inspection.
 
-Use `setup_profile_run` when a real project setup task needs a profile-owned command plan. It defaults to dry-run and requires `confirm: "run setup profile"` plus a clean worktree before executing an external setup command. The first supported profile is `node-capacitor-shell`, with typed actions for Capacitor dependency installation, init, adding iOS/Android projects, and sync. The caller never supplies raw commands, arbitrary package lists, or shell strings.
+Use `setup_profile_run` when a real project setup task needs a profile-owned command plan. It defaults to dry-run and requires `confirm: "run setup profile"` plus a clean worktree before executing an external setup command. The first supported profile is `node-capacitor-shell`, with typed actions for Capacitor dependency installation, init, adding iOS/Android projects, sync, and iOS CocoaPods install. The caller never supplies raw commands, arbitrary package lists, or shell strings.
+
+Use `native_build_run` for native build/test validation. It supports typed iOS actions (`ios_build`, `ios_test`) and Android actions (`android_assemble_debug`, `android_unit_test`), derives exact `xcodebuild` or repo-relative Gradle wrapper plans, defaults to dry-run, and refuses success if an executed build leaves Git source status changed.
+
+Use `native_device_run` for bounded simulator/emulator/device smoke actions. It supports listing, boot/install/launch/log actions for iOS simulators and listing/install/launch/logcat actions for Android devices. Device-state-changing execution requires `confirm: "run native device"`; raw `xcrun` and `adb` access remains unsupported.
 
 Use `git_commit_exact` for the narrow local-commit case that previously required leaving contextpatch entirely: the tool validates that `paths` exactly equals the repository's full dirty-path set, defaults to dry-run, requires `confirm: "commit exact paths"` when `dry_run` is false, stages only those paths, creates one local commit, and reports the commit hash. It still does not run fetch or push.
 

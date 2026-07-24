@@ -8,7 +8,7 @@ The architecture supports one product goal: provide a reusable safe patch layer 
 
 | Layer | Package | Responsibility |
 | --- | --- | --- |
-| Core | `core` | Filesystem, patch, replacement, policy, process-runner, setup-profile planning, and Git guard logic |
+| Core | `core` | Filesystem, patch, replacement, policy, process-runner, setup-profile planning, native build/device policy, and Git guard logic |
 | CLI | `cli` | Human-facing command-line UX |
 | Server | `server` | Context-server protocol adapter and tool schema |
 
@@ -35,6 +35,8 @@ Owns:
 - Guarded validation command policy and execution
 - Shared no-shell process execution machinery for guarded workflows
 - Declarative setup-profile planning and profile-owned command derivation
+- Typed native build/test command planning and source-status validation
+- Typed native simulator/emulator/device command planning and confirmation gates
 - Error types shared by CLI and server
 
 Must not own:
@@ -67,7 +69,7 @@ Owns:
 
 Must call `core` for edit behavior instead of owning filesystem mutation logic.
 
-Server setup tools are adapters only: they parse JSON into typed core setup params, call `core::setup`, and format MCP responses. They must not derive package-manager commands directly.
+Server setup and native tools are adapters only: they parse JSON into typed core params, call `core::setup`, `core::native_build`, or `core::native_device`, and format MCP responses. They must not derive package-manager, build, simulator, or device commands directly.
 
 ## Core feature organization
 
@@ -80,8 +82,10 @@ Core code is grouped by product capability rather than adapter:
 | `git` | Git status and guarded Git workflow helpers |
 | `process` | Shared no-shell, timeout-bound, redacted command execution machinery |
 | `setup` | Declarative setup profiles and typed command-plan derivation |
+| `native_build` | Typed iOS/Android build and test command derivation plus source-status validation |
+| `native_device` | Typed iOS simulator and Android device command derivation plus device-state confirmation policy |
 
-`process` is infrastructure, not a public shell surface. `setup` may plan external mutators, but profile modules own the action vocabulary and command plans.
+`process` is infrastructure, not a public shell surface. `setup` may plan external mutators, but profile modules own the action vocabulary and command plans. `native_build` and `native_device` expose high-level actions, not arbitrary native command access.
 
 ## Dependency direction
 
@@ -107,3 +111,4 @@ Repository-level integration tests should cover:
 6. Dirty-repository guard behavior
 7. Capability discovery and guarded command refusal behavior
 8. Setup-profile dry-run planning and refusal behavior
+9. Native build/device dry-run planning and refusal behavior

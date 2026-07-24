@@ -40,6 +40,7 @@ impl CapacitorPlatform {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn setup_profile_run(
     repo_root: &Path,
     cwd: Option<&Path>,
@@ -325,6 +326,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.plan.args, ["exec", "--", "cap", "sync", "ios"]);
+    }
+
+    #[test]
+    fn plans_ios_pod_install_as_setup_mutator() {
+        let root = git_root("plans_ios_pod_install_as_setup_mutator");
+
+        let result = setup_profile_run(
+            &root,
+            None,
+            "node-capacitor-shell",
+            "ios_pod_install",
+            SetupActionParams::None,
+            Some(30),
+            true,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.plan.program, "pod");
+        assert_eq!(result.plan.args, ["install"]);
+        assert_eq!(result.plan.expected_changed_path_classes, ["ios_project"]);
     }
 
     #[test]

@@ -66,8 +66,10 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `git_merge_readiness` | Analyze PR/merge readiness between two refs without exposing generic merge commands |
 | `git_push_exact` | Publish the exact current commit only after branch, clean-worktree, expected-HEAD, remote-divergence, and confirmation guards |
 | `setup_profile_run` | Plan typed, profile-owned setup actions for real projects without exposing generic package-manager or shell authority |
+| `native_build_run` | Plan or run typed native build/test validators without exposing raw `xcodebuild` or Gradle authority |
+| `native_device_run` | Plan or run bounded simulator/emulator/device smoke actions without exposing raw `xcrun` or `adb` authority |
 
-Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, broad automatic commits, or generic package-manager execution. Git mutation remains split by risk boundary: `git_commit_exact` is local only, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing. Setup support is split into `setup_profile_run`, which plans external-mutator commands from typed server-owned profiles and executes them only behind dry-run, clean-worktree, changed-path, and confirmation guards.
+Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, broad automatic commits, generic package-manager execution, or generic native-tool execution. Git mutation remains split by risk boundary: `git_commit_exact` is local only, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing. Setup support is split into `setup_profile_run`, which plans external-mutator commands from typed server-owned profiles and executes them only behind dry-run, clean-worktree, changed-path, and confirmation guards. Native build/device support is split into typed build/test validators and bounded device-smoke actions so agents do not need to know raw command syntax.
 
 ## Stage 2A-setup: profile-driven setup mutation
 
@@ -82,6 +84,33 @@ Stage 2A is implemented for the MCP server. It intentionally does not add arbitr
 7. Clear reporting that the external tool performed the mutation and contextpatch did not provide atomic edit semantics
 
 The first profile is `node-capacitor-shell` because it matches a real project setup need while staying universal: the profile owns dependency names and Capacitor actions, and callers never provide arbitrary package lists or commands.
+
+The profile also includes `ios_pod_install` for native dependency setup. It remains a setup-profile action because CocoaPods mutates dependency state and should not be exposed through `run_guarded_command`.
+
+## Stage 2A-native: typed native build and device actions
+
+`native_build_run` supports:
+
+1. `ios_build`
+2. `ios_test`
+3. `android_assemble_debug`
+4. `android_unit_test`
+
+Build actions derive exact `xcodebuild` or repo-relative Gradle wrapper plans from typed params. They default to dry-run and, when executed, compare Git source status before and after the build so generated source changes are reported as refusals instead of silent success.
+
+`native_device_run` supports:
+
+1. `ios_list_simulators`
+2. `ios_boot_simulator`
+3. `ios_install_app`
+4. `ios_launch_app`
+5. `ios_read_logs`
+6. `android_list_devices`
+7. `android_install_app`
+8. `android_launch_app`
+9. `android_read_logcat`
+
+Device actions derive exact `xcrun simctl` or `adb` plans from typed params. They default to dry-run, keep repository mutation out of scope, and require `confirm: "run native device"` before executing actions that change simulator, emulator, or device state.
 
 ## Stage 2B: latency and workflow compression
 
@@ -120,3 +149,4 @@ The goal is to stop guessing whether latency comes from JSON-RPC handling, proce
 - Broad or automatic Git commits
 - Git fetch/push, resets, checkouts, or stashes
 - Generic package-manager or scaffold execution outside declarative setup profiles
+- Generic native build, simulator, emulator, or device command execution outside typed native tools

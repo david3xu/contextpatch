@@ -102,6 +102,14 @@ pub(crate) fn plan(
             };
             Ok(CommandPlan::new("npm", args, expected))
         }
+        "ios_pod_install" => {
+            require_no_params(action, params)?;
+            Ok(CommandPlan::new(
+                "pod",
+                vec!["install".to_string()],
+                vec!["ios_project".to_string()],
+            ))
+        }
         _ => Err(ContextPatchError::new(format!(
             "setup_profile_run refused: unknown action `{action}` for profile `{PROFILE}`"
         ))),

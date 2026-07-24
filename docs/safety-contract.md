@@ -19,6 +19,7 @@ This document is normative. If implementation behavior conflicts with this file,
 9. If local Git commit support is exposed, it must be an explicitly confirmed exact-path checkpoint, not broad Git authority.
 10. If remote Git support is exposed, it must be split into explicit remote-check, branch-preparation, merge-readiness, and exact-push tools, not added to generic command execution.
 11. If setup support is exposed, it must be declarative and profile-owned: callers choose a profile/action with typed params, never raw package-manager or shell commands.
+12. If native build or device support is exposed, it must be declarative and action-owned: callers choose typed build/device actions, never raw `xcodebuild`, Gradle, `xcrun`, or `adb` commands.
 
 ## Required refusal cases
 
@@ -89,6 +90,23 @@ Rules:
 7. Refuse mutation until the implementation records clean-worktree preconditions, exact confirmation, before/after Git status, changed paths, and expected changed-path classes.
 8. Keep profile modules universal and reusable; do not add app-specific setup logic to `contextpatch`.
 
+## Native build and device expectation
+
+Native build and device tools support real plugin workflows without broad shell or native-tool authority.
+
+Rules:
+
+1. Keep `xcodebuild`, repo-relative `gradlew`, `xcrun`, `adb`, `swift`, `kotlinc`, and CocoaPods workflows out of `run_guarded_command`.
+2. Accept only server-owned action names and typed params.
+3. Derive exact command plans inside `core::native_build`, `core::native_device`, or setup profiles.
+4. Default native build and device tools to dry-run.
+5. Treat native builds as external validators: they may write build caches, but must not leave Git source status changed.
+6. Resolve Android Gradle wrappers as repository-relative executables for native build policy only; do not weaken global executable-name validation.
+7. Validate app ids, device ids, simulator/device serials, and artifact paths before planning commands.
+8. Require exact confirmation `run native device` before executing actions that change simulator, emulator, or device state.
+9. Keep device operations separate from repository mutation; device commands must not claim atomic edit semantics.
+10. Bound native command execution with the same no-shell timeout and output-capture runner used by guarded workflows.
+
 ## Non-goals
 
 - No unrestricted shell execution
@@ -97,4 +115,5 @@ Rules:
 - No automatic or broad commits; only explicitly confirmed exact-path local checkpoints
 - No broad fetch, checkout, merge, or push; only `git_remote_check`, `git_branch_prepare`, `git_merge_readiness`, and `git_push_exact` under their explicit guards
 - No generic package-manager or scaffold runner; only declarative setup profiles under `setup_profile_run`
+- No generic native build/device runner; only typed `native_build_run`, `native_device_run`, and setup-profile actions under their explicit guards
 - No hidden network calls for edit operations

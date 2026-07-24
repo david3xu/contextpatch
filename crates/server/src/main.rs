@@ -11,6 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use contextpatch_core::fs::read_range::read_range_in_root;
 use contextpatch_core::fs::write_new_file::write_new_file_in_root;
 use contextpatch_core::git::status::{status_summary, status_summary_for_path};
+use contextpatch_core::native_build::{native_build_run, NativeBuildParams};
+use contextpatch_core::native_device::{native_device_run, NativeDeviceParams};
 use contextpatch_core::patch::diff::preview_exact_replacement_in_root;
 use contextpatch_core::process::guarded_command::run_guarded_command;
 use contextpatch_core::replace::exact::replace_exact_in_root;
@@ -392,6 +394,74 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::native_build_run::NAME,
+            "description": "Plan or run a typed native build/test action without exposing raw xcodebuild or Gradle commands.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Native build action: ios_build, ios_test, android_assemble_debug, or android_unit_test."
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Typed action parameters. iOS uses workspace, scheme, optional configuration/sdk/destination. Android accepts optional gradlew path."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory relative to the configured repository root."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Plan only without running the build. Defaults to true."
+                    }
+                },
+                "required": ["action", "params"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::native_device_run::NAME,
+            "description": "Plan or run bounded typed native simulator/emulator/device smoke actions without arbitrary xcrun or adb access.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Native device action such as ios_list_simulators, ios_boot_simulator, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat."
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Typed action parameters such as device, serial, app_id, app_path, apk_path, or lines."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory relative to the configured repository root."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Plan only without touching simulator/device state. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal `run native device` when dry_run is false for device-state changes."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::git_commit_exact::NAME,
             "description": "Dry-run or create one local Git commit from an exact full dirty-path set. Never pushes.",
             "inputSchema": {
@@ -569,6 +639,8 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::read_command_log::NAME => call_read_command_log(&arguments),
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
         tools::setup_profile_run::NAME => call_setup_profile_run(repo_root, &arguments),
+        tools::native_build_run::NAME => call_native_build_run(repo_root, &arguments),
+        tools::native_device_run::NAME => call_native_device_run(repo_root, &arguments),
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
         tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
         tools::git_branch_prepare::NAME => call_git_branch_prepare(repo_root, &arguments),
@@ -608,7 +680,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
     let root = repo_root
         .canonicalize()
         .map_err(|error| format!("capability_manifest refused: {error}"))?;
-    Ok(serde_json::to_string_pretty(&json!({
+    serde_json::to_string_pretty(&json!({
         "server": "contextpatch",
         "version": contextpatch_core::VERSION,
         "repo_root": root.display().to_string(),
@@ -620,6 +692,8 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "status_guard": true,
             "read_command_log": true,
             "setup_profile_run": true,
+            "native_build_run": true,
+            "native_device_run": true,
             "git_commit_exact": true,
             "git_remote_check": true,
             "git_branch_prepare": true,
@@ -684,7 +758,8 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                         "cap_init",
                         "cap_add_ios",
                         "cap_add_android",
-                        "cap_sync"
+                        "cap_sync",
+                        "ios_pod_install"
                     ],
                     "external_mutator": true,
                     "caller_supplies_raw_command": false,
@@ -700,9 +775,47 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "mutation requires clean worktree and exact confirmation",
                 "mutation reports before/after Git status and changed paths"
             ]
+        },
+        "native_build": {
+            "mode": "typed_native_build_actions",
+            "actions": {
+                "ios_build": { "program": "xcodebuild", "caller_supplies_raw_command": false },
+                "ios_test": { "program": "xcodebuild", "caller_supplies_raw_command": false },
+                "android_assemble_debug": { "program": "./gradlew", "caller_supplies_raw_command": false },
+                "android_unit_test": { "program": "./gradlew", "caller_supplies_raw_command": false }
+            },
+            "guards": [
+                "typed action parameters only",
+                "repo-root-confined cwd",
+                "repo-relative Gradle wrapper is canonicalized under the repository",
+                "source Git status is checked before and after execution",
+                "large output is available through read_command_log"
+            ]
+        },
+        "native_device": {
+            "mode": "typed_native_device_actions",
+            "actions": [
+                "ios_list_simulators",
+                "ios_boot_simulator",
+                "ios_install_app",
+                "ios_launch_app",
+                "ios_read_logs",
+                "android_list_devices",
+                "android_install_app",
+                "android_launch_app",
+                "android_read_logcat"
+            ],
+            "required_confirm_for_device_state": "run native device",
+            "guards": [
+                "typed action parameters only",
+                "no arbitrary xcrun or adb",
+                "device-state changes require dry_run=false plus exact confirmation",
+                "bounded timeout and redacted log output",
+                "repository source files are not mutated"
+            ]
         }
     }))
-    .map_err(|error| format!("capability_manifest refused: {error}"))?)
+    .map_err(|error| format!("capability_manifest refused: {error}"))
 }
 
 fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
@@ -713,7 +826,7 @@ fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
         Ok(summary) => json!({ "clean": true, "summary": summary }),
         Err(error) => json!({ "clean": false, "summary": error.to_string() }),
     };
-    Ok(serde_json::to_string_pretty(&json!({
+    serde_json::to_string_pretty(&json!({
         "server": "contextpatch",
         "version": contextpatch_core::VERSION,
         "repo_root": root.display().to_string(),
@@ -735,13 +848,30 @@ fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
             "node-capacitor-shell": {
                 "available": executable_is_available("npm"),
                 "required_tools": {
-                    "npm": executable_available("npm")
+                    "npm": executable_available("npm"),
+                    "pod": executable_available("pod")
                 },
                 "mutation_enabled": true
             }
+        },
+        "native_build": {
+            "available": executable_is_available("xcodebuild") || gradlew_available(&root),
+            "required_tools": {
+                "xcodebuild": executable_available("xcodebuild"),
+                "gradlew": gradlew_available(&root),
+                "swift": executable_available("swift"),
+                "kotlinc": executable_available("kotlinc")
+            }
+        },
+        "native_device": {
+            "available": executable_is_available("xcrun") || executable_is_available("adb"),
+            "required_tools": {
+                "xcrun": executable_available("xcrun"),
+                "adb": executable_available("adb")
+            }
         }
     }))
-    .map_err(|error| format!("preflight_health refused: {error}"))?)
+    .map_err(|error| format!("preflight_health refused: {error}"))
 }
 
 fn call_read_range(
@@ -965,12 +1095,18 @@ fn setup_action_params(action: &str, value: Option<&Value>) -> Result<SetupActio
                 .transpose()?;
             Ok(SetupActionParams::CapSync { platform })
         }
-        "install_capacitor_dependencies" | "cap_add_ios" | "cap_add_android"
+        "install_capacitor_dependencies"
+        | "cap_add_ios"
+        | "cap_add_android"
+        | "ios_pod_install"
             if params.is_empty() =>
         {
             Ok(SetupActionParams::None)
         }
-        "install_capacitor_dependencies" | "cap_add_ios" | "cap_add_android" => Err(format!(
+        "install_capacitor_dependencies"
+        | "cap_add_ios"
+        | "cap_add_android"
+        | "ios_pod_install" => Err(format!(
             "setup_profile_run refused: action `{action}` does not accept params"
         )),
         _ => Ok(SetupActionParams::None),
@@ -985,6 +1121,138 @@ fn parse_capacitor_platform(value: &str) -> Result<CapacitorPlatform, String> {
         _ => Err(format!(
             "setup_profile_run refused: unsupported cap_sync platform `{value}`"
         )),
+    }
+}
+
+fn call_native_build_run(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let action = required_string(arguments, "action")?;
+    let params = native_build_params(action, arguments.get("params"))?;
+    let cwd = optional_string(arguments, "cwd")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+
+    let result = native_build_run(
+        repo_root,
+        cwd.map(Path::new),
+        action,
+        params,
+        timeout_secs,
+        dry_run,
+    )
+    .map_err(|error| format!("native_build_run refused: {error}"))?;
+    let summary = result.summary();
+    let log_id = write_command_log(&summary)
+        .map_err(|error| format!("native_build_run log write failed: {error}"))?;
+    Ok(format!("log_id: {log_id}\n{summary}"))
+}
+
+fn native_build_params(action: &str, value: Option<&Value>) -> Result<NativeBuildParams, String> {
+    let params = value
+        .and_then(Value::as_object)
+        .ok_or_else(|| "missing or invalid object argument: params".to_string())?;
+    match action {
+        "ios_build" | "ios_test" => Ok(NativeBuildParams::Ios {
+            workspace: required_string(params, "workspace")?.to_string(),
+            scheme: required_string(params, "scheme")?.to_string(),
+            configuration: optional_string(params, "configuration")?.map(ToString::to_string),
+            sdk: optional_string(params, "sdk")?.map(ToString::to_string),
+            destination: optional_string(params, "destination")?.map(ToString::to_string),
+        }),
+        "android_assemble_debug" | "android_unit_test" => Ok(NativeBuildParams::Android {
+            gradlew: optional_string(params, "gradlew")?.map(ToString::to_string),
+        }),
+        _ => Ok(NativeBuildParams::Android { gradlew: None }),
+    }
+}
+
+fn call_native_device_run(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let action = required_string(arguments, "action")?;
+    let params = native_device_params(action, arguments.get("params"))?;
+    let cwd = optional_string(arguments, "cwd")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    let result = native_device_run(
+        repo_root,
+        cwd.map(Path::new),
+        action,
+        params,
+        timeout_secs,
+        dry_run,
+        confirm,
+    )
+    .map_err(|error| format!("native_device_run refused: {error}"))?;
+    let summary = result.summary();
+    let log_id = write_command_log(&summary)
+        .map_err(|error| format!("native_device_run log write failed: {error}"))?;
+    Ok(format!("log_id: {log_id}\n{summary}"))
+}
+
+fn native_device_params(action: &str, value: Option<&Value>) -> Result<NativeDeviceParams, String> {
+    let params = match value {
+        Some(value) => value
+            .as_object()
+            .ok_or_else(|| "invalid object argument: params".to_string())?,
+        None => {
+            return match action {
+                "ios_list_simulators" | "android_list_devices" => Ok(NativeDeviceParams::None),
+                _ => Err("missing object argument: params".to_string()),
+            };
+        }
+    };
+    match action {
+        "ios_list_simulators" => {
+            if params.is_empty() {
+                Ok(NativeDeviceParams::None)
+            } else {
+                Err(
+                    "native_device_run refused: ios_list_simulators does not accept params"
+                        .to_string(),
+                )
+            }
+        }
+        "ios_boot_simulator" | "ios_read_logs" => Ok(NativeDeviceParams::IosDevice {
+            device: required_string(params, "device")?.to_string(),
+        }),
+        "ios_install_app" => Ok(NativeDeviceParams::IosInstall {
+            device: required_string(params, "device")?.to_string(),
+            app_path: required_string(params, "app_path")?.to_string(),
+        }),
+        "ios_launch_app" => Ok(NativeDeviceParams::IosLaunch {
+            device: required_string(params, "device")?.to_string(),
+            app_id: required_string(params, "app_id")?.to_string(),
+        }),
+        "android_list_devices" => Ok(NativeDeviceParams::AndroidSerial {
+            serial: optional_string(params, "serial")?.map(ToString::to_string),
+        }),
+        "android_install_app" => Ok(NativeDeviceParams::AndroidInstall {
+            serial: optional_string(params, "serial")?.map(ToString::to_string),
+            apk_path: required_string(params, "apk_path")?.to_string(),
+        }),
+        "android_launch_app" => Ok(NativeDeviceParams::AndroidLaunch {
+            serial: optional_string(params, "serial")?.map(ToString::to_string),
+            app_id: required_string(params, "app_id")?.to_string(),
+        }),
+        "android_read_logcat" => {
+            let lines = optional_u64(params, "lines")?
+                .map(|value| {
+                    u32::try_from(value)
+                        .map_err(|_| "native_device_run refused: lines is too large".to_string())
+                })
+                .transpose()?;
+            Ok(NativeDeviceParams::AndroidLogcat {
+                serial: optional_string(params, "serial")?.map(ToString::to_string),
+                lines,
+            })
+        }
+        _ => Ok(NativeDeviceParams::None),
     }
 }
 
@@ -1759,19 +2027,20 @@ fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
 
 fn parse_porcelain_paths(bytes: &[u8], label: &str) -> Result<BTreeSet<String>, String> {
     let mut paths = BTreeSet::new();
-    let mut entries = bytes
+    let entries = bytes
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty());
-    while let Some(entry) = entries.next() {
+    for entry in entries {
         if entry.len() < 4 || entry[2] != b' ' {
             return Err(format!(
                 "git_commit_exact refused: unexpected {label} entry"
             ));
         }
         if matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C') {
-            return Err(format!(
+            return Err(
                 "git_commit_exact refused: rename/copy entries require a future dedicated tool"
-            ));
+                    .to_string(),
+            );
         }
         let path = std::str::from_utf8(&entry[3..]).map_err(|error| {
             format!("git_commit_exact refused: {label} path is not UTF-8: {error}")
@@ -2335,6 +2604,10 @@ fn executable_is_available(program: &str) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn gradlew_available(root: &Path) -> bool {
+    root.join("gradlew").is_file()
 }
 
 fn success_response(id: Value, result: Value) -> String {

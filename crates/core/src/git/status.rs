@@ -111,10 +111,10 @@ fn git_output(
 
 fn parse_porcelain_paths(bytes: &[u8], label: &str) -> Result<BTreeSet<String>, ContextPatchError> {
     let mut paths = BTreeSet::new();
-    let mut entries = bytes
+    let entries = bytes
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty());
-    while let Some(entry) = entries.next() {
+    for entry in entries {
         if entry.len() < 4 || entry[2] != b' ' {
             return Err(ContextPatchError::new(format!(
                 "unexpected {label} porcelain entry"

@@ -5,6 +5,8 @@ pub mod git_commit_exact;
 pub mod git_merge_readiness;
 pub mod git_push_exact;
 pub mod git_remote_check;
+pub mod native_build_run;
+pub mod native_device_run;
 pub mod preflight_health;
 pub mod read_command_log;
 pub mod read_range;

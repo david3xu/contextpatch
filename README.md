@@ -70,6 +70,8 @@ The MCP server exposes the same Stage 1 surface to local agent clients:
 - `read_command_log`
 - `validation_profile_run`
 - `setup_profile_run`
+- `native_build_run`
+- `native_device_run`
 - `git_commit_exact`
 - `git_remote_check`
 - `git_branch_prepare`
@@ -81,6 +83,8 @@ The MCP server exposes the same Stage 1 surface to local agent clients:
 `validation_profile_run` compresses common validation sequences into one guarded call and returns compact command summaries with log ids. `read_command_log` retrieves those redacted logs on demand so large outputs do not have to ride in the first JSON-RPC response.
 
 `setup_profile_run` is a declarative setup-profile tool for real project scaffolding needs. It defaults to dry-run, can run typed server-owned actions such as the `node-capacitor-shell` profile only with `confirm: "run setup profile"` and a clean worktree, and does not expose arbitrary `npm install`, `npx`, package lists, or shell commands through `run_guarded_command`.
+
+`native_build_run` and `native_device_run` cover native plugin/build workflows without exposing raw `xcodebuild`, `./gradlew`, `xcrun`, or `adb` authority. Agents select typed actions such as `ios_build`, `android_assemble_debug`, `ios_launch_app`, or `android_read_logcat`; contextpatch derives the exact command plan, defaults to dry-run, validates repo-relative artifacts, and requires `confirm: "run native device"` before executing device-state-changing actions.
 
 `git_commit_exact` is a narrowly gated local Git checkpoint tool. It defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` before mutation, stages only those paths, creates at most one local commit, and never fetches or pushes.
 
@@ -103,7 +107,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution, exact Git workflows, and dry-run setup-profile planning for Claude Desktop workflows. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution, exact Git workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

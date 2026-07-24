@@ -315,7 +315,181 @@ Guardrails:
 - `adb` should be limited to device/emulator inspection, install, launch, and bounded logcat.
 - `./gradlew` requires a new policy for repo-relative executable wrappers, because current program validation rejects paths.
 
-### Do not support by default
+### Native plugin-round capability plan
+
+The first implementation intentionally unblocks only the foundation round through `setup_profile_run` and the `node-capacitor-shell` profile. That is correct for the immediate Capacitor shell work, but it does not cover the next native plugin round. The missing tools should be added as easy-to-use declarative MCP capabilities, not as broad raw allowlist entries.
+
+The philosophy stays the same:
+
+- callers choose named tools, profiles, and actions
+- callers supply typed parameters, not shell strings
+- core derives exact command plans
+- dry-run or bounded inspection is available first
+- mutation requires clean worktree and exact confirmation
+- device operations are separated from repository mutation
+- capability manifest and preflight explain what is available without requiring developers to know low-level commands
+
+Recommended next surfaces:
+
+| Capability | Purpose | Programs covered | Public shape |
+| --- | --- | --- | --- |
+| Extend `setup_profile_run` | Native dependency setup that may mutate repo files | `pod install`, narrowly scoped Gradle sync if needed | Profile/action such as `ios_pod_install`; clean-worktree plus confirmation |
+| Add `native_build_run` | Typed native build/test validation | `xcodebuild`, `./gradlew`, optionally `swift`/`kotlinc` later | Platform/action such as `ios_build`, `ios_test`, `android_assemble_debug`, `android_unit_test` |
+| Add `native_device_run` | Bounded simulator/emulator/device smoke operations | `xcrun simctl`, `adb` | Platform/action such as `list_devices`, `boot_simulator`, `install_app`, `launch_app`, `read_logs` |
+
+Do not put these programs into `run_guarded_command` as generic entries. That would make the validation tool a backdoor shell for native workflows and would force developers to know exact command syntax. The MCP should instead advertise high-level action names that map to safe, profile-owned command plans.
+
+### `setup_profile_run` extensions
+
+Add native setup actions only when they are repository setup mutators:
+
+- `ios_pod_install`
+  - command plan: `pod install`
+  - allowed cwd: an iOS project directory under the repository, usually `ios/App`
+  - mutation policy: clean worktree and `confirm: "run setup profile"`
+  - expected changed-path classes: `ios_project`, CocoaPods lockfiles, workspace/project metadata
+- `android_gradle_sync`
+  - add only if there is a concrete CLI sync workflow that mutates expected Gradle files
+  - prefer build validation through `native_build_run` if no repository mutation is needed
+
+### New `native_build_run`
+
+This should be a build/test validator, not a setup mutator and not a raw command runner.
+
+Inputs should be high-level and typed:
+
+```json
+{
+  "platform": "ios",
+  "action": "build",
+  "params": {
+    "workspace": "ios/App/App.xcworkspace",
+    "scheme": "App",
+    "configuration": "Debug",
+    "sdk": "iphonesimulator"
+  }
+}
+```
+
+Initial action set:
+
+- iOS:
+  - `ios_build`
+  - `ios_test`
+  - optional later `swift_test` only if a package-based plugin workflow needs it
+- Android:
+  - `android_assemble_debug`
+  - `android_unit_test`
+  - optional later `android_connected_test` only when device access is intentionally enabled
+
+Guardrails:
+
+- no shell strings
+- repo-confined cwd
+- only known workspace/project/Gradle wrapper paths under the repo
+- only allowlisted xcodebuild flags and Gradle tasks
+- timeout, redaction, truncation, and command-log support
+- no signing/export/archive/store-submission actions by default
+- `./gradlew` requires explicit repo-relative wrapper handling instead of weakening generic program validation
+
+### New `native_device_run`
+
+Device and simulator actions should be separate because they affect local simulator/device state rather than repository files.
+
+Initial action set:
+
+- iOS simulator:
+  - `ios_list_simulators`
+  - `ios_boot_simulator`
+  - `ios_install_app`
+  - `ios_launch_app`
+  - `ios_read_logs`
+- Android:
+  - `android_list_devices`
+  - `android_install_app`
+  - `android_launch_app`
+  - `android_read_logcat`
+
+Guardrails:
+
+- no arbitrary `xcrun` or `adb`
+- only `xcrun simctl` subcommands required for bounded smoke testing
+- bounded `adb logcat` with timeout and line/byte limits
+- app identifiers and artifact paths validated as typed params
+- no credential, signing, pairing, root, backup/restore, screen recording, or broad file-transfer commands by default
+- clear response metadata that the operation targets local simulator/device state, not repository state
+
+### Developer-use principle
+
+The developer should not need to know whether the underlying command is `npm exec`, `pod install`, `xcodebuild`, `./gradlew`, `xcrun simctl`, or `adb`. They should be able to inspect `capability_manifest`, see supported profiles/actions, and call one named action with typed params. Low-level command syntax remains an implementation detail owned by core profiles.
+
+### Fresh audit before implementation
+
+The native plugin-round plan is directionally right, but the next implementation should not simply append more variants to the current `setup_profile_run` code. The current implementation was intentionally shaped for one setup profile and one mutating command-plan model. Native build and device workflows have different safety properties and need a small supporting refactor before adding tools.
+
+Audit findings:
+
+1. Current setup params are Capacitor-specific.
+   - `SetupActionParams` currently contains `CapInit` and `CapSync`, which is fine for `node-capacitor-shell` but will become messy if `ios_pod_install`, xcodebuild params, Gradle params, and device params are added there.
+   - Before adding plugin-round actions, keep setup params scoped to setup profiles and introduce separate typed params for native build/device tools.
+   - Do not make the server pass generic JSON blobs to core without typed validation.
+
+2. Current `CommandPlan` assumes setup mutation.
+   - `crates/core/src/setup/plan.rs` sets `mutates_repo: true` and `external_mutator: true` for every setup plan.
+   - That is correct for Capacitor setup and `pod install`, but wrong for build/test and device smoke actions.
+   - Native build/device tools should use their own plan/result types, or a shared lower-level process plan with an explicit operation class: `repo_mutator`, `repo_validation`, or `device_operation`.
+
+3. `./gradlew` cannot fit the current executable-name validator.
+   - The shared runner currently rejects program names containing `/` or `\`, which protects `run_guarded_command` from path execution.
+   - Do not weaken that rule globally.
+   - Add an explicit program representation for native build only, such as `ExecutableName("xcodebuild")` versus `RepoRelativeExecutable("gradlew")`, with canonicalization under the repo root and executable-file checks.
+
+4. Build tools may write outside the repository even when they do not edit source.
+   - `xcodebuild`, Gradle, SwiftPM, and Kotlin tooling can write DerivedData, build caches, and package caches outside the repo.
+   - The response should not claim these are pure read-only operations.
+   - Treat them as external build validators that must leave Git source status unchanged, and report before/after repository status.
+   - Do not require clean worktree for read-only validation by default unless the action needs reproducibility; but always report dirty state clearly.
+
+5. Device tools operate on local simulator/device state, not repo state.
+   - `native_device_run` should not reuse setup mutation confirmation.
+   - It should have its own safety model: typed device/app identifiers, bounded logs, artifact path validation, timeout, and a clear statement that the operation changes local simulator/device state.
+   - It should not stage, commit, or check changed paths as if it were a repository mutator.
+
+6. Output handling needs to be more compact than setup output.
+   - Native build logs and device logs can be much larger than setup output.
+   - `native_build_run` and `native_device_run` should return compact summaries plus `log_id`; full stdout/stderr/logcat should live in `read_command_log`.
+   - Avoid dumping full xcodebuild/Gradle/logcat output into the MCP text response.
+
+7. Tool availability should be precise and non-invasive.
+   - `preflight_health` may check whether `pod`, `xcodebuild`, `xcrun`, `adb`, `swift`, and `kotlinc` exist with stdout/stderr suppressed.
+   - It must not boot simulators, run builds, install packages, or touch devices during preflight.
+   - Missing optional tools should be reported as unavailable prerequisites for specific actions, not server failure.
+
+8. Start with the minimum native plugin round, not every possible command.
+   - First native build slice should likely include `ios_build`, `android_assemble_debug`, and maybe `ios_pod_install`.
+   - Device smoke actions should come after build actions unless the immediate downstream workflow already has built artifacts to install.
+   - `swift` and `kotlinc` should remain optional until there is a real package/compiler-only workflow that `xcodebuild` or Gradle cannot cover.
+
+9. Server organization should improve incrementally.
+   - `crates/server/src/main.rs` already holds schema and adapter logic for many tools.
+   - Adding two new native tools entirely inline would worsen maintainability.
+   - Use `crates/server/src/tools/native_build_run.rs` and `native_device_run.rs` for names and, where practical, schema/adapter helpers; keep the server as a thin protocol adapter and avoid command derivation there.
+
+10. The public UX should be profile/action first.
+    - Capability manifest should advertise action names, required params, confirmation requirements, and unavailable prerequisites.
+    - Developers should not need to know the underlying command syntax or whether the implementation uses `xcodebuild`, `./gradlew`, `xcrun simctl`, or `adb`.
+    - Refusals should tell the developer which high-level action or parameter is unsupported, not expose low-level allowlist internals first.
+
+Implementation adjustment from this audit:
+
+1. Add shared core plan/execution primitives only where they reduce duplication; keep policy modules separate.
+2. Extend `setup_profile_run` only for repository setup mutators such as `ios_pod_install`.
+3. Add `core::native_build` and MCP `native_build_run` for build/test validation with source-status before/after checks.
+4. Add repo-relative executable support only inside native build policy for `gradlew`.
+5. Add `core::native_device` and MCP `native_device_run` later, after build support, for simulator/emulator smoke actions.
+6. Update docs, capability manifest, preflight, and tests with each surface as it lands.
+
+## Do not support by default
 
 - `security`
 - `fastlane`
