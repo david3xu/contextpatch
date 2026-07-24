@@ -21,6 +21,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
+| `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
 | `git_merge_readiness` | Optional remote-tracking ref update only | Validated refs, optional single-branch fetch, merge-base/ahead/diff-name analysis, no merge |
 | `git_push_exact` | Remote branch update | Clean worktree, exact HEAD, no remote-ahead divergence, explicit confirmation, no force |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
@@ -43,6 +44,7 @@ Rules:
 - Must identify the configured repository root.
 - Must state unsupported operations, including arbitrary shell and destructive Git mutations.
 - Must distinguish the narrow local `git_commit_exact` checkpoint and guarded `git_remote_check`/`git_push_exact` workflow from unsupported broad Git/destructive workflows.
+- Must report `git_branch_prepare` honestly when available and distinguish it from broad checkout/rebase/reset authority.
 - Must report `git_merge_readiness` honestly when available and distinguish it from generic merge authority.
 - Must not mutate repository state.
 
@@ -348,6 +350,34 @@ Rules:
 - The response must include `head`, `remote_head`, `remote_ref`, `head_to_remote_empty`, `remote_ahead_count`, and `local_ahead_count`.
 - The tool must report whether source status changed during the fetch and refuse if source status changes.
 
+### `git_branch_prepare`
+
+Prepares and switches to one local branch from one explicit remote base branch.
+
+Required inputs:
+
+- `base_branch`: remote branch name to fetch and prepare from
+- `branch`: local branch name to create or switch to
+
+Optional inputs:
+
+- `remote`: remote name; defaults to `origin`
+- `required_files`: repository-relative files that must exist after preparation
+- `reset_existing`: defaults to `false`
+- `confirm`: required literal `reset branch from remote base` when `reset_existing` is `true`
+
+Rules:
+
+- The tool must require a clean worktree before fetching or switching branches.
+- The tool may fetch only `refs/heads/<base_branch>:refs/remotes/<remote>/<base_branch>`.
+- Remote, base branch, local branch, and required-file paths must be validated before Git mutation.
+- If the local branch does not exist, the tool may create it from the fetched remote-tracking ref and switch to it.
+- If the local branch exists and `reset_existing` is false, the fetched remote-tracking ref must already be an ancestor of that branch before switching.
+- If the local branch exists and `reset_existing` is true, the tool must require `confirm: "reset branch from remote base"` before recreating that branch from the fetched remote-tracking ref.
+- Required files must be checked against the target ref before switching/resetting and checked again in the worktree after preparation.
+- The response must include the action taken, previous branch, current branch, remote ref, remote commit, prepared head, ancestor check, required-file results, and post-preparation status.
+- The tool must not expose generic checkout, rebase, merge, merge-tree, stash, clean, arbitrary reset, arbitrary fetch, push, or multi-branch operations.
+
 ### `git_merge_readiness`
 
 Performs read-only merge/PR readiness analysis between two validated refs.
@@ -451,7 +481,8 @@ Stage 1 ships:
 10. `validation_profile_run`
 11. `git_commit_exact`
 12. `git_remote_check`
-13. `git_merge_readiness`
-14. `git_push_exact`
+13. `git_branch_prepare`
+14. `git_merge_readiness`
+15. `git_push_exact`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

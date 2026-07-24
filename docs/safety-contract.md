@@ -17,7 +17,7 @@ This document is normative. If implementation behavior conflicts with this file,
 7. Never provide an unrestricted shell or recursive delete primitive.
 8. If validation command execution is exposed, it must be no-shell, repo-root-confined, allowlisted, timeout-bound, and auditable.
 9. If local Git commit support is exposed, it must be an explicitly confirmed exact-path checkpoint, not broad Git authority.
-10. If remote Git support is exposed, it must be split into explicit remote-check, merge-readiness, and exact-push tools, not added to generic command execution.
+10. If remote Git support is exposed, it must be split into explicit remote-check, branch-preparation, merge-readiness, and exact-push tools, not added to generic command execution.
 
 ## Required refusal cases
 
@@ -49,7 +49,7 @@ If the platform cannot provide the expected atomic behavior, the operation must 
 
 Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves. The only allowed commit workflow is `git_commit_exact`: it defaults to dry-run, requires an exact complete dirty-path set, requires explicit confirmation before mutation, stages only those paths, creates at most one local commit, and never pushes.
 
-Remote Git authority is intentionally split. `git_remote_check` may fetch exactly one explicit remote branch and report local/remote divergence without changing source files. `git_merge_readiness` may optionally fetch one explicit remote branch, then run read-only merge-base, rev-count, and diff-name queries to identify files changed on both sides of two validated refs. `git_push_exact` may push only the current `HEAD` to the matching named remote branch after verifying a clean worktree, current branch match, expected HEAD hash, no remote-ahead divergence, and explicit `confirm: "push exact commit"`. Tools must not reset, checkout, merge, merge-tree through generic command execution, stash, clean, force-push, push tags, push multiple refs, delete refs, or discard user work.
+Remote Git authority is intentionally split. `git_remote_check` may fetch exactly one explicit remote branch and report local/remote divergence without changing source files. `git_branch_prepare` may fetch exactly one explicit remote base branch, create or switch to one validated local branch from that base, and reset an existing local branch only when the worktree is clean and `confirm: "reset branch from remote base"` is supplied. `git_merge_readiness` may optionally fetch one explicit remote branch, then run read-only merge-base, rev-count, and diff-name queries to identify files changed on both sides of two validated refs. `git_push_exact` may push only the current `HEAD` to the matching named remote branch after verifying a clean worktree, current branch match, expected HEAD hash, no remote-ahead divergence, and explicit `confirm: "push exact commit"`. Tools must not expose broad reset, checkout, merge, merge-tree through generic command execution, rebase, stash, clean, force-push, push tags, push multiple refs, delete refs, or discard user work outside those explicit branch-prep reset guards.
 
 ## Default-deny tools
 
@@ -79,5 +79,5 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 - No recursive bulk rewrite tool
 - No silent formatting of unrelated files
 - No automatic or broad commits; only explicitly confirmed exact-path local checkpoints
-- No broad fetch, merge, or push; only `git_remote_check`, `git_merge_readiness`, and `git_push_exact` under their explicit guards
+- No broad fetch, checkout, merge, or push; only `git_remote_check`, `git_branch_prepare`, `git_merge_readiness`, and `git_push_exact` under their explicit guards
 - No hidden network calls for edit operations

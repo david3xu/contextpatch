@@ -44,6 +44,7 @@ fn stage1_mcp_tools_work_together() {
         "validation_profile_run",
         "git_commit_exact",
         "git_remote_check",
+        "git_branch_prepare",
         "git_merge_readiness",
         "git_push_exact",
     ] {
@@ -73,6 +74,144 @@ fn stage1_mcp_tools_work_together() {
     assert_eq!(responses[6]["result"]["isError"], true);
     assert_text(&responses[6], "status_guard refused");
     assert_text(&responses[6], "sample.txt");
+}
+
+#[test]
+fn stage2_git_branch_prepare_creates_branch_from_remote_base() {
+    let origin = bare_repo("stage2_git_branch_prepare_creates_branch_origin");
+    let seed = git_repo("stage2_git_branch_prepare_creates_branch_seed");
+    fs::write(
+        seed.join("azure-pipelines.foundry-adapter.yml"),
+        "pipeline\n",
+    )
+    .unwrap();
+    git(&seed, &["add", "azure-pipelines.foundry-adapter.yml"]);
+    git(&seed, &["commit", "--quiet", "-m", "initial"]);
+    git(&seed, &["branch", "-M", "Develop"]);
+    git(
+        &seed,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&seed, &["push", "--quiet", "-u", "origin", "Develop"]);
+    let root = temp_root("stage2_git_branch_prepare_creates_branch");
+    git(&root, &["clone", "--quiet", origin.to_str().unwrap(), "."]);
+    git(&root, &["config", "user.name", "Contextpatch Test"]);
+    git(
+        &root,
+        &["config", "user.email", "contextpatch@example.invalid"],
+    );
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"chore/personal-fresh-redeploy-20260704-085732","required_files":["azure-pipelines.foundry-adapter.yml"]}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"prepared\": true");
+    assert_text(&responses[0], "\"action\": \"created_branch\"");
+    assert_text(
+        &responses[0],
+        "\"current_branch\": \"chore/personal-fresh-redeploy-20260704-085732\"",
+    );
+    assert_text(&responses[0], "\"remote_base_is_ancestor\": true");
+    assert_eq!(
+        git_stdout(&root, &["branch", "--show-current"]).trim(),
+        "chore/personal-fresh-redeploy-20260704-085732"
+    );
+    assert_eq!(git_stdout(&root, &["status", "--short"]), "");
+}
+
+#[test]
+fn stage2_git_branch_prepare_refuses_missing_required_file_before_switch() {
+    let origin = bare_repo("stage2_git_branch_prepare_missing_file_origin");
+    let seed = git_repo("stage2_git_branch_prepare_missing_file_seed");
+    fs::write(seed.join("README.md"), "readme\n").unwrap();
+    git(&seed, &["add", "README.md"]);
+    git(&seed, &["commit", "--quiet", "-m", "initial"]);
+    git(&seed, &["branch", "-M", "Develop"]);
+    git(
+        &seed,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&seed, &["push", "--quiet", "-u", "origin", "Develop"]);
+    let root = temp_root("stage2_git_branch_prepare_missing_file");
+    git(&root, &["clone", "--quiet", origin.to_str().unwrap(), "."]);
+    git(&root, &["config", "user.name", "Contextpatch Test"]);
+    git(
+        &root,
+        &["config", "user.email", "contextpatch@example.invalid"],
+    );
+    let branch_before = git_stdout(&root, &["branch", "--show-current"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"chore/personal-fresh-redeploy-20260704-085732","required_files":["azure-pipelines.foundry-adapter.yml"]}}}"#,
+        ],
+    );
+
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_text(&responses[0], "required file");
+    assert_text(&responses[0], "is missing from");
+    assert_eq!(
+        git_stdout(&root, &["branch", "--show-current"]),
+        branch_before
+    );
+}
+
+#[test]
+fn stage2_git_branch_prepare_requires_confirmation_to_reset_existing_branch() {
+    let origin = bare_repo("stage2_git_branch_prepare_reset_confirmation_origin");
+    let seed = git_repo("stage2_git_branch_prepare_reset_confirmation_seed");
+    fs::write(seed.join("pipeline.yml"), "pipeline\n").unwrap();
+    git(&seed, &["add", "pipeline.yml"]);
+    git(&seed, &["commit", "--quiet", "-m", "initial"]);
+    git(&seed, &["branch", "-M", "Develop"]);
+    git(
+        &seed,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&seed, &["push", "--quiet", "-u", "origin", "Develop"]);
+    let root = temp_root("stage2_git_branch_prepare_reset_confirmation");
+    git(&root, &["clone", "--quiet", origin.to_str().unwrap(), "."]);
+    git(&root, &["config", "user.name", "Contextpatch Test"]);
+    git(
+        &root,
+        &["config", "user.email", "contextpatch@example.invalid"],
+    );
+    git(
+        &root,
+        &["checkout", "--quiet", "-b", "Develop", "origin/Develop"],
+    );
+    git(&root, &["checkout", "--quiet", "--orphan", "feature"]);
+    git(&root, &["rm", "-rf", "."]);
+    fs::write(root.join("other.txt"), "other\n").unwrap();
+    git(&root, &["add", "other.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "other root"]);
+    git(&root, &["checkout", "--quiet", "Develop"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature","reset_existing":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature","reset_existing":true,"confirm":"reset branch from remote base","required_files":["pipeline.yml"]}}}"#,
+        ],
+    );
+
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_text(&responses[0], "is not based on");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
+    assert_text(&responses[2], "\"prepared\": true");
+    assert_text(&responses[2], "\"action\": \"reset_existing_branch\"");
+    assert_eq!(
+        git_stdout(&root, &["branch", "--show-current"]).trim(),
+        "feature"
+    );
+    assert!(root.join("pipeline.yml").is_file());
+    assert!(!root.join("other.txt").exists());
 }
 
 #[test]

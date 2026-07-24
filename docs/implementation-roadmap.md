@@ -62,10 +62,11 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `validation_profile_run` | Collapse common multi-command validation sequences into one auditable MCP call |
 | `git_commit_exact` | Allow a narrow local commit checkpoint after exact-path validation |
 | `git_remote_check` | Fetch exactly one explicit remote branch and report local/remote divergence without source edits |
+| `git_branch_prepare` | Prepare one local branch from one explicit remote base branch after clean-worktree and required-file gates |
 | `git_merge_readiness` | Analyze PR/merge readiness between two refs without exposing generic merge commands |
 | `git_push_exact` | Publish the exact current commit only after branch, clean-worktree, expected-HEAD, remote-divergence, and confirmation guards |
 
-Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, or broad automatic commits. Git mutation remains split by risk boundary: `git_commit_exact` is local only, `git_remote_check` is explicit single-branch fetch/report only, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing.
+Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, or broad automatic commits. Git mutation remains split by risk boundary: `git_commit_exact` is local only, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing.
 
 ## Stage 2B: latency and workflow compression
 

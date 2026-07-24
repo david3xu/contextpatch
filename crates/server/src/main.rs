@@ -404,6 +404,44 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::git_branch_prepare::NAME,
+            "description": "Prepare and switch to a local branch from one explicit remote base branch with guard checks.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "remote": {
+                        "type": "string",
+                        "description": "Git remote name. Defaults to origin."
+                    },
+                    "base_branch": {
+                        "type": "string",
+                        "description": "Remote base branch to fetch and prepare from."
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Local branch to create or switch to."
+                    },
+                    "required_files": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional repository-relative files that must exist after preparation."
+                    },
+                    "reset_existing": {
+                        "type": "boolean",
+                        "description": "Reset an existing local branch to the fetched remote base. Defaults to false."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `reset branch from remote base` when reset_existing is true."
+                    }
+                },
+                "required": ["base_branch", "branch"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::git_merge_readiness::NAME,
             "description": "Read-only merge/PR readiness analysis between two refs, including changed-on-both-sides conflict candidates.",
             "inputSchema": {
@@ -490,6 +528,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
         tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
+        tools::git_branch_prepare::NAME => call_git_branch_prepare(repo_root, &arguments),
         tools::git_merge_readiness::NAME => call_git_merge_readiness(repo_root, &arguments),
         tools::git_push_exact::NAME => call_git_push_exact(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
@@ -539,12 +578,14 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "read_command_log": true,
             "git_commit_exact": true,
             "git_remote_check": true,
+            "git_branch_prepare": true,
             "git_merge_readiness": true,
             "git_push_exact": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
             "remote_check": true,
+            "branch_prepare": true,
             "merge_readiness": true,
             "push_exact_commit": true,
             "reset_checkout_clean_stash": false,
@@ -555,6 +596,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "stages only explicit paths",
                 "creates at most one local commit",
                 "fetches only explicit remote branch",
+                "branch preparation requires clean worktree and validates required files",
                 "merge readiness is read-only and reports changed-on-both-sides candidates",
                 "pushes only expected HEAD to matching remote branch",
                 "never force pushes"
@@ -969,6 +1011,172 @@ fn call_git_remote_check(
     .map_err(|error| format!("git_remote_check refused: {error}"))
 }
 
+fn call_git_branch_prepare(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "reset branch from remote base";
+
+    let remote = validate_git_remote(optional_string(arguments, "remote")?.unwrap_or("origin"))?;
+    let base_branch = validate_git_branch(required_string(arguments, "base_branch")?)?;
+    let branch = validate_git_branch(required_string(arguments, "branch")?)?;
+    let required_files = optional_string_array(arguments, "required_files")?;
+    let reset_existing = optional_bool(arguments, "reset_existing")?.unwrap_or(false);
+    let confirm = optional_string(arguments, "confirm")?;
+    if reset_existing && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "git_branch_prepare refused: reset_existing=true requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = canonical_repo_root(repo_root, tools::git_branch_prepare::NAME)?;
+    ensure_remote_exists(tools::git_branch_prepare::NAME, &root, &remote)?;
+    let status_before = git_status_short(&root)?;
+    if !status_before.trim().is_empty() {
+        return Err(format!(
+            "git_branch_prepare refused: worktree must be clean before branch preparation\n{}",
+            status_before.trim()
+        ));
+    }
+
+    let remote_ref = remote_ref(&remote, &base_branch);
+    git_success_for_tool(
+        tools::git_branch_prepare::NAME,
+        &root,
+        vec![
+            "fetch".to_string(),
+            remote.clone(),
+            format!("refs/heads/{base_branch}:{remote_ref}"),
+        ],
+    )?;
+
+    let status_after_fetch = git_status_short(&root)?;
+    if status_after_fetch != status_before {
+        return Err(format!(
+            "git_branch_prepare refused: source worktree changed during fetch\nbefore:\n{}\nafter:\n{}",
+            empty_label(&status_before),
+            empty_label(&status_after_fetch)
+        ));
+    }
+
+    let remote_commit = resolve_commit(tools::git_branch_prepare::NAME, &root, &remote_ref)?;
+    let branch_ref = format!("refs/heads/{branch}");
+    let branch_existed = local_branch_exists(&root, &branch)?;
+    let required_file_ref = if branch_existed && !reset_existing {
+        branch_ref.as_str()
+    } else {
+        remote_ref.as_str()
+    };
+    let verified_required_files = validate_required_files_in_ref(
+        tools::git_branch_prepare::NAME,
+        &root,
+        required_file_ref,
+        &required_files,
+    )?;
+    let previous_branch = current_branch(tools::git_branch_prepare::NAME, &root)?;
+    let action = if branch_existed {
+        if reset_existing {
+            if previous_branch == branch {
+                git_success_for_tool(
+                    tools::git_branch_prepare::NAME,
+                    &root,
+                    vec![
+                        "reset".to_string(),
+                        "--hard".to_string(),
+                        remote_ref.clone(),
+                    ],
+                )?;
+            } else {
+                git_success_for_tool(
+                    tools::git_branch_prepare::NAME,
+                    &root,
+                    vec![
+                        "branch".to_string(),
+                        "-f".to_string(),
+                        branch.clone(),
+                        remote_ref.clone(),
+                    ],
+                )?;
+                git_success_for_tool(
+                    tools::git_branch_prepare::NAME,
+                    &root,
+                    vec!["switch".to_string(), branch.clone()],
+                )?;
+            }
+            "reset_existing_branch"
+        } else {
+            let remote_is_ancestor = git_status_code(
+                &root,
+                &["merge-base", "--is-ancestor", &remote_ref, &branch_ref],
+            )? == 0;
+            if !remote_is_ancestor {
+                return Err(format!(
+                    "git_branch_prepare refused: existing branch `{branch}` is not based on `{remote_ref}`; use reset_existing=true with confirm {CONFIRMATION:?} to recreate it from the remote base"
+                ));
+            }
+            git_success_for_tool(
+                tools::git_branch_prepare::NAME,
+                &root,
+                vec!["switch".to_string(), branch.clone()],
+            )?;
+            "switched_existing_branch"
+        }
+    } else {
+        git_success_for_tool(
+            tools::git_branch_prepare::NAME,
+            &root,
+            vec![
+                "switch".to_string(),
+                "-c".to_string(),
+                branch.clone(),
+                remote_ref.clone(),
+            ],
+        )?;
+        "created_branch"
+    };
+
+    let current_branch = current_branch(tools::git_branch_prepare::NAME, &root)?;
+    if current_branch != branch {
+        return Err(format!(
+            "git_branch_prepare refused: current branch `{current_branch}` does not match prepared branch `{branch}`"
+        ));
+    }
+    let head = resolve_commit(tools::git_branch_prepare::NAME, &root, "HEAD")?;
+    let remote_is_ancestor =
+        git_status_code(&root, &["merge-base", "--is-ancestor", &remote_ref, "HEAD"])? == 0;
+    if !remote_is_ancestor {
+        return Err(format!(
+            "git_branch_prepare refused: `{remote_ref}` is not an ancestor of prepared branch `{branch}`"
+        ));
+    }
+
+    for required_file in &verified_required_files {
+        validate_required_file_path(tools::git_branch_prepare::NAME, &root, required_file)?;
+    }
+    let status_after = git_status_short(&root)?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_branch_prepare::NAME,
+        "prepared": true,
+        "action": action,
+        "remote": remote,
+        "base_branch": base_branch,
+        "remote_ref": remote_ref,
+        "remote_commit": remote_commit,
+        "branch": branch,
+        "previous_branch": previous_branch,
+        "current_branch": current_branch,
+        "head": head,
+        "branch_existed": branch_existed,
+        "reset_existing": reset_existing,
+        "remote_base_is_ancestor": true,
+        "required_files": verified_required_files,
+        "required_files_present": true,
+        "status_short": status_after
+    }))
+    .map_err(|error| format!("git_branch_prepare refused: {error}"))
+}
+
 fn call_git_merge_readiness(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
@@ -1232,6 +1440,29 @@ fn required_string_array(
                 .ok_or_else(|| format!("invalid string array item in argument: {key}"))
         })
         .collect()
+}
+
+fn optional_string_array(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    match arguments.get(key) {
+        Some(value) => {
+            let values = value
+                .as_array()
+                .ok_or_else(|| format!("invalid string array argument: {key}"))?;
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(ToString::to_string)
+                        .ok_or_else(|| format!("invalid string array item in argument: {key}"))
+                })
+                .collect()
+        }
+        None => Ok(Vec::new()),
+    }
 }
 
 fn required_usize(arguments: &serde_json::Map<String, Value>, key: &str) -> Result<usize, String> {
@@ -1555,6 +1786,30 @@ fn validate_git_remote(remote: &str) -> Result<String, String> {
     Ok(remote.to_string())
 }
 
+fn current_branch(tool_name: &str, root: &Path) -> Result<String, String> {
+    let branch = git_stdout_for_tool(tool_name, root, &["branch", "--show-current"])?;
+    let branch = branch.trim();
+    if branch.is_empty() {
+        Err(format!(
+            "{tool_name} refused: repository is in detached HEAD state"
+        ))
+    } else {
+        Ok(branch.to_string())
+    }
+}
+
+fn local_branch_exists(root: &Path, branch: &str) -> Result<bool, String> {
+    let branch_ref = format!("refs/heads/{branch}");
+    let status = git_status_code(root, &["show-ref", "--verify", "--quiet", &branch_ref])?;
+    match status {
+        0 => Ok(true),
+        1 => Ok(false),
+        code => Err(format!(
+            "git workflow refused: failed to check local branch `{branch}` (exit code {code})"
+        )),
+    }
+}
+
 fn validate_git_branch(branch: &str) -> Result<String, String> {
     validate_git_ref_component("branch", branch)?;
     if branch.contains("..")
@@ -1676,6 +1931,83 @@ fn changed_files_between(
         &["diff", "--name-only", "-z", from_ref, to_ref, "--"],
     )?;
     parse_nul_paths_for_tool(tool_name, &output.stdout, "git diff --name-only")
+}
+
+fn validate_required_file_path(tool_name: &str, root: &Path, raw: &str) -> Result<String, String> {
+    validate_required_file_path_syntax(tool_name, raw)?;
+    let path = Path::new(raw);
+    let candidate = root.join(path);
+    if !candidate.is_file() {
+        return Err(format!(
+            "{tool_name} refused: required file `{raw}` is missing after branch preparation"
+        ));
+    }
+    let resolved = candidate.canonicalize().map_err(|error| {
+        format!("{tool_name} refused: failed to resolve required file `{raw}`: {error}")
+    })?;
+    if !resolved.starts_with(root) {
+        return Err(format!(
+            "{tool_name} refused: required file `{raw}` resolves outside repository root"
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+fn validate_required_files_in_ref(
+    tool_name: &str,
+    root: &Path,
+    ref_name: &str,
+    paths: &[String],
+) -> Result<Vec<String>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            validate_required_file_path_syntax(tool_name, path)?;
+            let object = format!("{ref_name}:{path}");
+            let object_type = git_stdout_for_tool(tool_name, root, &["cat-file", "-t", &object])
+                .map_err(|_| {
+                    format!(
+                        "{tool_name} refused: required file `{path}` is missing from `{ref_name}`"
+                    )
+                })?;
+            if object_type.trim() != "blob" {
+                return Err(format!(
+                    "{tool_name} refused: required path `{path}` in `{ref_name}` is not a file"
+                ));
+            }
+            Ok(path.to_string())
+        })
+        .collect()
+}
+
+fn validate_required_file_path_syntax(tool_name: &str, raw: &str) -> Result<(), String> {
+    if raw.is_empty() || raw.contains('\0') {
+        return Err(format!(
+            "{tool_name} refused: required file path must not be empty or contain NUL"
+        ));
+    }
+    if raw.contains(':') || raw.contains('*') || raw.contains('?') || raw.contains('[') {
+        return Err(format!(
+            "{tool_name} refused: required file path `{raw}` contains Git pathspec metacharacters"
+        ));
+    }
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Err(format!(
+            "{tool_name} refused: required file path `{raw}` must be repository-relative"
+        ));
+    }
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            _ => {
+                return Err(format!(
+                    "{tool_name} refused: required file path `{raw}` must be a normalized relative path"
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 fn empty_label(text: &str) -> &str {
