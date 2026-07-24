@@ -955,9 +955,9 @@ fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
             }
         },
         "native_build": {
-            "available": executable_is_available("xcodebuild") || gradlew_available(&root),
+            "available": xcodebuild_is_available() || gradlew_available(&root),
             "required_tools": {
-                "xcodebuild": executable_available("xcodebuild"),
+                "xcodebuild": xcodebuild_available(),
                 "xcode_select": xcode_select_available(),
                 "gradlew": gradlew_available(&root),
                 "swift": executable_available("swift"),
@@ -2701,6 +2701,54 @@ fn executable_available(program: &str) -> Value {
             "error": error.to_string()
         }),
     }
+}
+
+fn xcodebuild_available() -> Value {
+    let output = std::process::Command::new("xcodebuild")
+        .arg("-version")
+        .output();
+    match output {
+        Ok(output) => json!({
+            "available": output.status.success(),
+            "exit_code": output.status.code().unwrap_or(-1),
+            "probe": "xcodebuild -version",
+            "version": String::from_utf8_lossy(&output.stdout).trim(),
+            "diagnostic": xcodebuild_diagnostic(&output)
+        }),
+        Err(error) => json!({
+            "available": false,
+            "probe": "xcodebuild -version",
+            "error": error.to_string()
+        }),
+    }
+}
+
+fn xcodebuild_is_available() -> bool {
+    std::process::Command::new("xcodebuild")
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn xcodebuild_diagnostic(output: &std::process::Output) -> Value {
+    if output.status.success() {
+        return Value::Null;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}\n{stderr}");
+    let lower = combined.to_ascii_lowercase();
+    if lower.contains("license") {
+        return json!(
+            "xcodebuild is installed but requires accepting the Xcode license outside contextpatch"
+        );
+    }
+    if lower.contains("requires xcode") || lower.contains("full xcode") {
+        return json!("xcodebuild is present but full Xcode may not be installed or selected");
+    }
+    Value::Null
 }
 
 fn xcode_select_available() -> Value {

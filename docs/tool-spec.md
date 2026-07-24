@@ -383,6 +383,7 @@ Rules:
 
 - The caller must not supply raw `program` or `args`.
 - Core must derive exact `xcodebuild` or Gradle wrapper command plans from typed params.
+- `preflight_health` must probe Xcode with `xcodebuild -version`, not a generic `--version` flag, and should report `xcode-select -p` so callers can diagnose missing Xcode or unaccepted-license states.
 - Android Gradle wrapper execution is allowed only through this native build policy and must resolve to a file inside the repository.
 - The tool must not broaden the `run_guarded_command` validation allowlist or global executable-name validation.
 - Dry-run must not execute native tools.

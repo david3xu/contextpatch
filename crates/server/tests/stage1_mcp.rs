@@ -498,6 +498,7 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[1], "\"guarded_process_execution\"");
     assert_text(&responses[1], "\"setup_profiles\"");
     assert_text(&responses[1], "\"native_build\"");
+    assert_text(&responses[1], "\"probe\": \"xcodebuild -version\"");
     assert_text(&responses[1], "\"native_device\"");
     assert_text(&responses[2], "allowlist: git/status");
     assert_text(&responses[2], "exit_code: 0");
