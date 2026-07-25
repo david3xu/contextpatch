@@ -791,6 +791,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "cargo": ["check", "test", "build", "clippy"],
                 "bun": ["run", "test"],
                 "npm": ["run", "test"],
+                "pnpm": ["run", "test"],
                 "rg": ["search"]
             },
             "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode"],

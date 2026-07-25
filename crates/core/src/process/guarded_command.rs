@@ -50,6 +50,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         "cargo" => matches!(subcommand, Some("check" | "test" | "build" | "clippy")),
         "bun" => matches!(subcommand, Some("run" | "test")),
         "npm" => matches!(subcommand, Some("run" | "test")),
+        "pnpm" => matches!(subcommand, Some("run" | "test")),
         "rg" => subcommand.is_some(),
         _ => false,
     };
@@ -78,7 +79,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::run_guarded_command;
+    use super::{run_guarded_command, validate_command};
     use crate::process::runner::redact_line;
 
     #[test]
@@ -104,6 +105,24 @@ mod tests {
 
         let error =
             run_guarded_command(&root, None, "git", &["reset".to_string()], Some(30)).unwrap_err();
+
+        assert!(error.to_string().contains("not allowlisted"));
+    }
+
+    #[test]
+    fn allows_pnpm_scripts_but_not_package_install() {
+        validate_command(
+            "pnpm",
+            &[
+                "run".to_string(),
+                "cap:sync:ios:prod".to_string(),
+                "--reporter=silent".to_string(),
+            ],
+        )
+        .unwrap();
+
+        let error = validate_command("pnpm", &["add".to_string(), "@capacitor/core".to_string()])
+            .unwrap_err();
 
         assert!(error.to_string().contains("not allowlisted"));
     }

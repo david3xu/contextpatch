@@ -276,7 +276,7 @@ Runs a bounded validation-oriented command without invoking a shell.
 
 Required inputs:
 
-- `program`: one of `git`, `cargo`, `bun`, `npm`, or `rg`
+- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, or `rg`
 - `args`: command arguments; the first argument must be an allowlisted subcommand
 
 Optional inputs:
@@ -294,11 +294,12 @@ Rules:
   - `cargo`: `check`, `test`, `build`, `clippy`
   - `bun`: `run`, `test`
   - `npm`: `run`, `test`
+  - `pnpm`: `run`, `test`
   - `rg`: search invocation
 - Arguments that directly reference paths outside the repository root must be refused.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
-- The tool must refuse arbitrary shell, environment inspection, destructive Git commands, and automatic commits.
+- The tool must refuse arbitrary shell, environment inspection, destructive Git commands, package installation, and automatic commits.
 
 ### `read_command_log`
 
