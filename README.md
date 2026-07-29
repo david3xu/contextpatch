@@ -47,7 +47,7 @@ That boundary is intentional product strategy, not a temporary limitation.
 6. `status-guard`
 7. Stage 1 server schemas and transport
 
-The first useful milestone is a CLI command that can safely replace exactly one matched text span and refuse zero-match or multi-match edits. The full staged plan is in `docs/implementation-roadmap.md`.
+The first useful milestone is a CLI command that can safely replace exactly one matched text span and refuse zero-match or multi-match edits. The full staged plan is in [docs/implementation-roadmap.md](docs/implementation-roadmap.md).
 
 ```bash
 contextpatch read-range <path> --start <line> --end <line>
@@ -125,7 +125,7 @@ The MCP server exposes the safe tool surface to local agent clients:
 5. Surface diffs before persistent changes when requested.
 6. Never hide Git state from the caller.
 
-See `docs/safety-contract.md` for the full contract.
+See [docs/safety-contract.md](docs/safety-contract.md) for the full contract.
 
 ## Current status
 
@@ -143,10 +143,22 @@ tests/                         repo-level fixtures and integration tests
 
 ## Documentation contract
 
+Public docs:
+
+- [README](README.md)
+- [Tool specification](docs/tool-spec.md)
+- [Safety contract](docs/safety-contract.md)
+- [Architecture](docs/architecture.md)
+- [Claude Desktop usage](docs/claude-desktop.md)
+- [Implementation roadmap](docs/implementation-roadmap.md)
+- [Server refactor plan](docs/server-refactor-plan.md)
+- [Native background implementation](docs/native-background-implementation.md)
+- [Copilot repository instructions](.github/copilot-instructions.md)
+
 | File | Must change when |
 | --- | --- |
-| `docs/tool-spec.md` | A tool is added, removed, renamed, or its behavior changes |
-| `docs/safety-contract.md` | A write rule, guard, or refusal policy changes |
-| `docs/architecture.md` | Crate boundaries or ownership changes |
-| `docs/claude-desktop.md` | Server install/config behavior changes |
-| `docs/implementation-roadmap.md` | Stage scope, sequencing, or release criteria change |
+| [docs/tool-spec.md](docs/tool-spec.md) | A tool is added, removed, renamed, or its behavior changes |
+| [docs/safety-contract.md](docs/safety-contract.md) | A write rule, guard, or refusal policy changes |
+| [docs/architecture.md](docs/architecture.md) | Crate boundaries or ownership changes |
+| [docs/claude-desktop.md](docs/claude-desktop.md) | Server install/config behavior changes |
+| [docs/implementation-roadmap.md](docs/implementation-roadmap.md) | Stage scope, sequencing, or release criteria change |

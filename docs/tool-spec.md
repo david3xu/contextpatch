@@ -80,6 +80,8 @@ Rules:
 - Must report repository cleanliness using the same Git guard semantics as `status_guard`.
 - Must report whether guarded process execution is available.
 - Must report local availability of expected validation tools without treating missing optional tools as server failure.
+- Must include every executable that appears in a shipped validation profile or documented guarded validation workflow, including `python3`, `pytest`, `harbor`, and the `bash` base-image script path, so clients can detect host gaps before launching a long profile.
+- Must make unavailable validation executables explicit. For example, when `harbor` is missing or cannot be launched in the host environment, clients should skip `dynamo-harbor-task` profile execution and use task-local verifier/oracle comparisons only as an environment-limited fallback, not as proof that Harbor scoring succeeded.
 - Must report setup-profile prerequisites without running setup commands.
 - Must not mutate repository state.
 

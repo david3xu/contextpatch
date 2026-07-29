@@ -398,7 +398,50 @@ pub(crate) fn call_preflight_health(repo_root: &Path) -> Result<String, String> 
             "cargo": executable_available("cargo"),
             "bun": executable_available("bun"),
             "npm": executable_available("npm"),
+            "pnpm": executable_available("pnpm"),
+            "python": executable_available("python"),
+            "python3": executable_available("python3"),
+            "pytest": executable_available("pytest"),
+            "harbor": executable_available("harbor"),
+            "bash": executable_available("bash"),
             "rg": executable_available("rg")
+        },
+        "validation_tools": {
+            "git": executable_available("git"),
+            "cargo": executable_available("cargo"),
+            "bun": executable_available("bun"),
+            "npm": executable_available("npm"),
+            "pnpm": executable_available("pnpm"),
+            "python": executable_available("python"),
+            "python3": executable_available("python3"),
+            "pytest": executable_available("pytest"),
+            "harbor": executable_available("harbor"),
+            "bash": executable_available("bash"),
+            "rg": executable_available("rg"),
+            "base_image_check": base_image_check_available(&root)
+        },
+        "validation_profiles": {
+            "repo-basic": {
+                "available": executable_is_available("git"),
+                "required_tools": ["git"]
+            },
+            "rust-workspace": {
+                "available": executable_is_available("git") && executable_is_available("cargo"),
+                "required_tools": ["git", "cargo"]
+            },
+            "datacore-vscode": {
+                "available": executable_is_available("git") && executable_is_available("bun") && executable_is_available("rg"),
+                "required_tools": ["git", "bun", "rg"]
+            },
+            "datacore-m6-vscode": {
+                "available": executable_is_available("git") && executable_is_available("bun") && executable_is_available("rg"),
+                "required_tools": ["git", "bun", "rg"]
+            },
+            "dynamo-harbor-task": {
+                "available": executable_is_available("git") && executable_is_available("harbor"),
+                "required_tools": ["git", "harbor"],
+                "fallback_when_unavailable": "If harbor is unavailable, verify task-local oracle/verifier logic directly but do not claim Harbor scoring succeeded."
+            }
         },
         "setup_profiles": {
             "node-capacitor-shell": {
@@ -522,6 +565,16 @@ fn executable_is_available(program: &str) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn base_image_check_available(root: &Path) -> Value {
+    let script = root.join("references/check-base-image.sh");
+    json!({
+        "available": executable_is_available("bash") && script.is_file(),
+        "script": "references/check-base-image.sh",
+        "bash": executable_available("bash"),
+        "script_present": script.is_file()
+    })
 }
 
 fn gradlew_available(root: &Path) -> bool {

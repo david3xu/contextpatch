@@ -656,6 +656,13 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"action\": \"ios_build\"");
     assert_text(&responses[0], "\"action\": \"android_read_logcat\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
+    assert_text(&responses[1], "\"validation_tools\"");
+    assert_text(&responses[1], "\"python3\"");
+    assert_text(&responses[1], "\"pytest\"");
+    assert_text(&responses[1], "\"harbor\"");
+    assert_text(&responses[1], "\"base_image_check\"");
+    assert_text(&responses[1], "\"dynamo-harbor-task\"");
+    assert_text(&responses[1], "do not claim Harbor scoring succeeded");
     assert_text(&responses[1], "\"setup_profiles\"");
     assert_text(&responses[1], "\"native_build\"");
     assert_text(&responses[1], "\"probe\": \"xcodebuild -version\"");
