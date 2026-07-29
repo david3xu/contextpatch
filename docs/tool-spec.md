@@ -17,13 +17,16 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
 | `write_new_file_base64` | Yes | Destination must not exist; base64 decoded bytes with optional expected size |
+| `write_existing_file_exact_hash` | Yes | Existing regular file, exact current SHA-256, dry-run default, explicit confirmation |
 | `artifact_write_text` | Sidecar artifact only | Writes outside repo under fixed artifact root; create-only, no repo mutation |
 | `artifact_write_base64` | Sidecar artifact only | Binary sidecar artifact under fixed artifact root; create-only, size/byte-count guards |
 | `bulk_write_new_files_base64` | Yes | Bounded multi-file create-only import from base64 entries |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `fixture_generator_run` | Declared fixture outputs only | Dry-run/confirmation-gated repo-relative Python generator with changed-path verification |
-| `base_image_check_run` | No source edits | Exact `references/check-base-image.sh` validation workflow; no arbitrary shell |
+| `base_image_check_run` | No source edits | Exact `references/check-base-image.sh` validation workflow, optionally with the exact `task` arg; no arbitrary shell |
+| `fixture_manifest_verify` | No | Exact fixture file set and SHA-256 digest verification; mismatches are refusals |
+| `fixture_manifest_refresh` | Manifest file only | Regenerates fixture manifest from declared files/prefixes with dry-run, confirmation, and existing-manifest hash guard |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
 | `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
@@ -392,12 +395,12 @@ Rules:
   - `python`/`python3`: a repo-relative `.py` script path as the first argument
   - `pytest`: validation invocation
   - `harbor`: `run`
-  - `bash`: exactly `references/check-base-image.sh`
+  - `bash`: exactly `references/check-base-image.sh` or `references/check-base-image.sh task`
   - `rg`: search invocation
 - Arguments that directly reference paths outside the repository root must be refused.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
-- The tool must refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh`, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
+- The tool must refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh` with its optional exact `task` argument, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
 
 ### `fixture_generator_run`
 
@@ -435,6 +438,7 @@ Plans or runs the exact `references/check-base-image.sh` validation workflow.
 
 Optional inputs:
 
+- `project_path`: when provided, must be exactly `task`
 - `timeout_secs`: timeout from 1 to 600
 - `dry_run`: defaults to `true`
 - `confirm`: required literal `run base image check` when `dry_run` is `false`
@@ -442,9 +446,83 @@ Optional inputs:
 Rules:
 
 - The required script path is fixed as `references/check-base-image.sh`.
-- Dry-run must return the exact `bash references/check-base-image.sh` plan without running it.
+- Dry-run must return either the exact `bash references/check-base-image.sh` or `bash references/check-base-image.sh task` plan without running it.
 - Execution requires exact confirmation and uses the guarded no-shell process runner.
+- `project_path` values other than `task` must be refused.
 - This tool must not expose arbitrary `bash`, shell snippets, or caller-selected shell scripts.
+
+### `write_existing_file_exact_hash`
+
+Overwrites an existing UTF-8 repository file only when its current SHA-256 digest matches the caller's expectation.
+
+Required inputs:
+
+- `path`
+- `content`
+- `expected_sha256`: lowercase SHA-256 hex digest of the current file content
+
+Optional inputs:
+
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `write exact hash` when `dry_run` is `false`
+
+Rules:
+
+- The path must resolve inside the repository root and must already be a regular file.
+- The expected digest must be lowercase SHA-256 hex and must match the file bytes currently on disk.
+- Dry-run must report the current digest, new digest, byte count, and required confirmation without writing.
+- Execution requires exact confirmation and writes through a temporary file plus rename.
+- The tool must refuse hash mismatches, missing files, directories, non-lowercase digests, and unconfirmed mutation.
+
+### `fixture_manifest_verify`
+
+Verifies that a fixture manifest exactly matches the current fixture file set and SHA-256 digests.
+
+Required inputs:
+
+- `manifest_path`
+- at least one of `fixture_paths` or `fixture_prefixes`
+
+Optional inputs:
+
+- `fixture_paths`: exact regular fixture files
+- `fixture_prefixes`: repository-relative files or directories whose regular files are included recursively
+
+Rules:
+
+- The manifest path and all fixture paths/prefixes must resolve inside the repository root.
+- Supported manifest shapes are `{ "files": [{ "path": "...", "sha256": "..." }] }` and `{ "path": "sha256" }`; `digest` and `sha256_digest` are accepted aliases inside `files` entries.
+- Manifest digests must be lowercase SHA-256 hex.
+- The tool must compute actual SHA-256 values for every declared fixture file.
+- The tool must fail with `isError: true` when any manifest file is missing, any collected fixture file is unlisted, or any digest differs.
+- The success report must include the manifest SHA-256, expected file count, actual file count, and empty mismatch sets.
+
+### `fixture_manifest_refresh`
+
+Regenerates a fixture manifest from declared fixture files or prefixes.
+
+Required inputs:
+
+- `manifest_path`
+- at least one of `fixture_paths` or `fixture_prefixes`
+
+Optional inputs:
+
+- `fixture_paths`: exact regular fixture files
+- `fixture_prefixes`: repository-relative files or directories whose regular files are included recursively
+- `expected_manifest_sha256`: required when overwriting an existing manifest
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `refresh fixture manifest` when `dry_run` is `false`
+
+Rules:
+
+- The output manifest shape is `{ "version": 1, "algorithm": "sha256", "files": [{ "path", "sha256", "bytes" }] }`.
+- File entries must be sorted by normalized repository-relative path.
+- Dry-run must report the proposed file count, new manifest SHA-256, and current manifest SHA-256 when present.
+- Execution requires exact confirmation.
+- Overwriting an existing manifest requires `expected_manifest_sha256` matching the current manifest bytes.
+- The manifest parent directory must already exist.
+- The tool must write through a temporary file plus rename and must not create or mutate fixture files.
 
 ### `read_command_log`
 
@@ -471,7 +549,7 @@ Runs a predefined sequence of allowlisted validation commands as one MCP call.
 
 Required inputs:
 
-- `profile`: one of `repo-basic`, `rust-workspace`, `datacore-vscode`, or `datacore-m6-vscode`
+- `profile`: one of `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`
 
 Optional inputs:
 
@@ -909,32 +987,35 @@ The server currently ships:
 2. `read_range`
 3. `write_new_file`
 4. `write_new_file_base64`
-5. `artifact_write_text`
-6. `artifact_write_base64`
-7. `bulk_write_new_files_base64`
-8. `create_directory`
-9. `diff_preview`
-10. `status_guard`
-11. `capability_manifest`
-12. `preflight_health`
-13. `run_guarded_command`
-14. `fixture_generator_run`
-15. `base_image_check_run`
-16. `read_command_log`
-17. `validation_profile_run`
-18. `git_commit_exact`
-19. `git_commit_scoped`
-20. `git_restore_exact`
-21. `delete_untracked_exact`
-22. `git_remote_list`
-23. `git_remote_check`
-24. `git_branch_prepare`
-25. `git_merge_readiness`
-26. `git_push_exact`
-27. `github_pr_run`
-28. `github_fork_prepare`
-29. `setup_profile_run`
-30. `native_build_run`
-31. `native_device_run`
+5. `write_existing_file_exact_hash`
+6. `artifact_write_text`
+7. `artifact_write_base64`
+8. `bulk_write_new_files_base64`
+9. `create_directory`
+10. `diff_preview`
+11. `status_guard`
+12. `capability_manifest`
+13. `preflight_health`
+14. `run_guarded_command`
+15. `fixture_generator_run`
+16. `base_image_check_run`
+17. `fixture_manifest_verify`
+18. `fixture_manifest_refresh`
+19. `read_command_log`
+20. `validation_profile_run`
+21. `git_commit_exact`
+22. `git_commit_scoped`
+23. `git_restore_exact`
+24. `delete_untracked_exact`
+25. `git_remote_list`
+26. `git_remote_check`
+27. `git_branch_prepare`
+28. `git_merge_readiness`
+29. `git_push_exact`
+30. `github_pr_run`
+31. `github_fork_prepare`
+32. `setup_profile_run`
+33. `native_build_run`
+34. `native_device_run`
 
 Other documented boundary tools, such as `apply_patch` and `delete_guarded`, remain planned until implemented. See `docs/implementation-roadmap.md`.

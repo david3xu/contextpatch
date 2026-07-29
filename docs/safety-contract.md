@@ -102,7 +102,10 @@ Rules:
 5. Refuse and report undeclared changed paths rather than pretending the run was safe.
 6. Keep `pip`, Docker, arbitrary `python -m`, arbitrary shell scripts, and caller-supplied shell snippets outside the fixture workflow.
 7. Use `bulk_write_new_files_base64` only as a bounded create-only fallback for fixture files that cannot be generated on the host.
-8. Keep the base-image shell-script exception fixed to `references/check-base-image.sh` through `base_image_check_run`.
+8. Keep the base-image shell-script exception fixed to `references/check-base-image.sh`, optionally with the exact `task` argument, through `base_image_check_run`.
+9. Use `fixture_manifest_verify` to fail on missing, modified, or unlisted fixture files before deriving truth from a fixture tree.
+10. Use `fixture_manifest_refresh` to regenerate manifests from declared paths or prefixes; overwrites require dry-run/confirmation and the current manifest SHA-256.
+11. Use `write_existing_file_exact_hash` only for existing-file synchronization where the caller supplies the exact current SHA-256 and reviews the replacement content.
 
 ## GitHub workflow expectation
 
@@ -158,5 +161,5 @@ Rules:
 - No broad fetch, checkout, merge, or push; only `git_remote_check`, `git_branch_prepare`, `git_merge_readiness`, and `git_push_exact` under their explicit guards
 - No generic package-manager or scaffold runner; only declarative setup profiles under `setup_profile_run`
 - No generic native build/device runner; only typed `native_build_run`, `native_device_run`, and setup-profile actions under their explicit guards
-- No generic fixture generator runner; only `fixture_generator_run` with declared output verification and `bulk_write_new_files_base64` create-only imports
+- No generic fixture generator runner; only `fixture_generator_run` with declared output verification, `fixture_manifest_verify`/`fixture_manifest_refresh` for exact file-set integrity, and `bulk_write_new_files_base64` create-only imports
 - No hidden network calls for edit operations

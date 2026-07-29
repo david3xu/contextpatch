@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn contextpatch_server() -> &'static str {
     env!("CARGO_BIN_EXE_contextpatch-server")
@@ -46,6 +47,7 @@ fn stage1_mcp_tools_work_together() {
         "status_guard",
         "write_new_file",
         "write_new_file_base64",
+        "write_existing_file_exact_hash",
         "artifact_write_text",
         "artifact_write_base64",
         "bulk_write_new_files_base64",
@@ -53,6 +55,8 @@ fn stage1_mcp_tools_work_together() {
         "run_guarded_command",
         "fixture_generator_run",
         "base_image_check_run",
+        "fixture_manifest_verify",
+        "fixture_manifest_refresh",
         "read_command_log",
         "validation_profile_run",
         "setup_profile_run",
@@ -645,6 +649,10 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"fixture_generator_run\"");
     assert_text(&responses[0], "\"base_image_check_run\"");
     assert_text(&responses[0], "\"bulk_write_new_files_base64\"");
+    assert_text(&responses[0], "\"write_existing_file_exact_hash\"");
+    assert_text(&responses[0], "\"fixture_manifest_verify\"");
+    assert_text(&responses[0], "\"fixture_manifest_refresh\"");
+    assert_text(&responses[0], "\"dynamo-harbor-task\"");
     assert_text(&responses[0], "\"action\": \"ios_build\"");
     assert_text(&responses[0], "\"action\": \"android_read_logcat\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
@@ -686,7 +694,7 @@ if len(sys.argv) > 2:
     .unwrap();
     fs::write(
         root.join("references/check-base-image.sh"),
-        "#!/usr/bin/env bash\nexit 0\n",
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = task ]; then exit 0; fi\nexit 1\n",
     )
     .unwrap();
     git(
@@ -705,9 +713,9 @@ if len(sys.argv) > 2:
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fixture_generator_run","arguments":{"script_path":"scripts/gen.py","args":["generated/out.bin"],"expected_output_prefixes":["generated"],"allowed_existing_dirty_paths":["scripts/gen.py","task/environment/data/a.bin","task/environment/data/b.txt"],"dry_run":false,"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"fixture_generator_run","arguments":{"script_path":"scripts/gen.py","args":["generated/out.bin"],"expected_output_prefixes":["generated"],"allowed_existing_dirty_paths":["scripts/gen.py","task/environment/data/a.bin","task/environment/data/b.txt"],"dry_run":false,"confirm":"run fixture generator","timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"fixture_generator_run","arguments":{"script_path":"scripts/gen.py","args":["generated/out2.bin","rogue.txt"],"expected_output_prefixes":["generated"],"allowed_existing_dirty_paths":["scripts/gen.py","generated/out.bin","task/environment/data/a.bin","task/environment/data/b.txt"],"dry_run":false,"confirm":"run fixture generator","timeout_secs":30}}}"#,
-            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"dry_run":true,"timeout_secs":30}}}"#,
-            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"dry_run":false,"timeout_secs":30}}}"#,
-            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"dry_run":false,"confirm":"run base image check","timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"project_path":"task","dry_run":true,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"project_path":"task","dry_run":false,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"project_path":"task","dry_run":false,"confirm":"run base image check","timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"bash","args":["scripts/gen.py"],"timeout_secs":30}}}"#,
         ],
     );
@@ -739,11 +747,79 @@ if len(sys.argv) > 2:
     assert_text(&responses[6], "rogue.txt");
     assert_text(&responses[7], "\"dry_run\": true");
     assert_text(&responses[7], "references/check-base-image.sh");
+    assert_text(&responses[7], "task");
     assert_eq!(responses[8]["result"]["isError"], true);
     assert_text(&responses[8], "confirm must be");
     assert_text(&responses[9], "\"ran\": true");
     assert_eq!(responses[10]["result"]["isError"], true);
     assert_text(&responses[10], "not allowlisted");
+}
+
+#[test]
+fn stage2_manifest_and_hash_tools_cover_fixture_integrity_workflow() {
+    let root = git_repo("stage2_manifest_and_hash_tools_cover_fixture_integrity_workflow");
+    fs::create_dir_all(root.join("task/environment/data")).unwrap();
+    fs::create_dir_all(root.join("task/tests")).unwrap();
+    fs::write(root.join("task/environment/data/a.bin"), [1_u8, 2, 3]).unwrap();
+    fs::write(root.join("task/environment/data/b.txt"), "hello\n").unwrap();
+    fs::write(root.join("README.md"), "before\n").unwrap();
+    git(&root, &["add", "README.md", "task/environment/data"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let readme_sha = sha256_hex_for_test(b"before\n");
+    let dry_write = run_server(
+        &root,
+        &[&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"write_existing_file_exact_hash","arguments":{{"path":"README.md","content":"after\n","expected_sha256":"{readme_sha}","dry_run":true}}}}}}"#
+        )],
+    );
+    assert_text(&dry_write[0], "\"dry_run\": true");
+    assert_eq!(
+        fs::read_to_string(root.join("README.md")).unwrap(),
+        "before\n"
+    );
+
+    let refresh_confirm = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"fixture_manifest_refresh","arguments":{"manifest_path":"task/tests/fixture_manifest.json","fixture_prefixes":["task/environment/data"],"dry_run":false,"confirm":"refresh fixture manifest"}}}"#;
+    let responses = run_server(
+        &root,
+        &[
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"write_existing_file_exact_hash","arguments":{{"path":"README.md","content":"after\n","expected_sha256":"{readme_sha}","dry_run":false}}}}}}"#
+            ),
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"write_existing_file_exact_hash","arguments":{{"path":"README.md","content":"after\n","expected_sha256":"{readme_sha}","dry_run":false,"confirm":"write exact hash"}}}}}}"#
+            ),
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"fixture_manifest_refresh","arguments":{"manifest_path":"task/tests/fixture_manifest.json","fixture_prefixes":["task/environment/data"],"dry_run":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fixture_manifest_refresh","arguments":{"manifest_path":"task/tests/fixture_manifest.json","fixture_prefixes":["task/environment/data"],"dry_run":false}}}"#,
+            refresh_confirm,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"fixture_manifest_verify","arguments":{"manifest_path":"task/tests/fixture_manifest.json","fixture_prefixes":["task/environment/data"]}}}"#,
+        ],
+    );
+
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_text(&responses[0], "requires confirm");
+    assert_text(&responses[1], "\"wrote\": true");
+    assert_eq!(
+        fs::read_to_string(root.join("README.md")).unwrap(),
+        "after\n"
+    );
+    assert_text(&responses[2], "\"dry_run\": true");
+    assert_text(&responses[2], "\"file_count\": 2");
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "requires confirm");
+    assert_text(&responses[4], "\"refreshed\": true");
+    assert_text(&responses[5], "\"verified\": true");
+
+    fs::write(root.join("task/environment/data/b.txt"), "changed\n").unwrap();
+    let verify_again = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fixture_manifest_verify","arguments":{"manifest_path":"task/tests/fixture_manifest.json","fixture_prefixes":["task/environment/data"]}}}"#,
+        ],
+    );
+    assert_eq!(verify_again[0]["result"]["isError"], true);
+    assert_text(&verify_again[0], "\"verified\": false");
+    assert_text(&verify_again[0], "\"modified_files\"");
 }
 
 #[test]
@@ -1136,4 +1212,9 @@ fn temp_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("contextpatch-{name}-{unique}"));
     fs::create_dir_all(&root).unwrap();
     root
+}
+
+fn sha256_hex_for_test(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }

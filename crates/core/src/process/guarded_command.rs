@@ -56,7 +56,10 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         }
         "pytest" => true,
         "harbor" => matches!(subcommand, Some("run")),
-        "bash" => args == ["references/check-base-image.sh"],
+        "bash" => {
+            args == ["references/check-base-image.sh"]
+                || args == ["references/check-base-image.sh", "task"]
+        }
         "rg" => subcommand.is_some(),
         _ => false,
     };
@@ -156,6 +159,14 @@ mod tests {
         )
         .unwrap();
         validate_command("bash", &["references/check-base-image.sh".to_string()]).unwrap();
+        validate_command(
+            "bash",
+            &[
+                "references/check-base-image.sh".to_string(),
+                "task".to_string(),
+            ],
+        )
+        .unwrap();
 
         assert!(
             validate_command("pip", &["install".to_string(), "pytest".to_string()])

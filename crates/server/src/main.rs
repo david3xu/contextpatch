@@ -3,7 +3,7 @@
 mod protocol;
 mod tools;
 
-use std::collections::{hash_map::DefaultHasher, BTreeSet};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, Write};
@@ -22,6 +22,7 @@ use contextpatch_core::process::guarded_command::run_guarded_command;
 use contextpatch_core::replace::exact::replace_exact_in_root;
 use contextpatch_core::setup::profile::{setup_profile_run, CapacitorPlatform, SetupActionParams};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 fn main() -> ExitCode {
     let repo_root = match parse_repo_root(std::env::args().skip(1).collect()) {
@@ -304,6 +305,37 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::write_existing_file_exact_hash::NAME,
+            "description": "Overwrite an existing repository file only when the current SHA-256 hash matches the caller's expectation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Existing file path relative to the configured repository root."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full UTF-8 file content to write."
+                    },
+                    "expected_sha256": {
+                        "type": "string",
+                        "description": "Lowercase SHA-256 hex digest of the current file content."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Validate and preview without writing. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `write exact hash` when dry_run is false."
+                    }
+                },
+                "required": ["path", "content", "expected_sha256"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::artifact_write_text::NAME,
             "description": "Create a new UTF-8 text artifact outside the repository under the fixed contextpatch artifact directory.",
             "inputSchema": {
@@ -424,7 +456,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "program": {
                         "type": "string",
-                        "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, harbor, or rg."
+                        "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, harbor, bash for the exact base-image script, or rg."
                     },
                     "args": {
                         "type": "array",
@@ -507,6 +539,10 @@ fn tool_definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "project_path": {
+                        "type": "string",
+                        "description": "Optional repository-relative project directory argument. For Dynamo/Harbor tasks this is exactly `task`."
+                    },
                     "timeout_secs": {
                         "type": "integer",
                         "minimum": 1,
@@ -522,6 +558,68 @@ fn tool_definitions() -> Value {
                         "description": "Required literal value `run base image check` when dry_run is false."
                     }
                 },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::fixture_manifest_verify::NAME,
+            "description": "Verify a fixture manifest's exact file set and SHA-256 digests against declared repository fixture paths or prefixes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "manifest_path": {
+                        "type": "string",
+                        "description": "Repository-relative manifest JSON path."
+                    },
+                    "fixture_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Exact fixture files to include in the file-set check."
+                    },
+                    "fixture_prefixes": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Repository-relative directories or file prefixes whose regular files must exactly match the manifest."
+                    }
+                },
+                "required": ["manifest_path"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::fixture_manifest_refresh::NAME,
+            "description": "Regenerate a fixture manifest JSON from declared repository fixture paths or prefixes, guarded by dry-run, confirmation, and existing manifest hash.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "manifest_path": {
+                        "type": "string",
+                        "description": "Repository-relative manifest JSON path to create or overwrite."
+                    },
+                    "fixture_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Exact fixture files to include."
+                    },
+                    "fixture_prefixes": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Repository-relative directories or file prefixes whose regular files are included."
+                    },
+                    "expected_manifest_sha256": {
+                        "type": "string",
+                        "description": "Required when overwriting an existing manifest; must match its current SHA-256."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview the generated manifest metadata without writing. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `refresh fixture manifest` when dry_run is false."
+                    }
+                },
+                "required": ["manifest_path"],
                 "additionalProperties": false
             }
         },
@@ -554,7 +652,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "profile": {
                         "type": "string",
-                        "description": "Validation profile name: repo-basic, rust-workspace, datacore-vscode, or datacore-m6-vscode."
+                        "description": "Validation profile name: repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task."
                     },
                     "timeout_secs": {
                         "type": "integer",
@@ -1024,6 +1122,9 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::status_guard::NAME => call_status_guard(repo_root, &arguments),
         tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
         tools::write_new_file_base64::NAME => call_write_new_file_base64(repo_root, &arguments),
+        tools::write_existing_file_exact_hash::NAME => {
+            call_write_existing_file_exact_hash(repo_root, &arguments)
+        }
         tools::artifact_write_text::NAME => call_artifact_write_text(repo_root, &arguments),
         tools::artifact_write_base64::NAME => call_artifact_write_base64(repo_root, &arguments),
         tools::bulk_write_new_files_base64::NAME => {
@@ -1033,6 +1134,10 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::run_guarded_command::NAME => call_run_guarded_command(repo_root, &arguments),
         tools::fixture_generator_run::NAME => call_fixture_generator_run(repo_root, &arguments),
         tools::base_image_check_run::NAME => call_base_image_check_run(repo_root, &arguments),
+        tools::fixture_manifest_verify::NAME => call_fixture_manifest_verify(repo_root, &arguments),
+        tools::fixture_manifest_refresh::NAME => {
+            call_fixture_manifest_refresh(repo_root, &arguments)
+        }
         tools::read_command_log::NAME => call_read_command_log(&arguments),
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
         tools::setup_profile_run::NAME => call_setup_profile_run(repo_root, &arguments),
@@ -1093,6 +1198,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "replace_exact": true,
             "write_new_file": true,
             "write_new_file_base64": true,
+            "write_existing_file_exact_hash": true,
             "artifact_write_text": true,
             "artifact_write_base64": true,
             "create_directory": true,
@@ -1116,6 +1222,9 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "bulk_write_new_files_base64": true,
             "fixture_generator_run": true,
             "base_image_check_run": true
+            ,
+            "fixture_manifest_verify": true,
+            "fixture_manifest_refresh": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
@@ -1181,15 +1290,18 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "python3": ["repo-relative .py script"],
                 "pytest": ["validation invocation"],
                 "harbor": ["run"],
-                "bash": ["references/check-base-image.sh only"],
+                "bash": ["references/check-base-image.sh", "references/check-base-image.sh task"],
                 "rg": ["search"]
             },
             "typed_workflows": {
                 "fixture_generator_run": "Runs repo-relative Python generators after planning, confirmation, and declared-output verification.",
-                "base_image_check_run": "Runs only references/check-base-image.sh; arbitrary shell scripts remain unsupported.",
-                "bulk_write_new_files_base64": "Imports many create-only binary/text fixture files with per-file and total size bounds."
+                "base_image_check_run": "Runs only references/check-base-image.sh, optionally with the exact task project argument; arbitrary shell scripts remain unsupported.",
+                "bulk_write_new_files_base64": "Imports many create-only binary/text fixture files with per-file and total size bounds.",
+                "write_existing_file_exact_hash": "Overwrites an existing file only when the current SHA-256 matches.",
+                "fixture_manifest_verify": "Verifies exact fixture file sets and SHA-256 digests.",
+                "fixture_manifest_refresh": "Regenerates fixture manifests with dry-run, confirmation, and existing-manifest hash guard."
             },
-            "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode"],
+            "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode", "dynamo-harbor-task"],
             "guards": [
                 "repo-root-confined cwd",
                 "no shell interpolation",
@@ -1603,6 +1715,87 @@ fn call_write_new_file_base64(
     ))
 }
 
+fn call_write_existing_file_exact_hash(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "write exact hash";
+
+    let path = required_string(arguments, "path")?;
+    let content = required_string(arguments, "content")?;
+    let expected_sha256 = validate_sha256_hex(
+        tools::write_existing_file_exact_hash::NAME,
+        required_string(arguments, "expected_sha256")?,
+    )?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "write_existing_file_exact_hash refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = canonical_repo_root(repo_root, tools::write_existing_file_exact_hash::NAME)?;
+    let normalized =
+        normalize_repo_relative_path(tools::write_existing_file_exact_hash::NAME, path)?;
+    let target = root.join(&normalized);
+    if !target.is_file() {
+        return Err(format!(
+            "write_existing_file_exact_hash refused: `{normalized}` is not an existing regular file"
+        ));
+    }
+    let current = fs::read(&target).map_err(|error| {
+        format!("write_existing_file_exact_hash refused: failed to read `{normalized}`: {error}")
+    })?;
+    let current_sha256 = sha256_hex(&current);
+    if current_sha256 != expected_sha256 {
+        return Err(format!(
+            "write_existing_file_exact_hash refused: `{normalized}` hash mismatch; current_sha256={current_sha256}, expected_sha256={expected_sha256}"
+        ));
+    }
+    let new_bytes = content.as_bytes();
+    let new_sha256 = sha256_hex(new_bytes);
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::write_existing_file_exact_hash::NAME,
+            "dry_run": true,
+            "would_write": true,
+            "path": normalized,
+            "current_sha256": current_sha256,
+            "new_sha256": new_sha256,
+            "bytes_written": new_bytes.len(),
+            "confirm_required": CONFIRMATION
+        }))
+        .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"));
+    }
+
+    let temporary = target.with_extension(format!(
+        "contextpatch-tmp-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?
+            .as_nanos()
+    ));
+    fs::write(&temporary, new_bytes).map_err(|error| {
+        format!("write_existing_file_exact_hash refused: failed to write temporary file: {error}")
+    })?;
+    fs::rename(&temporary, &target).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!("write_existing_file_exact_hash refused: failed to replace `{normalized}`: {error}")
+    })?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::write_existing_file_exact_hash::NAME,
+        "dry_run": false,
+        "wrote": true,
+        "path": normalized,
+        "previous_sha256": current_sha256,
+        "sha256": new_sha256,
+        "bytes_written": new_bytes.len()
+    }))
+    .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))
+}
+
 fn call_artifact_write_text(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
@@ -1948,6 +2141,8 @@ fn call_base_image_check_run(
 
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
     let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
+    let project_path = optional_string(arguments, "project_path")?;
+    let command_args = base_image_check_args(project_path)?;
     let root = canonical_repo_root(repo_root, tools::base_image_check_run::NAME)?;
     if !root.join(SCRIPT).is_file() {
         return Err(format!(
@@ -1960,11 +2155,11 @@ fn call_base_image_check_run(
             "dry_run": true,
             "would_run": {
                 "program": "bash",
-                "args": [SCRIPT],
+                "args": command_args,
                 "cwd": ".",
                 "timeout_secs": timeout_secs
             },
-            "scope": "exact base-image check script only; arbitrary shell remains unsupported",
+            "scope": "exact base-image check script only, optionally with the exact task project argument; arbitrary shell remains unsupported",
             "confirm_required": CONFIRMATION
         }))
         .map_err(|error| format!("base_image_check_run refused: {error}"));
@@ -1981,14 +2176,8 @@ fn call_base_image_check_run(
         ));
     }
 
-    let output = run_guarded_command(
-        &root,
-        None,
-        "bash",
-        &[SCRIPT.to_string()],
-        Some(timeout_secs),
-    )
-    .map_err(|error| format!("base_image_check_run refused: {error}"))?;
+    let output = run_guarded_command(&root, None, "bash", &command_args, Some(timeout_secs))
+        .map_err(|error| format!("base_image_check_run refused: {error}"))?;
     if !guarded_output_succeeded(&output) {
         return Err(format!(
             "base_image_check_run refused: check command failed\n{output}"
@@ -1999,9 +2188,397 @@ fn call_base_image_check_run(
         "tool": tools::base_image_check_run::NAME,
         "ran": true,
         "script": SCRIPT,
+        "args": command_args,
         "command_output": output
     }))
     .map_err(|error| format!("base_image_check_run refused: {error}"))
+}
+
+fn base_image_check_args(project_path: Option<&str>) -> Result<Vec<String>, String> {
+    const SCRIPT: &str = "references/check-base-image.sh";
+    match project_path {
+        Some("task") => Ok(vec![SCRIPT.to_string(), "task".to_string()]),
+        Some(other) => Err(format!(
+            "base_image_check_run refused: project_path must be exactly `task` when provided, got `{other}`"
+        )),
+        None => Ok(vec![SCRIPT.to_string()]),
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn validate_sha256_hex(tool_name: &str, value: &str) -> Result<String, String> {
+    if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{tool_name} refused: SHA-256 digest must be 64 hexadecimal characters"
+        ));
+    }
+    if value.chars().any(|ch| ch.is_ascii_uppercase()) {
+        return Err(format!(
+            "{tool_name} refused: SHA-256 digest must be lowercase hex"
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn parse_fixture_manifest(
+    tool_name: &str,
+    value: &Value,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut entries = BTreeMap::new();
+    match value {
+        Value::Object(object) => {
+            if let Some(files) = object.get("files") {
+                let files = files.as_array().ok_or_else(|| {
+                    format!("{tool_name} refused: manifest files must be an array")
+                })?;
+                for (index, entry) in files.iter().enumerate() {
+                    let entry = entry.as_object().ok_or_else(|| {
+                        format!("{tool_name} refused: manifest files[{index}] must be an object")
+                    })?;
+                    let path = entry.get("path").and_then(Value::as_str).ok_or_else(|| {
+                        format!("{tool_name} refused: manifest files[{index}].path is required")
+                    })?;
+                    let sha = entry
+                        .get("sha256")
+                        .or_else(|| entry.get("digest"))
+                        .or_else(|| entry.get("sha256_digest"))
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            format!(
+                                "{tool_name} refused: manifest files[{index}] needs sha256 or digest"
+                            )
+                        })?;
+                    let normalized = normalize_repo_relative_path(tool_name, path)?;
+                    let sha = validate_sha256_hex(tool_name, sha)?;
+                    if entries.insert(normalized.clone(), sha).is_some() {
+                        return Err(format!(
+                            "{tool_name} refused: manifest has duplicate path `{normalized}`"
+                        ));
+                    }
+                }
+            } else {
+                for (path, digest) in object {
+                    let digest = digest.as_str().ok_or_else(|| {
+                        format!(
+                            "{tool_name} refused: manifest object values must be SHA-256 strings"
+                        )
+                    })?;
+                    let normalized = normalize_repo_relative_path(tool_name, path)?;
+                    let digest = validate_sha256_hex(tool_name, digest)?;
+                    if entries.insert(normalized.clone(), digest).is_some() {
+                        return Err(format!(
+                            "{tool_name} refused: manifest has duplicate path `{normalized}`"
+                        ));
+                    }
+                }
+            }
+        }
+        _ => {
+            return Err(format!(
+                "{tool_name} refused: manifest root must be an object"
+            ))
+        }
+    }
+    if entries.is_empty() {
+        return Err(format!(
+            "{tool_name} refused: manifest must contain at least one file"
+        ));
+    }
+    Ok(entries)
+}
+
+fn collect_fixture_files_from_args(
+    tool_name: &str,
+    root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<BTreeMap<String, String>, String> {
+    let fixture_paths = optional_string_array(arguments, "fixture_paths")?;
+    let fixture_prefixes = optional_string_array(arguments, "fixture_prefixes")?;
+    if fixture_paths.is_empty() && fixture_prefixes.is_empty() {
+        return Err(format!(
+            "{tool_name} refused: at least one fixture_paths or fixture_prefixes entry is required"
+        ));
+    }
+
+    let mut paths = BTreeSet::new();
+    for path in normalize_repo_relative_paths(tool_name, &fixture_paths)? {
+        let target = root.join(&path);
+        if !target.is_file() {
+            return Err(format!(
+                "{tool_name} refused: fixture path `{path}` is not a regular file"
+            ));
+        }
+        paths.insert(path);
+    }
+    for prefix in normalize_repo_relative_paths(tool_name, &fixture_prefixes)? {
+        let target = root.join(&prefix);
+        if target.is_file() {
+            paths.insert(prefix);
+        } else if target.is_dir() {
+            collect_regular_files(tool_name, root, &target, &mut paths)?;
+        } else {
+            return Err(format!(
+                "{tool_name} refused: fixture prefix `{prefix}` is not a file or directory"
+            ));
+        }
+    }
+
+    let mut result = BTreeMap::new();
+    for path in paths {
+        let target = root.join(&path);
+        let bytes = fs::read(&target)
+            .map_err(|error| format!("{tool_name} refused: failed to read `{path}`: {error}"))?;
+        result.insert(path, sha256_hex(&bytes));
+    }
+    Ok(result)
+}
+
+fn collect_regular_files(
+    tool_name: &str,
+    root: &Path,
+    directory: &Path,
+    paths: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|error| format!("{tool_name} refused: failed to read directory: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("{tool_name} refused: failed to read directory entry: {error}"))?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "{tool_name} refused: failed to inspect `{}`: {error}",
+                path.display()
+            )
+        })?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "{tool_name} refused: fixture path `{}` is a symlink",
+                path.display()
+            ));
+        }
+        if file_type.is_dir() {
+            collect_regular_files(tool_name, root, &path, paths)?;
+        } else if file_type.is_file() {
+            paths.insert(repo_relative_string(tool_name, root, &path)?);
+        }
+    }
+    Ok(())
+}
+
+fn repo_relative_string(tool_name: &str, root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path.strip_prefix(root).map_err(|error| {
+        format!(
+            "{tool_name} refused: path `{}` is outside repository root: {error}",
+            path.display()
+        )
+    })?;
+    let parts = relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(value) => Ok(value.to_string_lossy().into_owned()),
+            _ => Err(format!(
+                "{tool_name} refused: collected path must be normalized relative"
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(parts.join("/"))
+}
+
+fn call_fixture_manifest_verify(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let manifest_path = required_string(arguments, "manifest_path")?;
+    let root = canonical_repo_root(repo_root, tools::fixture_manifest_verify::NAME)?;
+    let manifest_normalized =
+        normalize_repo_relative_path(tools::fixture_manifest_verify::NAME, manifest_path)?;
+    let manifest_target = root.join(&manifest_normalized);
+    if !manifest_target.is_file() {
+        return Err(format!(
+            "fixture_manifest_verify refused: manifest `{manifest_normalized}` is not an existing file"
+        ));
+    }
+    let manifest_bytes = fs::read(&manifest_target).map_err(|error| {
+        format!("fixture_manifest_verify refused: failed to read `{manifest_normalized}`: {error}")
+    })?;
+    let manifest_value: Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
+        format!("fixture_manifest_verify refused: manifest JSON is invalid: {error}")
+    })?;
+    let expected = parse_fixture_manifest(tools::fixture_manifest_verify::NAME, &manifest_value)?;
+    let actual =
+        collect_fixture_files_from_args(tools::fixture_manifest_verify::NAME, &root, arguments)?;
+    let expected_paths = expected.keys().cloned().collect::<BTreeSet<_>>();
+    let actual_paths = actual.keys().cloned().collect::<BTreeSet<_>>();
+    let missing_files = expected_paths
+        .difference(&actual_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let unlisted_files = actual_paths
+        .difference(&expected_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut modified_files = Vec::new();
+    for path in expected_paths.intersection(&actual_paths) {
+        let expected_sha = expected.get(path).expect("path from expected set");
+        let actual_sha = actual.get(path).expect("path from actual set");
+        if expected_sha != actual_sha {
+            modified_files.push(json!({
+                "path": path,
+                "expected_sha256": expected_sha,
+                "actual_sha256": actual_sha
+            }));
+        }
+    }
+    let verified =
+        missing_files.is_empty() && unlisted_files.is_empty() && modified_files.is_empty();
+
+    let report = serde_json::to_string_pretty(&json!({
+        "tool": tools::fixture_manifest_verify::NAME,
+        "verified": verified,
+        "manifest_path": manifest_normalized,
+        "manifest_sha256": sha256_hex(&manifest_bytes),
+        "file_count": expected.len(),
+        "actual_file_count": actual.len(),
+        "missing_files": missing_files,
+        "unlisted_files": unlisted_files,
+        "modified_files": modified_files
+    }))
+    .map_err(|error| format!("fixture_manifest_verify refused: {error}"))?;
+    if !verified {
+        return Err(format!(
+            "fixture_manifest_verify refused: fixture file set or digest mismatch\n{report}"
+        ));
+    }
+    Ok(report)
+}
+
+fn call_fixture_manifest_refresh(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "refresh fixture manifest";
+
+    let manifest_path = required_string(arguments, "manifest_path")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "fixture_manifest_refresh refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+    let root = canonical_repo_root(repo_root, tools::fixture_manifest_refresh::NAME)?;
+    let manifest_normalized =
+        normalize_repo_relative_path(tools::fixture_manifest_refresh::NAME, manifest_path)?;
+    let manifest_target = root.join(&manifest_normalized);
+    let current_manifest = if manifest_target.exists() {
+        if !manifest_target.is_file() {
+            return Err(format!(
+                "fixture_manifest_refresh refused: manifest path `{manifest_normalized}` is not a regular file"
+            ));
+        }
+        let bytes = fs::read(&manifest_target).map_err(|error| {
+            format!(
+                "fixture_manifest_refresh refused: failed to read `{manifest_normalized}`: {error}"
+            )
+        })?;
+        Some((sha256_hex(&bytes), bytes))
+    } else {
+        None
+    };
+    if !dry_run {
+        if let Some((current_sha, _)) = &current_manifest {
+            let expected = optional_string(arguments, "expected_manifest_sha256")?.ok_or_else(|| {
+                "fixture_manifest_refresh refused: expected_manifest_sha256 is required when overwriting an existing manifest".to_string()
+            })?;
+            let expected = validate_sha256_hex(tools::fixture_manifest_refresh::NAME, expected)?;
+            if &expected != current_sha {
+                return Err(format!(
+                    "fixture_manifest_refresh refused: manifest hash mismatch; current_sha256={current_sha}, expected_manifest_sha256={expected}"
+                ));
+            }
+        }
+    }
+
+    let actual =
+        collect_fixture_files_from_args(tools::fixture_manifest_refresh::NAME, &root, arguments)?;
+    let files = actual
+        .iter()
+        .map(|(path, sha256)| {
+            let bytes = fs::metadata(root.join(path))
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            json!({
+                "path": path,
+                "sha256": sha256,
+                "bytes": bytes
+            })
+        })
+        .collect::<Vec<_>>();
+    let manifest = json!({
+        "version": 1,
+        "algorithm": "sha256",
+        "files": files
+    });
+    let manifest_text = serde_json::to_string_pretty(&manifest)
+        .map_err(|error| format!("fixture_manifest_refresh refused: {error}"))?
+        + "\n";
+    let new_sha256 = sha256_hex(manifest_text.as_bytes());
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::fixture_manifest_refresh::NAME,
+            "dry_run": true,
+            "would_write": true,
+            "manifest_path": manifest_normalized,
+            "file_count": actual.len(),
+            "current_manifest_sha256": current_manifest.as_ref().map(|(sha, _)| sha),
+            "new_manifest_sha256": new_sha256,
+            "confirm_required": CONFIRMATION
+        }))
+        .map_err(|error| format!("fixture_manifest_refresh refused: {error}"));
+    }
+
+    if let Some(parent) = manifest_target.parent() {
+        if !parent.is_dir() {
+            return Err(format!(
+                "fixture_manifest_refresh refused: parent directory for `{manifest_normalized}` does not exist"
+            ));
+        }
+    }
+    let temporary = manifest_target.with_extension(format!(
+        "contextpatch-tmp-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("fixture_manifest_refresh refused: {error}"))?
+            .as_nanos()
+    ));
+    fs::write(&temporary, manifest_text).map_err(|error| {
+        format!(
+            "fixture_manifest_refresh refused: failed to write temporary manifest for `{manifest_normalized}`: {error}"
+        )
+    })?;
+    fs::rename(&temporary, &manifest_target).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!(
+            "fixture_manifest_refresh refused: failed to replace `{manifest_normalized}`: {error}"
+        )
+    })?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::fixture_manifest_refresh::NAME,
+        "dry_run": false,
+        "refreshed": true,
+        "manifest_path": manifest_normalized,
+        "file_count": actual.len(),
+        "sha256": new_sha256
+    }))
+    .map_err(|error| format!("fixture_manifest_refresh refused: {error}"))
 }
 
 fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
@@ -4341,8 +4918,46 @@ fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, String> {
             });
             Ok(commands)
         }
+        "dynamo-harbor-task" => Ok(vec![
+            ProfileCommand {
+                program: "git",
+                args: vec!["diff", "--check"],
+                cwd: None,
+                timeout_secs: Some(30),
+            },
+            ProfileCommand {
+                program: "bash",
+                args: vec!["references/check-base-image.sh", "task"],
+                cwd: None,
+                timeout_secs: Some(600),
+            },
+            ProfileCommand {
+                program: "harbor",
+                args: vec!["run", "-p", "task", "--agent", "oracle"],
+                cwd: None,
+                timeout_secs: Some(600),
+            },
+            ProfileCommand {
+                program: "harbor",
+                args: vec!["run", "-p", "task", "--agent", "nop"],
+                cwd: None,
+                timeout_secs: Some(600),
+            },
+            ProfileCommand {
+                program: "harbor",
+                args: vec!["run", "-p", "task", "--agent", "oracle"],
+                cwd: None,
+                timeout_secs: Some(600),
+            },
+            ProfileCommand {
+                program: "harbor",
+                args: vec!["run", "-p", "task", "--agent", "nop"],
+                cwd: None,
+                timeout_secs: Some(600),
+            },
+        ]),
         _ => Err(format!(
-            "validation_profile_run refused: unknown profile `{profile}`; expected repo-basic, rust-workspace, datacore-vscode, or datacore-m6-vscode"
+            "validation_profile_run refused: unknown profile `{profile}`; expected repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task"
         )),
     }
 }
