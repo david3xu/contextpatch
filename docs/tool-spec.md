@@ -490,6 +490,7 @@ Rules:
 - Paths must be normalized repository-relative paths and must not use path traversal, absolute paths, NUL bytes, or Git pathspec metacharacters.
 - Rename/copy status entries are refused until a dedicated tracked-move workflow exists.
 - The tool may run `git add -- <paths>` and one local `git commit`; it must not fetch, pull, push, reset, checkout, stash, clean, or modify remotes.
+- Commit subjects and bodies should remain project-owned and must not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless explicitly requested by the repository owner for that commit.
 - The tool must verify that the staged path set exactly matches `paths` before committing.
 - On success, the tool returns the commit hash, short hash, committed paths, and post-commit short status.
 - Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.

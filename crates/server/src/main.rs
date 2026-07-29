@@ -759,6 +759,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "merge_readiness": true,
             "push_exact_commit": true,
             "reset_checkout_clean_stash": false,
+            "commit_attribution": "Do not include Claude, Anthropic, AI, or assistant attribution in commit messages. Use the repository user's authorship and project-owned commit message only.",
             "guards": [
                 "requires exact complete dirty-path set",
                 "defaults to dry_run",
