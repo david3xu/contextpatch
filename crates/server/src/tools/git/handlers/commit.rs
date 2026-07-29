@@ -418,3 +418,92 @@ pub(crate) fn call_git_commit_prefix(
     }))
     .map_err(|error| format!("git_commit_prefix refused: {error}"))
 }
+
+pub(crate) fn call_git_stage_exact(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "stage exact paths";
+
+    let paths = required_string_array(arguments, "paths")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    if paths.is_empty() {
+        return Err("git_stage_exact refused: paths must not be empty".to_string());
+    }
+    if paths.len() > 500 {
+        return Err("git_stage_exact refused: at most 500 paths may be staged".to_string());
+    }
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "git_stage_exact refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = canonical_repo_root(repo_root, tools::git_stage_exact::NAME)?;
+    let normalized_paths = normalize_git_paths(tools::git_stage_exact::NAME, &root, &paths)?;
+    let requested_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
+    if requested_paths.len() != normalized_paths.len() {
+        return Err("git_stage_exact refused: duplicate paths are not allowed".to_string());
+    }
+
+    let dirty_paths = git_status_paths_for_tool(tools::git_stage_exact::NAME, &root)?;
+    if dirty_paths.is_empty() {
+        return Err("git_stage_exact refused: repository has no dirty paths".to_string());
+    }
+    let not_dirty = requested_paths
+        .difference(&dirty_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !not_dirty.is_empty() {
+        return Err(format!(
+            "git_stage_exact refused: every requested path must currently be dirty\nnot_dirty_paths:\n{}",
+            format_set(&not_dirty)
+        ));
+    }
+
+    let staged_before = git_cached_paths_for_tool(tools::git_stage_exact::NAME, &root)?;
+    if !staged_before.is_empty() {
+        return Err(format!(
+            "git_stage_exact refused: index must be clean before staging exact paths\nstaged_paths:\n{}",
+            format_set(&staged_before)
+        ));
+    }
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::git_stage_exact::NAME,
+            "dry_run": true,
+            "would_stage_paths": normalized_paths,
+            "would_commit": false,
+            "required_confirm_for_stage": CONFIRMATION
+        }))
+        .map_err(|error| format!("git_stage_exact refused: {error}"));
+    }
+
+    git_success_for_tool(
+        tools::git_stage_exact::NAME,
+        &root,
+        git_args("add", &normalized_paths),
+    )?;
+    let staged_paths = git_cached_paths_for_tool(tools::git_stage_exact::NAME, &root)?;
+    if staged_paths != requested_paths {
+        return Err(format!(
+            "git_stage_exact refused after staging: staged paths differ from requested exact set\nrequested:\n{}\nstaged:\n{}",
+            format_set(&requested_paths),
+            format_set(&staged_paths)
+        ));
+    }
+    let status = git_status_short(&root)?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_stage_exact::NAME,
+        "dry_run": false,
+        "staged": true,
+        "committed": false,
+        "paths": normalized_paths,
+        "status_short": status
+    }))
+    .map_err(|error| format!("git_stage_exact refused: {error}"))
+}

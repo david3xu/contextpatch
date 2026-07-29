@@ -25,6 +25,9 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
         tools::diff_preview::NAME => tools::files::call_diff_preview(repo_root, &arguments),
         tools::replace_exact::NAME => tools::files::call_replace_exact(repo_root, &arguments),
         tools::status_guard::NAME => tools::files::call_status_guard(repo_root, &arguments),
+        tools::file_info::NAME => tools::files::call_file_info(repo_root, &arguments),
+        tools::list_directory::NAME => tools::files::call_list_directory(repo_root, &arguments),
+        tools::read_file_bytes::NAME => tools::files::call_read_file_bytes(repo_root, &arguments),
         tools::write_new_file::NAME => tools::files::call_write_new_file(repo_root, &arguments),
         tools::write_new_file_base64::NAME => {
             tools::files::call_write_new_file_base64(repo_root, &arguments)
@@ -61,6 +64,10 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
         tools::image_cleanliness_check_run::NAME => {
             tools::process::call_image_cleanliness_check_run(&arguments)
         }
+        tools::docker_image_inspect::NAME => tools::process::call_docker_image_inspect(&arguments),
+        tools::artifact_python_run::NAME => {
+            tools::process::call_artifact_python_run(repo_root, &arguments)
+        }
         tools::validation_profile_run::NAME => {
             tools::process::call_validation_profile_run(repo_root, &arguments)
         }
@@ -81,6 +88,9 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
         }
         tools::git_commit_prefix::NAME => {
             tools::git::handlers::call_git_commit_prefix(repo_root, &arguments)
+        }
+        tools::git_stage_exact::NAME => {
+            tools::git::handlers::call_git_stage_exact(repo_root, &arguments)
         }
         tools::git_restore_exact::NAME => {
             tools::git::handlers::call_git_restore_exact(repo_root, &arguments)

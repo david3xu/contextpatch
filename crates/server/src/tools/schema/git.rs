@@ -113,6 +113,34 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::git_stage_exact::NAME,
+                    "description": "Dry-run or stage explicit dirty paths without creating a commit. Requires a clean index first.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "description": "Repository-relative dirty paths to stage. Other dirty paths are preserved unstaged."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without staging. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `stage exact paths` when dry_run is false."
+                            }
+                        },
+                        "required": ["paths"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::git_restore_exact::NAME,
                     "description": "Dry-run or restore exact dirty repository paths from HEAD. Use for generated noise cleanup before exact commits; never resets the whole worktree.",
                     "inputSchema": {

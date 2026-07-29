@@ -57,7 +57,7 @@ If the platform cannot provide the expected atomic behavior, the operation must 
 
 ## Git guard expectation
 
-Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves. The allowed commit workflows are `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix`: all default to dry-run, require explicit confirmation before mutation, stage only requested or prefix-expanded paths, create at most one local commit, and never push. `git_commit_exact` requires an exact complete dirty-path set. `git_commit_scoped` permits an explicit subset of dirty paths only when the index is clean, preserving unrelated dirty paths. `git_commit_prefix` expands explicit prefixes to exact dirty paths first, reports that set, and commits only that expanded set. `git_remote_list` may run only read-only remote inspection. `delete_untracked_exact` may remove only explicit untracked regular files after dry-run and confirmation. `delete_generated_prefix` may expand explicit prefixes only to ignored/untracked files and empty directories, must refuse tracked paths, and must not behave like broad `git clean`.
+Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves. `git_stage_exact` is index-only: it stages explicit dirty paths after a clean-index gate, defaults to dry-run, requires exact confirmation, and must not commit. The allowed commit workflows are `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix`: all default to dry-run, require explicit confirmation before mutation, stage only requested or prefix-expanded paths, create at most one local commit, and never push. `git_commit_exact` requires an exact complete dirty-path set. `git_commit_scoped` permits an explicit subset of dirty paths only when the index is clean, preserving unrelated dirty paths. `git_commit_prefix` expands explicit prefixes to exact dirty paths first, reports that set, and commits only that expanded set. `git_remote_list` may run only read-only remote inspection. `delete_untracked_exact` may remove only explicit untracked regular files after dry-run and confirmation. `delete_generated_prefix` may expand explicit prefixes only to ignored/untracked files and empty directories, must refuse tracked paths, and must not behave like broad `git clean`.
 
 Remote Git authority is intentionally split. `git_remote_check` may fetch exactly one explicit remote branch and report local/remote divergence without changing source files. `git_branch_prepare` may fetch exactly one explicit remote base branch, create or switch to one validated local branch from that base, and reset an existing local branch only when the worktree is clean and `confirm: "reset branch from remote base"` is supplied. `git_merge_readiness` may optionally fetch one explicit remote branch, then run read-only merge-base, rev-count, and diff-name queries to identify files changed on both sides of two validated refs. `git_push_exact` may push only the current `HEAD` to the matching named remote branch after verifying a clean worktree, current branch match, expected HEAD hash, no remote-ahead divergence, and explicit `confirm: "push exact commit"`. Tools must not expose broad reset, checkout, merge, merge-tree through generic command execution, rebase, stash, clean, force-push, push tags, push multiple refs, delete refs, or discard user work outside those explicit branch-prep reset guards.
 
@@ -70,6 +70,8 @@ Binary file creation, if exposed, must be create-only for one explicit path, ref
 Bulk fixture import, if exposed, must remain a bounded create-only variant of binary file creation. It may create missing parents only when explicitly requested, but it must reject overwrites, traversal, duplicate paths, excessive file counts, and excessive total decoded bytes.
 
 Sidecar artifact creation, if exposed, must use a fixed artifact root outside the repository. It must reject absolute paths and traversal, refuse overwrites, optionally create parents only under that artifact root, and never claim repository mutation semantics.
+
+Read-only file inspection may report metadata, SHA-256 digests, line counts, one-directory entries, symlink status, and bounded byte ranges, but it must stay repository-root-confined and must not become recursive unrestricted filesystem traversal.
 
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
 
@@ -90,7 +92,9 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 11. Resolve executable names from the host `PATH` plus server-configured validation path entries such as `CONTEXTPATCH_VALIDATION_PATHS`, while still refusing caller-supplied executable paths or per-request environment overrides.
 12. Add latency instrumentation with monotonic durations and response sizes so performance work is evidence-based, while never recording secrets, environment values, or unredacted command output in timing metadata.
 
-`image_cleanliness_check_run` is a separate narrow Docker gate, not general Docker authority. It may plan or run only `docker run --rm --network none --entrypoint find <image> / -name <filename>`, defaults to dry-run, requires exact confirmation for execution, and must not expose mounts, caller-selected entrypoints, network access, shell snippets, or arbitrary Docker arguments.
+`artifact_python_run` is an artifact-root scratch runner, not a shell. It may run only a Python script that already exists under the fixed artifact root, with bounded argv and repo-root-confined cwd, so analysis scripts do not have to be created inside the repository. It must not accept caller-supplied executable paths, shell snippets, or per-request environment overrides.
+
+`image_cleanliness_check_run` and `docker_image_inspect` are separate narrow Docker gates, not general Docker authority. They may plan or run only `docker run --rm --network none --entrypoint find <image> / -name <filename>` and `docker image inspect <image>` respectively, default to dry-run, require exact confirmation for execution, and must not expose mounts, caller-selected entrypoints, network access, shell snippets, or arbitrary Docker arguments.
 
 ## Fixture workflow expectation
 
@@ -109,6 +113,7 @@ Rules:
 9. Use `fixture_manifest_verify` to fail on missing, modified, or unlisted fixture files before deriving truth from a fixture tree.
 10. Use `fixture_manifest_refresh` to regenerate manifests from declared paths or prefixes; overwrites require dry-run/confirmation and the current manifest SHA-256.
 11. Use `write_existing_file_exact_hash` only for existing-file synchronization where the caller supplies the exact current SHA-256 and reviews the replacement content.
+12. Use `file_info` to obtain that current SHA-256 instead of creating a temporary digest script in the repository.
 
 ## GitHub workflow expectation
 

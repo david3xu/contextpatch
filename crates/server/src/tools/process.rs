@@ -10,6 +10,14 @@ pub mod image_cleanliness_check_run {
     pub const NAME: &str = "image_cleanliness_check_run";
 }
 
+pub mod artifact_python_run {
+    pub const NAME: &str = "artifact_python_run";
+}
+
+pub mod docker_image_inspect {
+    pub const NAME: &str = "docker_image_inspect";
+}
+
 pub mod validation_profile_run {
     pub const NAME: &str = "validation_profile_run";
 }
@@ -25,7 +33,8 @@ use contextpatch_core::process::guarded_command::run_guarded_command;
 use serde_json::Value;
 
 use crate::tools::common::{
-    optional_bool, optional_string, optional_u64, required_string, required_string_array,
+    optional_bool, optional_string, optional_string_array, optional_u64, required_string,
+    required_string_array,
 };
 
 pub(crate) fn call_run_guarded_command(
@@ -48,19 +57,34 @@ pub(crate) fn call_read_command_log(
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let log_id = required_string(arguments, "log_id")?;
+    let offset = optional_u64(arguments, "offset")?.unwrap_or(0);
     let max_chars = optional_u64(arguments, "max_chars")?.unwrap_or(12_000);
     if max_chars == 0 || max_chars > 200_000 {
         return Err("read_command_log refused: max_chars must be between 1 and 200000".to_string());
     }
 
     let path = command_log_path(log_id)?;
-    let mut text = fs::read_to_string(&path)
+    let text = fs::read_to_string(&path)
         .map_err(|error| format!("read_command_log refused: failed to read {log_id}: {error}"))?;
-    if text.len() > max_chars as usize {
-        text.truncate(max_chars as usize);
-        text.push_str("\n[truncated]");
+    let start = usize::try_from(offset)
+        .map_err(|_| "read_command_log refused: offset is too large".to_string())?;
+    let chars = text.chars().collect::<Vec<_>>();
+    if start > chars.len() {
+        return Err(format!(
+            "read_command_log refused: offset {offset} is past end of log ({}) characters",
+            chars.len()
+        ));
     }
-    Ok(format!("log_id: {log_id}\n{text}"))
+    let end = start.saturating_add(max_chars as usize).min(chars.len());
+    let mut slice = chars[start..end].iter().collect::<String>();
+    if end < chars.len() {
+        slice.push_str("\n[truncated]");
+    }
+    Ok(format!(
+        "log_id: {log_id}\noffset: {offset}\nchars_returned: {}\ntotal_chars: {}\n{slice}",
+        end - start,
+        chars.len()
+    ))
 }
 
 pub(crate) fn call_image_cleanliness_check_run(
@@ -74,8 +98,8 @@ pub(crate) fn call_image_cleanliness_check_run(
     let confirm = optional_string(arguments, "confirm")?;
     let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
 
-    validate_docker_image_ref(image)?;
-    validate_find_filename(filename)?;
+    validate_docker_image_ref(image, crate::tools::image_cleanliness_check_run::NAME)?;
+    validate_find_filename(filename, crate::tools::image_cleanliness_check_run::NAME)?;
     if timeout_secs == 0 || timeout_secs > 600 {
         return Err(
             "image_cleanliness_check_run refused: timeout_secs must be between 1 and 600"
@@ -111,7 +135,11 @@ pub(crate) fn call_image_cleanliness_check_run(
         .map_err(|error| format!("image_cleanliness_check_run refused: {error}"));
     }
 
-    let output = run_bounded_docker(&args, timeout_secs)?;
+    let output = run_bounded_docker(
+        crate::tools::image_cleanliness_check_run::NAME,
+        &args,
+        timeout_secs,
+    )?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let matches = stdout
@@ -133,6 +161,121 @@ pub(crate) fn call_image_cleanliness_check_run(
         "stderr": stderr
     }))
     .map_err(|error| format!("image_cleanliness_check_run refused: {error}"))
+}
+
+pub(crate) fn call_docker_image_inspect(
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "inspect docker image";
+
+    let image = required_string(arguments, "image")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
+
+    validate_docker_image_ref(image, crate::tools::docker_image_inspect::NAME)?;
+    if timeout_secs == 0 || timeout_secs > 600 {
+        return Err(
+            "docker_image_inspect refused: timeout_secs must be between 1 and 600".to_string(),
+        );
+    }
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "docker_image_inspect refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+    let args = vec![
+        "image".to_string(),
+        "inspect".to_string(),
+        image.to_string(),
+    ];
+    if dry_run {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "tool": crate::tools::docker_image_inspect::NAME,
+            "dry_run": true,
+            "would_run": std::iter::once("docker".to_string()).chain(args.iter().cloned()).collect::<Vec<_>>(),
+            "required_confirm_for_run": CONFIRMATION
+        }))
+        .map_err(|error| format!("docker_image_inspect refused: {error}"));
+    }
+    let output = run_bounded_docker(
+        crate::tools::docker_image_inspect::NAME,
+        &args,
+        timeout_secs,
+    )?;
+    let stdout = truncate_string(String::from_utf8_lossy(&output.stdout).to_string(), 120_000);
+    let stderr = truncate_string(String::from_utf8_lossy(&output.stderr).to_string(), 20_000);
+    serde_json::to_string_pretty(&serde_json::json!({
+        "tool": crate::tools::docker_image_inspect::NAME,
+        "dry_run": false,
+        "ran": true,
+        "image": image,
+        "exit_code": output.status.code().unwrap_or(-1),
+        "success": output.status.success(),
+        "stdout": stdout,
+        "stderr": stderr
+    }))
+    .map_err(|error| format!("docker_image_inspect refused: {error}"))
+}
+
+pub(crate) fn call_artifact_python_run(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let program = optional_string(arguments, "program")?.unwrap_or("python3");
+    if program != "python3" && program != "python" {
+        return Err(
+            "artifact_python_run refused: program must be `python3` or `python`".to_string(),
+        );
+    }
+    let script = required_string(arguments, "script")?;
+    let args = optional_string_array(arguments, "args")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
+    if timeout_secs == 0 || timeout_secs > 600 {
+        return Err(
+            "artifact_python_run refused: timeout_secs must be between 1 and 600".to_string(),
+        );
+    }
+    for arg in &args {
+        if arg.contains('\0') || arg.len() > 1000 {
+            return Err("artifact_python_run refused: args must not contain NUL and must be at most 1000 bytes each".to_string());
+        }
+    }
+    let artifact_root =
+        crate::tools::files::artifact_root(repo_root, crate::tools::artifact_python_run::NAME)?;
+    let relative = crate::tools::common::validate_relative_path(
+        crate::tools::artifact_python_run::NAME,
+        script,
+    )?;
+    let script_path = artifact_root.join(&relative);
+    let resolved_script = script_path.canonicalize().map_err(|error| {
+        format!(
+            "artifact_python_run refused: failed to resolve artifact script `{script}`: {error}"
+        )
+    })?;
+    if !resolved_script.starts_with(&artifact_root) {
+        return Err(
+            "artifact_python_run refused: script resolves outside artifact root".to_string(),
+        );
+    }
+    if !resolved_script.is_file() {
+        return Err(format!(
+            "artifact_python_run refused: `{script}` is not an existing artifact file"
+        ));
+    }
+    let mut command_args = vec![resolved_script.display().to_string()];
+    command_args.extend(args);
+    let output = run_bounded_command(
+        crate::tools::artifact_python_run::NAME,
+        program,
+        &command_args,
+        &artifact_root,
+        timeout_secs,
+    )?;
+    let text = format_command_output(program, &command_args, &artifact_root, &output);
+    let log_id = write_command_log(&text)
+        .map_err(|error| format!("artifact_python_run log write failed: {error}"))?;
+    Ok(format!("log_id: {log_id}\n{text}"))
 }
 
 pub(crate) fn call_validation_profile_run(
@@ -316,7 +459,7 @@ fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, String> {
     }
 }
 
-fn validate_docker_image_ref(image: &str) -> Result<(), String> {
+fn validate_docker_image_ref(image: &str, tool_name: &str) -> Result<(), String> {
     if image.is_empty()
         || image.len() > 300
         || image.starts_with('-')
@@ -325,12 +468,14 @@ fn validate_docker_image_ref(image: &str) -> Result<(), String> {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '/' | '_' | '-' | ':' | '@'))
     {
-        return Err("image_cleanliness_check_run refused: image must be a Docker image reference, not a shell fragment".to_string());
+        return Err(format!(
+            "{tool_name} refused: image must be a Docker image reference, not a shell fragment"
+        ));
     }
     Ok(())
 }
 
-fn validate_find_filename(filename: &str) -> Result<(), String> {
+fn validate_find_filename(filename: &str, tool_name: &str) -> Result<(), String> {
     if filename.is_empty()
         || filename.len() > 128
         || filename.contains('/')
@@ -338,45 +483,54 @@ fn validate_find_filename(filename: &str) -> Result<(), String> {
         || filename.contains('\0')
         || filename.starts_with('-')
     {
-        return Err(
-            "image_cleanliness_check_run refused: filename must be a simple file name".to_string(),
-        );
+        return Err(format!(
+            "{tool_name} refused: filename must be a simple file name"
+        ));
     }
     Ok(())
 }
 
-fn run_bounded_docker(args: &[String], timeout_secs: u64) -> Result<std::process::Output, String> {
+fn run_bounded_docker(
+    tool_name: &str,
+    args: &[String],
+    timeout_secs: u64,
+) -> Result<std::process::Output, String> {
+    run_bounded_command(tool_name, "docker", args, Path::new("/"), timeout_secs)
+}
+
+fn run_bounded_command(
+    tool_name: &str,
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout_secs: u64,
+) -> Result<std::process::Output, String> {
     let started = std::time::Instant::now();
-    let mut child = Command::new("docker")
+    let mut child = Command::new(program)
         .args(args)
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| {
-            format!("image_cleanliness_check_run refused: failed to run docker: {error}")
-        })?;
+        .map_err(|error| format!("{tool_name} refused: failed to run {program}: {error}"))?;
     let timeout = Duration::from_secs(timeout_secs);
     loop {
         match child.try_wait().map_err(|error| {
-            format!("image_cleanliness_check_run refused: failed while waiting for docker: {error}")
+            format!("{tool_name} refused: failed while waiting for {program}: {error}")
         })? {
             Some(_) => {
                 return child.wait_with_output().map_err(|error| {
-                    format!(
-                        "image_cleanliness_check_run refused: failed to collect docker output: {error}"
-                    )
+                    format!("{tool_name} refused: failed to collect {program} output: {error}")
                 });
             }
             None if started.elapsed() >= timeout => {
                 let _ = child.kill();
                 let output = child.wait_with_output().map_err(|error| {
-                    format!(
-                        "image_cleanliness_check_run refused: failed to collect timed-out docker output: {error}"
-                    )
+                    format!("{tool_name} refused: failed to collect timed-out {program} output: {error}")
                 })?;
                 return Err(format!(
-                    "image_cleanliness_check_run refused: docker timed out after {timeout_secs}s\nstdout:\n{}\nstderr:\n{}",
+                    "{tool_name} refused: {program} timed out after {timeout_secs}s\nstdout:\n{}\nstderr:\n{}",
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 ));
@@ -384,6 +538,34 @@ fn run_bounded_docker(args: &[String], timeout_secs: u64) -> Result<std::process
             None => thread::sleep(Duration::from_millis(25)),
         }
     }
+}
+
+fn format_command_output(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    output: &std::process::Output,
+) -> String {
+    format!(
+        "command: {}\ncwd: {}\nexit_code: {}\nsuccess: {}\nstdout:\n{}\nstderr:\n{}",
+        std::iter::once(program.to_string())
+            .chain(args.iter().map(|arg| shell_display_arg(arg)))
+            .collect::<Vec<_>>()
+            .join(" "),
+        cwd.display(),
+        output.status.code().unwrap_or(-1),
+        output.status.success(),
+        truncate_string(String::from_utf8_lossy(&output.stdout).to_string(), 120_000),
+        truncate_string(String::from_utf8_lossy(&output.stderr).to_string(), 20_000)
+    )
+}
+
+fn truncate_string(mut text: String, max_chars: usize) -> String {
+    if text.len() > max_chars {
+        text.truncate(max_chars);
+        text.push_str("\n[truncated]");
+    }
+    text
 }
 
 fn extract_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {

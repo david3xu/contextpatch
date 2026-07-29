@@ -13,8 +13,8 @@ pub mod setup;
 pub use capability::{capability_manifest, preflight_health};
 pub use files::{
     artifact_write_base64, artifact_write_text, bulk_write_new_files_base64, create_directory,
-    diff_preview, read_range, replace_exact, status_guard, write_existing_file_exact_hash,
-    write_new_file, write_new_file_base64,
+    diff_preview, file_info, list_directory, read_file_bytes, read_range, replace_exact,
+    status_guard, write_existing_file_exact_hash, write_new_file, write_new_file_base64,
 };
 pub use fixtures::{
     base_image_check_run, fixture_generator_run, fixture_manifest_refresh, fixture_manifest_verify,
@@ -22,11 +22,12 @@ pub use fixtures::{
 pub use git::{
     delete_generated_prefix, delete_untracked_exact, git_branch_prepare, git_commit_exact,
     git_commit_prefix, git_commit_scoped, git_merge_readiness, git_push_exact, git_remote_check,
-    git_remote_list, git_restore_exact,
+    git_remote_list, git_restore_exact, git_stage_exact,
 };
 pub use github::{github_fork_prepare, github_pr_run};
 pub use native::{native_build_run, native_device_run};
 pub use process::{
-    image_cleanliness_check_run, read_command_log, run_guarded_command, validation_profile_run,
+    artifact_python_run, docker_image_inspect, image_cleanliness_check_run, read_command_log,
+    run_guarded_command, validation_profile_run,
 };
 pub use setup::setup_profile_run;

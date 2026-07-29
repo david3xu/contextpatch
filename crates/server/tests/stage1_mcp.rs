@@ -48,12 +48,17 @@ fn stage1_mcp_tools_work_together() {
         "write_new_file",
         "write_new_file_base64",
         "write_existing_file_exact_hash",
+        "file_info",
+        "list_directory",
+        "read_file_bytes",
         "artifact_write_text",
         "artifact_write_base64",
         "bulk_write_new_files_base64",
         "create_directory",
         "run_guarded_command",
+        "artifact_python_run",
         "image_cleanliness_check_run",
+        "docker_image_inspect",
         "fixture_generator_run",
         "base_image_check_run",
         "fixture_manifest_verify",
@@ -66,6 +71,7 @@ fn stage1_mcp_tools_work_together() {
         "git_commit_exact",
         "git_commit_scoped",
         "git_commit_prefix",
+        "git_stage_exact",
         "git_restore_exact",
         "delete_untracked_exact",
         "delete_generated_prefix",
@@ -710,6 +716,7 @@ fn stage2_image_cleanliness_check_run_plans_bounded_docker_find() {
         &[
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"image_cleanliness_check_run","arguments":{"image":"example/task:latest"}}}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"image_cleanliness_check_run","arguments":{"image":"example/task:latest","filename":"solve.sh","dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"docker_image_inspect","arguments":{"image":"example/task:latest"}}}"#,
         ],
     );
 
@@ -725,6 +732,139 @@ fn stage2_image_cleanliness_check_run_plans_bounded_docker_find() {
     assert_text(&responses[0], "\"solve.sh\"");
     assert_eq!(responses[1]["result"]["isError"], true);
     assert_text(&responses[1], "requires confirm");
+    assert_text(&responses[2], "\"docker\"");
+    assert_text(&responses[2], "\"image\"");
+    assert_text(&responses[2], "\"inspect\"");
+    assert_text(&responses[2], "\"example/task:latest\"");
+}
+
+#[test]
+fn stage2_file_inspection_tools_report_digest_listing_and_binary_ranges() {
+    let root = git_repo("stage2_file_inspection_tools_report_digest_listing_and_binary_ranges");
+    fs::create_dir(root.join("data")).unwrap();
+    fs::write(root.join("data/sample.txt"), "alpha\nbeta\n").unwrap();
+    fs::write(root.join("data/blob.bin"), [0, 1, 2, 255, 16, 32]).unwrap();
+    let digest = Sha256::digest(b"alpha\nbeta\n")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_info","arguments":{"path":"data/sample.txt"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_directory","arguments":{"path":"data"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file_bytes","arguments":{"path":"data/blob.bin","offset":1,"max_bytes":3,"encoding":"hex"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"sha256\"");
+    assert_text(&responses[0], &digest);
+    assert_text(&responses[0], "\"line_count\": 2");
+    assert_text(&responses[0], "\"is_symlink\": false");
+    assert_text(&responses[1], "\"entry_count\": 2");
+    assert_text(&responses[1], "\"path\": \"data/blob.bin\"");
+    assert_text(&responses[1], "\"size_bytes\": 6");
+    assert_text(&responses[2], "\"total_bytes\": 6");
+    assert_text(&responses[2], "\"bytes_returned\": 3");
+    assert_text(&responses[2], "\"data\": \"0102ff\"");
+
+    #[cfg(unix)]
+    {
+        let outside = temp_root("stage2_file_inspection_outside_target");
+        fs::write(outside.join("secret.txt"), "outside\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("data/outside-link"))
+            .unwrap();
+        let symlink_responses = run_server(
+            &root,
+            &[
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_info","arguments":{"path":"data/outside-link"}}}"#,
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file_bytes","arguments":{"path":"data/outside-link","max_bytes":4}}}"#,
+            ],
+        );
+
+        assert_text(&symlink_responses[0], "\"is_symlink\": true");
+        assert_text(
+            &symlink_responses[0],
+            "\"symlink_resolves_inside_repo\": false",
+        );
+        assert_text(&symlink_responses[0], "\"sha256\": null");
+        assert_eq!(symlink_responses[1]["result"]["isError"], true);
+        assert_text(&symlink_responses[1], "resolves outside the repository");
+    }
+}
+
+#[test]
+fn stage2_git_stage_exact_stages_without_committing() {
+    let root = git_repo("stage2_git_stage_exact_stages_without_committing");
+    fs::write(root.join("tracked.txt"), "before\n").unwrap();
+    git(&root, &["add", "tracked.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("tracked.txt"), "after\n").unwrap();
+    fs::write(root.join("other.txt"), "other\n").unwrap();
+
+    let head_before = git_stdout(&root, &["rev-parse", "HEAD"]);
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_stage_exact","arguments":{"paths":["tracked.txt"],"dry_run":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_stage_exact","arguments":{"paths":["tracked.txt"],"dry_run":false,"confirm":"stage exact paths"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"would_commit\": false");
+    assert_text(&responses[1], "\"staged\": true");
+    assert_text(&responses[1], "\"committed\": false");
+    assert_eq!(git_stdout(&root, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        git_stdout(&root, &["diff", "--cached", "--name-only"]),
+        "tracked.txt\n"
+    );
+    assert_eq!(git_stdout(&root, &["diff", "--name-only"]), "");
+    assert_text(&responses[1], "?? other.txt");
+}
+
+#[test]
+fn stage2_command_log_offset_pages_long_logs() {
+    let root = git_repo("stage2_command_log_offset_pages_long_logs");
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status","--porcelain=v1"],"timeout_secs":30}}}"#,
+        ],
+    );
+    let text = response_text(&responses[0]);
+    let log_id = text
+        .lines()
+        .find_map(|line| line.strip_prefix("log_id: "))
+        .unwrap();
+    let request = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"read_command_log","arguments":{{"log_id":"{log_id}","offset":5,"max_chars":20}}}}}}"#
+    );
+    let paged = run_server(&root, &[&request]);
+
+    assert_text(&paged[0], "offset: 5");
+    assert_text(&paged[0], "chars_returned: 20");
+    assert_text(&paged[0], "total_chars:");
+}
+
+#[test]
+fn stage2_artifact_python_run_executes_scratch_outside_repo() {
+    let root = git_repo("stage2_artifact_python_run_executes_scratch_outside_repo");
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"artifact_write_text","arguments":{"path":"scratch.py","content":"print('scratch-ok')\n","parents":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"artifact_python_run","arguments":{"script":"scratch.py","timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"repo_mutation\": false");
+    assert_text(&responses[1], "scratch-ok");
+    assert!(!root.join("scratch.py").exists());
+    assert_eq!(git_stdout(&root, &["status", "--short"]), "");
 }
 
 #[test]

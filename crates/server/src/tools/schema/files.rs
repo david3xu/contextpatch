@@ -94,6 +94,73 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::file_info::NAME,
+                    "description": "Return read-only file metadata, SHA-256 for files, UTF-8 line count when available, and symlink status.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "File or directory path relative to the configured repository root."
+                            }
+                        },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::list_directory::NAME,
+                    "description": "List one repository directory with entry type, symlink flag, and file sizes without using rg.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Directory path relative to the configured repository root. Defaults to repository root."
+                            },
+                            "include_hidden": {
+                                "type": "boolean",
+                                "description": "Include dotfiles and dot-directories. Defaults to false."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::read_file_bytes::NAME,
+                    "description": "Read a bounded byte range from a repository file as hex or base64, including total size and SHA-256.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Existing regular file path relative to the configured repository root."
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Byte offset to start reading from. Defaults to 0."
+                            },
+                            "max_bytes": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 1048576,
+                                "description": "Maximum bytes to return. Defaults to 4096."
+                            },
+                            "encoding": {
+                                "type": "string",
+                                "enum": ["hex", "base64"],
+                                "description": "Output encoding. Defaults to hex."
+                            }
+                        },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::write_new_file::NAME,
                     "description": "Create a new UTF-8 text file only when the destination does not already exist.",
                     "inputSchema": {

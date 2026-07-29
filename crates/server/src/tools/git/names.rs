@@ -41,3 +41,7 @@ pub mod git_remote_list {
 pub mod git_restore_exact {
     pub const NAME: &str = "git_restore_exact";
 }
+
+pub mod git_stage_exact {
+    pub const NAME: &str = "git_stage_exact";
+}

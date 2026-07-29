@@ -52,9 +52,48 @@ pub(crate) fn definitions() -> Vec<Value> {
                                 "minimum": 1,
                                 "maximum": 200000,
                                 "description": "Optional maximum characters to return. Defaults to 12000."
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Optional character offset for paging long logs. Defaults to 0."
                             }
                         },
                         "required": ["log_id"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::artifact_python_run::NAME,
+                    "description": "Run a Python script previously written under the fixed artifact root, without a shell and without placing scratch code in the repository.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "script": {
+                                "type": "string",
+                                "description": "Artifact-root-relative Python script path."
+                            },
+                            "program": {
+                                "type": "string",
+                                "enum": ["python3", "python"],
+                                "description": "Python executable name. Defaults to python3."
+                            },
+                            "args": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Optional script arguments, passed without a shell."
+                            },
+                            "timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 600,
+                                "description": "Optional timeout in seconds. Defaults to 120."
+                            }
+                        },
+                        "required": ["script"],
                         "additionalProperties": false
                     }
                 }
@@ -80,6 +119,36 @@ pub(crate) fn definitions() -> Vec<Value> {
                             "confirm": {
                                 "type": "string",
                                 "description": "Required literal value `run image cleanliness check` when dry_run is false."
+                            },
+                            "timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 600,
+                                "description": "Optional timeout in seconds. Defaults to 120."
+                            }
+                        },
+                        "required": ["image"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::docker_image_inspect::NAME,
+                    "description": "Plan or run `docker image inspect` for one validated image reference without exposing generic Docker.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "image": {
+                                "type": "string",
+                                "description": "Docker image reference to inspect."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without running Docker. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `inspect docker image` when dry_run is false."
                             },
                             "timeout_secs": {
                                 "type": "integer",

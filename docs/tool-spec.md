@@ -18,14 +18,19 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `write_new_file` | Yes | Destination must not exist |
 | `write_new_file_base64` | Yes | Destination must not exist; base64 decoded bytes with optional expected size |
 | `write_existing_file_exact_hash` | Yes | Existing regular file, exact current SHA-256, dry-run default, explicit confirmation |
+| `file_info` | No | Repo-root-confined metadata, symlink status, SHA-256 for files, line count for UTF-8 files |
+| `list_directory` | No | One-directory repo-root-confined listing with type, symlink, and size metadata |
+| `read_file_bytes` | No | Bounded byte range from a regular file as hex or base64 |
 | `artifact_write_text` | Sidecar artifact only | Writes outside repo under fixed artifact root; create-only, no repo mutation |
 | `artifact_write_base64` | Sidecar artifact only | Binary sidecar artifact under fixed artifact root; create-only, size/byte-count guards |
+| `artifact_python_run` | No source edits | Runs a Python script under the fixed artifact root with no shell and bounded logs |
 | `bulk_write_new_files_base64` | Yes | Bounded multi-file create-only import from base64 entries |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `fixture_generator_run` | Declared fixture outputs only | Dry-run/confirmation-gated repo-relative Python generator with changed-path verification |
 | `base_image_check_run` | No source edits | Exact `references/check-base-image.sh` validation workflow, optionally with the exact `task` arg; no arbitrary shell |
 | `image_cleanliness_check_run` | No source edits | Narrow Docker image `find / -name <filename>` check; dry-run default and exact confirmation |
+| `docker_image_inspect` | No source edits | Narrow `docker image inspect <image>` workflow; dry-run default and exact confirmation |
 | `fixture_manifest_verify` | No | Exact fixture file set and SHA-256 digest verification; mismatches are refusals |
 | `fixture_manifest_refresh` | Manifest file only | Regenerates fixture manifest from declared files/prefixes with dry-run, confirmation, and existing-manifest hash guard |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
@@ -34,6 +39,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
 | `native_device_run` | External device command | Dry-run default, typed action params, device-state confirmation gate, no raw `xcrun` or `adb` commands |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
+| `git_stage_exact` | Git index only | Explicit dirty paths, clean-index gate, dry-run default, no commit |
 | `git_commit_scoped` | Git index + one local commit | Explicit dirty subset, clean-index gate, preserves unrelated dirty paths, never pushes |
 | `git_commit_prefix` | Git index + one local commit | Explicit prefixes expand to exact dirty paths, clean-index gate, dry-run default, never pushes |
 | `git_restore_exact` | Git worktree/index restore | Explicit dirty tracked paths only, dry-run default, explicit confirmation, never resets the whole worktree |
@@ -283,6 +289,65 @@ Rules:
 - When `expected_bytes` is provided, refuse if the decoded byte count does not match.
 - Write atomically.
 
+### `file_info`
+
+Reports bounded metadata for a repository path.
+
+Required inputs:
+
+- `path`
+
+Rules:
+
+- The path must resolve inside the repository root.
+- The response must identify whether the path exists, whether it is a symlink, and the normalized repository-relative path.
+- Existing regular files must include byte length and lowercase SHA-256 digest.
+- Existing UTF-8 regular files should include `line_count`; binary or invalid UTF-8 files must not be treated as text.
+- Existing directories must be reported as directories without recursively listing contents.
+- The tool must not mutate repository state.
+
+### `list_directory`
+
+Lists one repository directory with compact entry metadata.
+
+Required inputs:
+
+- `path`
+
+Optional inputs:
+
+- `include_hidden`: defaults to `false`
+
+Rules:
+
+- The path must resolve inside the repository root and must be an existing directory.
+- The tool lists only direct children, not a recursive tree.
+- Entries must include name, normalized path, type, symlink flag, and byte size when available.
+- Hidden entries are omitted unless `include_hidden` is true.
+- Entries should be sorted by path for deterministic output.
+- The tool must not mutate repository state.
+
+### `read_file_bytes`
+
+Reads a bounded byte range from an existing regular file.
+
+Required inputs:
+
+- `path`
+
+Optional inputs:
+
+- `offset`: byte offset, defaults to `0`
+- `max_bytes`: byte count to return, defaults to a bounded value
+- `encoding`: `hex` or `base64`, defaults to `hex`
+
+Rules:
+
+- The path must resolve inside the repository root and must be an existing regular file.
+- The response must include total file size, returned byte count, offset, encoding, returned data, and full-file SHA-256.
+- The tool must refuse offsets past end-of-file and excessive byte counts.
+- The tool must not decode bytes as text and must not mutate repository state.
+
 ### `artifact_write_text`
 
 Creates a new UTF-8 text artifact outside the repository under a fixed `contextpatch` artifact root.
@@ -323,6 +388,30 @@ Rules:
 - Apply all `artifact_write_text` path and create-only rules.
 - Refuse invalid base64 or decoded content larger than 20 MiB.
 - When `expected_bytes` is provided, refuse if the decoded byte count does not match.
+
+### `artifact_python_run`
+
+Runs a Python script that already exists under the fixed contextpatch artifact root.
+
+Required inputs:
+
+- `script`: artifact-root-relative script path
+
+Optional inputs:
+
+- `args`: argument array
+- `program`: `python3` or `python`, defaults to `python3`
+- `cwd`: repository-relative working directory, defaults to repository root
+- `timeout_secs`: from 1 to 600
+
+Rules:
+
+- The script path must resolve under the fixed artifact root, not under the repository.
+- The working directory must resolve inside the repository root.
+- The tool must invoke Python directly with an argument array and no shell.
+- Args must be bounded strings and must not contain NUL bytes.
+- Output must be redacted, truncated, logged by opaque id, and readable through `read_command_log`.
+- The tool must not mutate repository state by itself and must not accept caller-supplied executable paths or environment overrides.
 
 ### `bulk_write_new_files_base64`
 
@@ -480,6 +569,28 @@ Rules:
 - The tool must not expose generic Docker arguments, bind mounts, network access, caller-selected entrypoints, shell snippets, or arbitrary commands.
 - A clean result is an exit status success with empty stdout; any found path is reported as a match instead of hidden.
 
+### `docker_image_inspect`
+
+Plans or runs a read-only Docker image metadata inspection.
+
+Required inputs:
+
+- `image`: Docker image reference
+
+Optional inputs:
+
+- `timeout_secs`: timeout from 1 to 600
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `inspect docker image` when `dry_run` is `false`
+
+Rules:
+
+- Dry-run must return the exact plan `docker image inspect <image>` without running Docker.
+- Execution requires exact confirmation.
+- The image reference must be a bounded Docker image token, not a shell fragment.
+- The tool must not expose generic Docker arguments, container execution, bind mounts, network controls, shell snippets, or arbitrary commands.
+- Output must be redacted, truncated, and represented as external validator output rather than repository mutation.
+
 ### `write_existing_file_exact_hash`
 
 Overwrites an existing UTF-8 repository file only when its current SHA-256 digest matches the caller's expectation.
@@ -563,6 +674,7 @@ Required inputs:
 
 Optional inputs:
 
+- `offset`: character offset into the redacted log, defaults to `0`
 - `max_chars`: maximum characters to return, from 1 to 200000; defaults to 12000
 
 Rules:
@@ -570,7 +682,8 @@ Rules:
 - `log_id` must be an opaque command-log id, not a path.
 - The tool must only read from the contextpatch command-log directory.
 - Logs contain the same redacted command output shape as guarded command responses.
-- The tool must truncate large responses rather than returning unbounded JSON-RPC payloads.
+- The tool must page from the requested character offset and truncate large responses rather than returning unbounded JSON-RPC payloads.
+- Offsets are character offsets in the redacted UTF-8 log text, not byte offsets.
 
 ### `validation_profile_run`
 
@@ -775,6 +888,29 @@ Rules:
 - The tool must verify that the staged path set exactly matches `paths` before committing.
 - On success, the tool returns the commit hash, short hash, committed paths, and remaining dirty paths.
 - Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
+
+### `git_stage_exact`
+
+Stages explicit dirty paths without creating a commit.
+
+Required inputs:
+
+- `paths`: non-empty list of repository-relative dirty paths to stage
+
+Optional inputs:
+
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `stage exact paths` when `dry_run` is `false`
+
+Rules:
+
+- The tool must default to dry-run and perform no mutation unless `dry_run` is `false` and `confirm` exactly equals `stage exact paths`.
+- Every requested path must currently be dirty.
+- The Git index must be clean before mutation so pre-staged unrelated paths cannot be mixed with the staged set.
+- Paths must be normalized repository-relative paths and must not use path traversal, absolute paths, NUL bytes, or Git pathspec metacharacters.
+- Rename/copy status entries are refused until a dedicated tracked-move workflow exists.
+- The tool may run `git add -- <paths>` only; it must not commit, fetch, pull, push, reset, checkout, stash, clean, or modify remotes.
+- On success, the tool returns staged paths and remaining dirty paths.
 
 ### `git_commit_prefix`
 
@@ -1069,37 +1205,43 @@ The server currently ships:
 3. `write_new_file`
 4. `write_new_file_base64`
 5. `write_existing_file_exact_hash`
-6. `artifact_write_text`
-7. `artifact_write_base64`
-8. `bulk_write_new_files_base64`
-9. `create_directory`
-10. `diff_preview`
-11. `status_guard`
-12. `capability_manifest`
-13. `preflight_health`
-14. `run_guarded_command`
-15. `image_cleanliness_check_run`
-16. `fixture_generator_run`
-17. `base_image_check_run`
-18. `fixture_manifest_verify`
-19. `fixture_manifest_refresh`
-20. `read_command_log`
-21. `validation_profile_run`
-22. `git_commit_exact`
-23. `git_commit_scoped`
-24. `git_commit_prefix`
-25. `git_restore_exact`
-26. `delete_untracked_exact`
-27. `delete_generated_prefix`
-28. `git_remote_list`
-29. `git_remote_check`
-30. `git_branch_prepare`
-31. `git_merge_readiness`
-32. `git_push_exact`
-33. `github_pr_run`
-34. `github_fork_prepare`
-35. `setup_profile_run`
-36. `native_build_run`
-37. `native_device_run`
+6. `file_info`
+7. `list_directory`
+8. `read_file_bytes`
+9. `artifact_write_text`
+10. `artifact_write_base64`
+11. `bulk_write_new_files_base64`
+12. `create_directory`
+13. `diff_preview`
+14. `status_guard`
+15. `capability_manifest`
+16. `preflight_health`
+17. `run_guarded_command`
+18. `artifact_python_run`
+19. `image_cleanliness_check_run`
+20. `docker_image_inspect`
+21. `fixture_generator_run`
+22. `base_image_check_run`
+23. `fixture_manifest_verify`
+24. `fixture_manifest_refresh`
+25. `read_command_log`
+26. `validation_profile_run`
+27. `git_commit_exact`
+28. `git_stage_exact`
+29. `git_commit_scoped`
+30. `git_commit_prefix`
+31. `git_restore_exact`
+32. `delete_untracked_exact`
+33. `delete_generated_prefix`
+34. `git_remote_list`
+35. `git_remote_check`
+36. `git_branch_prepare`
+37. `git_merge_readiness`
+38. `git_push_exact`
+39. `github_pr_run`
+40. `github_fork_prepare`
+41. `setup_profile_run`
+42. `native_build_run`
+43. `native_device_run`
 
 Other documented boundary tools, such as `apply_patch` and `delete_guarded`, remain planned until implemented. See `docs/implementation-roadmap.md`.

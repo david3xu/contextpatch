@@ -14,8 +14,20 @@ pub mod create_directory {
     pub const NAME: &str = "create_directory";
 }
 
+pub mod file_info {
+    pub const NAME: &str = "file_info";
+}
+
+pub mod list_directory {
+    pub const NAME: &str = "list_directory";
+}
+
 pub mod diff_preview {
     pub const NAME: &str = "diff_preview";
+}
+
+pub mod read_file_bytes {
+    pub const NAME: &str = "read_file_bytes";
 }
 
 pub mod read_range {
@@ -43,7 +55,7 @@ pub mod write_new_file_base64 {
 }
 
 use std::collections::{hash_map::DefaultHasher, BTreeSet};
-use std::fs;
+use std::fs::{self, FileType};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -113,6 +125,234 @@ pub(crate) fn call_status_guard(
         None => status_summary(repo_root),
     }
     .map_err(|error| format!("status_guard refused: {error}"))
+}
+
+pub(crate) fn call_file_info(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let path = required_string(arguments, "path")?;
+    let root = canonical_repo_root(repo_root, tools::file_info::NAME)?;
+    let normalized = normalize_repo_relative_path(tools::file_info::NAME, path)?;
+    let target = root.join(&normalized);
+    let symlink_metadata = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return serde_json::to_string_pretty(&json!({
+                "tool": tools::file_info::NAME,
+                "path": normalized,
+                "exists": false
+            }))
+            .map_err(|error| format!("file_info refused: {error}"));
+        }
+        Err(error) => {
+            return Err(format!(
+                "file_info refused: failed to inspect `{normalized}`: {error}"
+            ));
+        }
+    };
+    let file_type = symlink_metadata.file_type();
+    let is_symlink = file_type.is_symlink();
+    let resolved_inside_repo = if is_symlink {
+        match target.canonicalize() {
+            Ok(resolved) => resolved.starts_with(&root),
+            Err(_) => false,
+        }
+    } else {
+        true
+    };
+    let target_metadata = if is_symlink && resolved_inside_repo {
+        fs::metadata(&target).ok()
+    } else if is_symlink {
+        None
+    } else {
+        Some(symlink_metadata)
+    };
+    let is_file = target_metadata
+        .as_ref()
+        .map(fs::Metadata::is_file)
+        .unwrap_or(false);
+    let is_dir = target_metadata
+        .as_ref()
+        .map(fs::Metadata::is_dir)
+        .unwrap_or(false);
+    let bytes = if is_file {
+        Some(fs::read(&target).map_err(|error| {
+            format!("file_info refused: failed to read `{normalized}` for digest: {error}")
+        })?)
+    } else {
+        None
+    };
+    let line_count = bytes.as_ref().and_then(|bytes| {
+        std::str::from_utf8(bytes)
+            .ok()
+            .map(|text| text.lines().count())
+    });
+    let sha256 = bytes.as_ref().map(|bytes| sha256_hex(bytes));
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::file_info::NAME,
+        "path": normalized,
+        "exists": true,
+        "kind": file_kind(file_type, is_file, is_dir),
+        "is_file": is_file,
+        "is_directory": is_dir,
+        "is_symlink": is_symlink,
+        "symlink_target": if is_symlink { fs::read_link(&target).ok().map(|path| path.display().to_string()) } else { None },
+        "symlink_resolves_inside_repo": resolved_inside_repo,
+        "size_bytes": target_metadata.as_ref().map(fs::Metadata::len),
+        "sha256": sha256,
+        "line_count": line_count
+    }))
+    .map_err(|error| format!("file_info refused: {error}"))
+}
+
+pub(crate) fn call_list_directory(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const MAX_ENTRIES: usize = 2000;
+
+    let path = optional_string(arguments, "path")?.unwrap_or(".");
+    let include_hidden = optional_bool(arguments, "include_hidden")?.unwrap_or(false);
+    let root = canonical_repo_root(repo_root, tools::list_directory::NAME)?;
+    let normalized = normalize_repo_relative_path(tools::list_directory::NAME, path)?;
+    let target = root.join(&normalized);
+    if !target.is_dir() {
+        return Err(format!(
+            "list_directory refused: `{normalized}` is not an existing directory"
+        ));
+    }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&target).map_err(|error| {
+        format!("list_directory refused: failed to read `{normalized}`: {error}")
+    })? {
+        let entry = entry
+            .map_err(|error| format!("list_directory refused: failed to read entry: {error}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !include_hidden && name.starts_with('.') {
+            continue;
+        }
+        if entries.len() >= MAX_ENTRIES {
+            return Err(format!(
+                "list_directory refused: directory has more than {MAX_ENTRIES} entries; use a narrower path"
+            ));
+        }
+        let relative = if normalized == "." {
+            name.clone()
+        } else {
+            format!("{normalized}/{name}")
+        };
+        let file_type = entry.file_type().map_err(|error| {
+            format!("list_directory refused: failed to inspect `{relative}`: {error}")
+        })?;
+        let metadata = if file_type.is_symlink() {
+            None
+        } else {
+            entry.metadata().ok()
+        };
+        entries.push(json!({
+            "name": name,
+            "path": relative,
+            "kind": file_kind(file_type, metadata.as_ref().map(fs::Metadata::is_file).unwrap_or(false), metadata.as_ref().map(fs::Metadata::is_dir).unwrap_or(false)),
+            "is_symlink": file_type.is_symlink(),
+            "size_bytes": metadata.as_ref().filter(|metadata| metadata.is_file()).map(fs::Metadata::len)
+        }));
+    }
+    entries.sort_by(|left, right| {
+        left["path"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["path"].as_str().unwrap_or_default())
+    });
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::list_directory::NAME,
+        "path": normalized,
+        "entry_count": entries.len(),
+        "entries": entries
+    }))
+    .map_err(|error| format!("list_directory refused: {error}"))
+}
+
+pub(crate) fn call_read_file_bytes(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const MAX_BYTES: usize = 1_048_576;
+
+    let path = required_string(arguments, "path")?;
+    let offset = optional_u64(arguments, "offset")?.unwrap_or(0);
+    let max_bytes = optional_u64(arguments, "max_bytes")?.unwrap_or(4096);
+    let encoding = optional_string(arguments, "encoding")?.unwrap_or("hex");
+    if max_bytes == 0 || max_bytes > MAX_BYTES as u64 {
+        return Err(format!(
+            "read_file_bytes refused: max_bytes must be between 1 and {MAX_BYTES}"
+        ));
+    }
+    if encoding != "hex" && encoding != "base64" {
+        return Err("read_file_bytes refused: encoding must be `hex` or `base64`".to_string());
+    }
+    let root = canonical_repo_root(repo_root, tools::read_file_bytes::NAME)?;
+    let normalized = normalize_repo_relative_path(tools::read_file_bytes::NAME, path)?;
+    let target = root.join(&normalized);
+    let metadata = fs::symlink_metadata(&target).map_err(|error| {
+        format!("read_file_bytes refused: failed to inspect `{normalized}`: {error}")
+    })?;
+    if metadata.file_type().is_symlink() {
+        let resolved = target.canonicalize().map_err(|error| {
+            format!("read_file_bytes refused: failed to resolve `{normalized}`: {error}")
+        })?;
+        if !resolved.starts_with(&root) {
+            return Err(format!(
+                "read_file_bytes refused: `{normalized}` is a symlink that resolves outside the repository"
+            ));
+        }
+        let target_metadata = fs::metadata(&target).map_err(|error| {
+            format!("read_file_bytes refused: failed to inspect `{normalized}` target: {error}")
+        })?;
+        if !target_metadata.is_file() {
+            return Err(format!(
+                "read_file_bytes refused: `{normalized}` is not an existing regular file"
+            ));
+        }
+    } else if !metadata.is_file() {
+        return Err(format!(
+            "read_file_bytes refused: `{normalized}` is not an existing regular file"
+        ));
+    }
+    let bytes = fs::read(&target).map_err(|error| {
+        format!("read_file_bytes refused: failed to read `{normalized}`: {error}")
+    })?;
+    let start = usize::try_from(offset)
+        .map_err(|_| "read_file_bytes refused: offset is too large".to_string())?;
+    if start > bytes.len() {
+        return Err(format!(
+            "read_file_bytes refused: offset {offset} is past end of `{normalized}` ({} bytes)",
+            bytes.len()
+        ));
+    }
+    let end = start.saturating_add(max_bytes as usize).min(bytes.len());
+    let slice = &bytes[start..end];
+    let data = if encoding == "hex" {
+        hex_encode(slice)
+    } else {
+        base64_encode(slice)
+    };
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::read_file_bytes::NAME,
+        "path": normalized,
+        "encoding": encoding,
+        "offset": offset,
+        "bytes_returned": slice.len(),
+        "total_bytes": bytes.len(),
+        "truncated": end < bytes.len(),
+        "sha256": sha256_hex(&bytes),
+        "data": data
+    }))
+    .map_err(|error| format!("read_file_bytes refused: {error}"))
 }
 
 pub(crate) fn call_write_new_file(
@@ -450,7 +690,7 @@ fn write_artifact(
     .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
-fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
+pub(crate) fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
     let root = canonical_repo_root(repo_root, tool_name)?;
     let mut hasher = DefaultHasher::new();
     root.display().to_string().hash(&mut hasher);
@@ -475,6 +715,51 @@ fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
     artifact_root
         .canonicalize()
         .map_err(|error| format!("{tool_name} refused: failed to resolve artifact root: {error}"))
+}
+
+fn file_kind(file_type: FileType, is_file: bool, is_dir: bool) -> &'static str {
+    if file_type.is_symlink() {
+        "symlink"
+    } else if is_file {
+        "file"
+    } else if is_dir {
+        "directory"
+    } else {
+        "other"
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        output.push(TABLE[(b0 >> 2) as usize] as char);
+        output.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
 }
 
 pub(crate) fn call_create_directory(
