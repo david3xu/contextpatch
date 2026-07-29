@@ -77,6 +77,42 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::git_commit_prefix::NAME,
+                    "description": "Dry-run or create one local Git commit from dirty paths under explicit prefixes after expanding and reporting the exact path list. Never pushes.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "prefixes": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "description": "Repository-relative dirty path prefixes or directories to expand."
+                            },
+                            "subject": {
+                                "type": "string",
+                                "description": "Commit subject line."
+                            },
+                            "body": {
+                                "type": "string",
+                                "description": "Optional commit body/trailers."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview expanded paths without staging or committing. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `commit prefix paths` when dry_run is false."
+                            }
+                        },
+                        "required": ["prefixes", "subject"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::git_restore_exact::NAME,
                     "description": "Dry-run or restore exact dirty repository paths from HEAD. Use for generated noise cleanup before exact commits; never resets the whole worktree.",
                     "inputSchema": {
@@ -128,6 +164,34 @@ pub(crate) fn definitions() -> Vec<Value> {
                             }
                         },
                         "required": ["paths"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::delete_generated_prefix::NAME,
+                    "description": "Dry-run or delete ignored/untracked generated files and empty directories under explicit prefixes without exposing broad git clean.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "prefixes": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "description": "Repository-relative prefixes to expand for ignored/untracked generated cleanup."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without deleting. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `delete generated paths` when dry_run is false."
+                            }
+                        },
+                        "required": ["prefixes"],
                         "additionalProperties": false
                     }
                 }

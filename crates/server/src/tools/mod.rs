@@ -20,10 +20,13 @@ pub use fixtures::{
     base_image_check_run, fixture_generator_run, fixture_manifest_refresh, fixture_manifest_verify,
 };
 pub use git::{
-    delete_untracked_exact, git_branch_prepare, git_commit_exact, git_commit_scoped,
-    git_merge_readiness, git_push_exact, git_remote_check, git_remote_list, git_restore_exact,
+    delete_generated_prefix, delete_untracked_exact, git_branch_prepare, git_commit_exact,
+    git_commit_prefix, git_commit_scoped, git_merge_readiness, git_push_exact, git_remote_check,
+    git_remote_list, git_restore_exact,
 };
 pub use github::{github_fork_prepare, github_pr_run};
 pub use native::{native_build_run, native_device_run};
-pub use process::{read_command_log, run_guarded_command, validation_profile_run};
+pub use process::{
+    image_cleanliness_check_run, read_command_log, run_guarded_command, validation_profile_run,
+};
 pub use setup::setup_profile_run;

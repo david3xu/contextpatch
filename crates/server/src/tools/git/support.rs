@@ -40,6 +40,38 @@ pub(crate) fn normalize_git_paths(
         .collect()
 }
 
+pub(crate) fn normalize_git_prefixes(
+    tool_name: &str,
+    root: &Path,
+    prefixes: &[String],
+) -> Result<Vec<String>, String> {
+    prefixes
+        .iter()
+        .map(|prefix| {
+            let trimmed = prefix.trim_end_matches('/');
+            if trimmed.is_empty() {
+                return Err(format!("{tool_name} refused: prefixes must not be empty"));
+            }
+            normalize_git_path(tool_name, root, trimmed)
+        })
+        .collect()
+}
+
+pub(crate) fn paths_under_prefixes(
+    paths: &BTreeSet<String>,
+    prefixes: &[String],
+) -> BTreeSet<String> {
+    paths
+        .iter()
+        .filter(|path| {
+            prefixes
+                .iter()
+                .any(|prefix| *path == prefix || path.starts_with(&format!("{prefix}/")))
+        })
+        .cloned()
+        .collect()
+}
+
 pub(crate) fn normalize_git_path(
     tool_name: &str,
     root: &Path,
@@ -128,6 +160,24 @@ pub(crate) fn git_untracked_paths_for_tool(
     parse_untracked_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
 }
 
+pub(crate) fn git_untracked_and_ignored_paths_for_tool(
+    tool_name: &str,
+    root: &Path,
+) -> Result<BTreeSet<String>, String> {
+    let output = git_output_for_tool(
+        tool_name,
+        root,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ],
+    )?;
+    parse_untracked_and_ignored_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
+}
+
 pub(crate) fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
     git_cached_paths_for_tool(tools::git_commit_exact::NAME, root)
 }
@@ -183,6 +233,29 @@ pub(crate) fn parse_untracked_porcelain_paths_for_tool(
                 format!("{tool_name} refused: {label} path is not UTF-8: {error}")
             })?;
             paths.insert(path.to_string());
+        }
+    }
+    Ok(paths)
+}
+
+pub(crate) fn parse_untracked_and_ignored_porcelain_paths_for_tool(
+    tool_name: &str,
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, String> {
+    let mut paths = BTreeSet::new();
+    let entries = bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
+    for entry in entries {
+        if entry.len() < 4 || entry[2] != b' ' {
+            return Err(format!("{tool_name} refused: unexpected {label} entry"));
+        }
+        if (entry[0] == b'?' && entry[1] == b'?') || (entry[0] == b'!' && entry[1] == b'!') {
+            let path = std::str::from_utf8(&entry[3..]).map_err(|error| {
+                format!("{tool_name} refused: {label} path is not UTF-8: {error}")
+            })?;
+            paths.insert(path.trim_end_matches('/').to_string());
         }
     }
     Ok(paths)

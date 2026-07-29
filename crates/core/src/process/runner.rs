@@ -29,11 +29,17 @@ pub(crate) fn run_no_shell_command(
     timeout: Duration,
     operation_label: &str,
 ) -> Result<ProcessOutput, ContextPatchError> {
-    let mut command = Command::new(program);
+    let resolved_program = resolve_program(program);
+    let mut command = Command::new(
+        resolved_program
+            .as_deref()
+            .unwrap_or_else(|| Path::new(program)),
+    );
     command.current_dir(cwd);
     if program == "git" {
         command.arg("--no-pager");
     }
+
     command.args(args);
     command.env("GIT_PAGER", "cat");
     command.env("NO_COLOR", "1");
@@ -131,6 +137,24 @@ fn join_stream_reader(
     receiver.recv_timeout(Duration::from_secs(5)).map_err(|_| {
         ContextPatchError::new(format!("timed out reading {operation_label} output"))
     })?
+}
+
+pub(crate) fn resolve_program(program: &str) -> Option<PathBuf> {
+    configured_tool_paths()
+        .into_iter()
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
+fn configured_tool_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path));
+    }
+    if let Some(path) = std::env::var_os("CONTEXTPATCH_VALIDATION_PATHS") {
+        paths.extend(std::env::split_paths(&path));
+    }
+    paths
 }
 
 pub(crate) fn resolve_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf, ContextPatchError> {

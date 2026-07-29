@@ -6,12 +6,19 @@ pub mod run_guarded_command {
     pub const NAME: &str = "run_guarded_command";
 }
 
+pub mod image_cleanliness_check_run {
+    pub const NAME: &str = "image_cleanliness_check_run";
+}
+
 pub mod validation_profile_run {
     pub const NAME: &str = "validation_profile_run";
 }
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use contextpatch_core::process::guarded_command::run_guarded_command;
@@ -45,6 +52,7 @@ pub(crate) fn call_read_command_log(
     if max_chars == 0 || max_chars > 200_000 {
         return Err("read_command_log refused: max_chars must be between 1 and 200000".to_string());
     }
+
     let path = command_log_path(log_id)?;
     let mut text = fs::read_to_string(&path)
         .map_err(|error| format!("read_command_log refused: failed to read {log_id}: {error}"))?;
@@ -53,6 +61,78 @@ pub(crate) fn call_read_command_log(
         text.push_str("\n[truncated]");
     }
     Ok(format!("log_id: {log_id}\n{text}"))
+}
+
+pub(crate) fn call_image_cleanliness_check_run(
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "run image cleanliness check";
+
+    let image = required_string(arguments, "image")?;
+    let filename = optional_string(arguments, "filename")?.unwrap_or("solve.sh");
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
+
+    validate_docker_image_ref(image)?;
+    validate_find_filename(filename)?;
+    if timeout_secs == 0 || timeout_secs > 600 {
+        return Err(
+            "image_cleanliness_check_run refused: timeout_secs must be between 1 and 600"
+                .to_string(),
+        );
+    }
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "image_cleanliness_check_run refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let args = vec![
+        "run".to_string(),
+        "--rm".to_string(),
+        "--network".to_string(),
+        "none".to_string(),
+        "--entrypoint".to_string(),
+        "find".to_string(),
+        image.to_string(),
+        "/".to_string(),
+        "-name".to_string(),
+        filename.to_string(),
+    ];
+    if dry_run {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "tool": crate::tools::image_cleanliness_check_run::NAME,
+            "dry_run": true,
+            "would_run": std::iter::once("docker".to_string()).chain(args.iter().cloned()).collect::<Vec<_>>(),
+            "required_confirm_for_run": CONFIRMATION,
+            "expected_clean_stdout": ""
+        }))
+        .map_err(|error| format!("image_cleanliness_check_run refused: {error}"));
+    }
+
+    let output = run_bounded_docker(&args, timeout_secs)?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let matches = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let clean = output.status.success() && matches.is_empty();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "tool": crate::tools::image_cleanliness_check_run::NAME,
+        "dry_run": false,
+        "ran": true,
+        "image": image,
+        "filename": filename,
+        "exit_code": output.status.code().unwrap_or(-1),
+        "clean": clean,
+        "matches": matches,
+        "stdout": stdout,
+        "stderr": stderr
+    }))
+    .map_err(|error| format!("image_cleanliness_check_run refused: {error}"))
 }
 
 pub(crate) fn call_validation_profile_run(
@@ -233,6 +313,76 @@ fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, String> {
         _ => Err(format!(
             "validation_profile_run refused: unknown profile `{profile}`; expected repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task"
         )),
+    }
+}
+
+fn validate_docker_image_ref(image: &str) -> Result<(), String> {
+    if image.is_empty()
+        || image.len() > 300
+        || image.starts_with('-')
+        || image.contains("..")
+        || !image
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '/' | '_' | '-' | ':' | '@'))
+    {
+        return Err("image_cleanliness_check_run refused: image must be a Docker image reference, not a shell fragment".to_string());
+    }
+    Ok(())
+}
+
+fn validate_find_filename(filename: &str) -> Result<(), String> {
+    if filename.is_empty()
+        || filename.len() > 128
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains('\0')
+        || filename.starts_with('-')
+    {
+        return Err(
+            "image_cleanliness_check_run refused: filename must be a simple file name".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn run_bounded_docker(args: &[String], timeout_secs: u64) -> Result<std::process::Output, String> {
+    let started = std::time::Instant::now();
+    let mut child = Command::new("docker")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            format!("image_cleanliness_check_run refused: failed to run docker: {error}")
+        })?;
+    let timeout = Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait().map_err(|error| {
+            format!("image_cleanliness_check_run refused: failed while waiting for docker: {error}")
+        })? {
+            Some(_) => {
+                return child.wait_with_output().map_err(|error| {
+                    format!(
+                        "image_cleanliness_check_run refused: failed to collect docker output: {error}"
+                    )
+                });
+            }
+            None if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let output = child.wait_with_output().map_err(|error| {
+                    format!(
+                        "image_cleanliness_check_run refused: failed to collect timed-out docker output: {error}"
+                    )
+                })?;
+                return Err(format!(
+                    "image_cleanliness_check_run refused: docker timed out after {timeout_secs}s\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            None => thread::sleep(Duration::from_millis(25)),
+        }
     }
 }
 

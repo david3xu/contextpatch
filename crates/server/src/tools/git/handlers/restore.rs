@@ -182,3 +182,236 @@ pub(crate) fn call_delete_untracked_exact(
     }))
     .map_err(|error| format!("delete_untracked_exact refused: {error}"))
 }
+
+pub(crate) fn call_delete_generated_prefix(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "delete generated paths";
+    const MAX_DELETE_PATHS: usize = 5000;
+
+    let prefixes = required_string_array(arguments, "prefixes")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    if prefixes.is_empty() {
+        return Err("delete_generated_prefix refused: prefixes must not be empty".to_string());
+    }
+    if prefixes.len() > 20 {
+        return Err(
+            "delete_generated_prefix refused: at most 20 prefixes may be expanded".to_string(),
+        );
+    }
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "delete_generated_prefix refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = canonical_repo_root(repo_root, tools::delete_generated_prefix::NAME)?;
+    let normalized_prefixes =
+        normalize_git_prefixes(tools::delete_generated_prefix::NAME, &root, &prefixes)?;
+    let prefix_set: BTreeSet<String> = normalized_prefixes.iter().cloned().collect();
+    if prefix_set.len() != normalized_prefixes.len() {
+        return Err(
+            "delete_generated_prefix refused: duplicate prefixes are not allowed".to_string(),
+        );
+    }
+
+    let tracked_paths = git_ls_files(&root)?;
+    let candidates =
+        git_untracked_and_ignored_paths_for_tool(tools::delete_generated_prefix::NAME, &root)?;
+    let matched = paths_under_prefixes(&candidates, &normalized_prefixes);
+    let mut files_to_delete = BTreeSet::new();
+    let mut dirs_to_delete = BTreeSet::new();
+
+    for path in &matched {
+        if tracked_paths.contains(path) {
+            return Err(format!(
+                "delete_generated_prefix refused: matched tracked path `{path}`"
+            ));
+        }
+        let target = root.join(path);
+        if target.is_file() {
+            files_to_delete.insert(path.clone());
+        } else if target.is_dir() {
+            dirs_to_delete.insert(path.clone());
+            collect_untracked_files_in_dir(&root, path, &tracked_paths, &mut files_to_delete)?;
+        }
+    }
+    collect_empty_dirs_under_prefixes(&root, &normalized_prefixes, &mut dirs_to_delete)?;
+
+    if files_to_delete.len() + dirs_to_delete.len() > MAX_DELETE_PATHS {
+        return Err(format!(
+            "delete_generated_prefix refused: matched {} paths; maximum is {MAX_DELETE_PATHS}",
+            files_to_delete.len() + dirs_to_delete.len()
+        ));
+    }
+    if files_to_delete.is_empty() && dirs_to_delete.is_empty() {
+        return Err(format!(
+            "delete_generated_prefix refused: no generated files or empty directories matched prefixes\nprefixes:\n{}",
+            format_set(&prefix_set)
+        ));
+    }
+
+    let file_list = files_to_delete.iter().cloned().collect::<Vec<_>>();
+    let dir_list = dirs_to_delete.iter().cloned().collect::<Vec<_>>();
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::delete_generated_prefix::NAME,
+            "dry_run": true,
+            "prefixes": normalized_prefixes,
+            "would_delete_files": file_list,
+            "would_delete_empty_or_ignored_dirs": dir_list,
+            "required_confirm_for_delete": CONFIRMATION
+        }))
+        .map_err(|error| format!("delete_generated_prefix refused: {error}"));
+    }
+
+    for path in &files_to_delete {
+        let target = root.join(path);
+        if target.exists() {
+            fs::remove_file(&target).map_err(|error| {
+                format!("delete_generated_prefix refused: failed to delete `{path}`: {error}")
+            })?;
+        }
+    }
+    for path in dirs_to_delete.iter().rev() {
+        let target = root.join(path);
+        if target.is_dir() && directory_is_empty(&target)? {
+            fs::remove_dir(&target).map_err(|error| {
+                format!(
+                    "delete_generated_prefix refused: failed to delete directory `{path}`: {error}"
+                )
+            })?;
+        } else if target.is_dir() && matched.contains(path) {
+            fs::remove_dir_all(&target).map_err(|error| {
+                format!("delete_generated_prefix refused: failed to delete ignored directory `{path}`: {error}")
+            })?;
+        }
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::delete_generated_prefix::NAME,
+        "dry_run": false,
+        "deleted": true,
+        "deleted_files": file_list,
+        "deleted_empty_or_ignored_dirs": dir_list
+    }))
+    .map_err(|error| format!("delete_generated_prefix refused: {error}"))
+}
+
+fn git_ls_files(root: &Path) -> Result<BTreeSet<String>, String> {
+    let output = git_output_for_tool(
+        tools::delete_generated_prefix::NAME,
+        root,
+        &["ls-files", "-z"],
+    )?;
+    parse_nul_paths_for_tool(
+        tools::delete_generated_prefix::NAME,
+        &output.stdout,
+        "git ls-files",
+    )
+}
+
+fn collect_untracked_files_in_dir(
+    root: &Path,
+    path: &str,
+    tracked_paths: &BTreeSet<String>,
+    files: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let dir = root.join(path);
+    for entry in fs::read_dir(&dir).map_err(|error| {
+        format!("delete_generated_prefix refused: failed to read `{path}`: {error}")
+    })? {
+        let entry = entry.map_err(|error| {
+            format!("delete_generated_prefix refused: failed to read entry under `{path}`: {error}")
+        })?;
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|error| format!("delete_generated_prefix refused: {error}"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if tracked_paths.contains(&relative) {
+            return Err(format!(
+                "delete_generated_prefix refused: ignored directory `{path}` contains tracked path `{relative}`"
+            ));
+        }
+        let file_type = entry.file_type().map_err(|error| {
+            format!("delete_generated_prefix refused: failed to inspect `{relative}`: {error}")
+        })?;
+        if file_type.is_file() {
+            files.insert(relative);
+        } else if file_type.is_dir() {
+            collect_untracked_files_in_dir(root, &relative, tracked_paths, files)?;
+        } else {
+            return Err(format!(
+                "delete_generated_prefix refused: `{relative}` is not a regular file or directory"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn collect_empty_dirs_under_prefixes(
+    root: &Path,
+    prefixes: &[String],
+    dirs: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    for prefix in prefixes {
+        let target = root.join(prefix);
+        if target.is_dir() {
+            collect_empty_dirs(root, prefix, dirs)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_empty_dirs(
+    root: &Path,
+    path: &str,
+    dirs: &mut BTreeSet<String>,
+) -> Result<bool, String> {
+    let target = root.join(path);
+    let mut empty = true;
+    for entry in fs::read_dir(&target).map_err(|error| {
+        format!("delete_generated_prefix refused: failed to read `{path}`: {error}")
+    })? {
+        let entry = entry.map_err(|error| {
+            format!("delete_generated_prefix refused: failed to read entry under `{path}`: {error}")
+        })?;
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|error| format!("delete_generated_prefix refused: {error}"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let file_type = entry.file_type().map_err(|error| {
+            format!("delete_generated_prefix refused: failed to inspect `{relative}`: {error}")
+        })?;
+        if file_type.is_dir() {
+            if !collect_empty_dirs(root, &relative, dirs)? {
+                empty = false;
+            }
+        } else {
+            empty = false;
+        }
+    }
+    if empty {
+        dirs.insert(path.to_string());
+    }
+    Ok(empty)
+}
+
+fn directory_is_empty(path: &Path) -> Result<bool, String> {
+    Ok(fs::read_dir(path)
+        .map_err(|error| {
+            format!(
+                "delete_generated_prefix refused: failed to inspect directory {}: {error}",
+                path.display()
+            )
+        })?
+        .next()
+        .is_none())
+}

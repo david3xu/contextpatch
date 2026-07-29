@@ -73,6 +73,7 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `create_directory`
 - `status_guard`
 - `run_guarded_command`
+- `image_cleanliness_check_run`
 - `fixture_generator_run`
 - `base_image_check_run`
 - `fixture_manifest_verify`
@@ -84,8 +85,10 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `native_device_run`
 - `git_commit_exact`
 - `git_commit_scoped`
+- `git_commit_prefix`
 - `git_restore_exact`
 - `delete_untracked_exact`
+- `delete_generated_prefix`
 - `git_remote_list`
 - `git_remote_check`
 - `git_branch_prepare`
@@ -98,15 +101,15 @@ The MCP server exposes the safe tool surface to local agent clients:
 
 `write_new_file_base64` creates binary repository files with the same create-only root guard as text file creation. `write_existing_file_exact_hash` covers whole-file synchronization only when the caller supplies the current lowercase SHA-256 digest and explicit confirmation. `bulk_write_new_files_base64` imports many create-only fixture files in one bounded call. `fixture_manifest_verify` and `fixture_manifest_refresh` enforce exact fixture file sets and SHA-256 digests against a manifest. `artifact_write_text` and `artifact_write_base64` create sidecar artifacts outside the repository tree for generators, trap checks, or local helper files that must not be committed. `fixture_generator_run` handles the common Dynamo pattern of temporarily staging a repo-relative Python generator, running it with declared output paths/prefixes, verifying it did not touch undeclared files, and then letting the caller delete the temporary generator before commit.
 
-`validation_profile_run` compresses common validation sequences into one guarded call and returns compact command summaries with log ids. `read_command_log` retrieves those redacted logs on demand so large outputs do not have to ride in the first JSON-RPC response.
+`validation_profile_run` compresses common validation sequences into one guarded call and returns compact command summaries with log ids. `read_command_log` retrieves those redacted logs on demand so large outputs do not have to ride in the first JSON-RPC response. Hosts can add validation executables that are not on the server `PATH` through `CONTEXTPATCH_VALIDATION_PATHS`; `preflight_health` reports resolved validation-tool paths. `image_cleanliness_check_run` covers the narrow Docker image-cleanliness check by planning or running only `docker run --rm --network none --entrypoint find <image> / -name <filename>`, defaulting to `solve.sh`.
 
 `setup_profile_run` is a declarative setup-profile tool for real project scaffolding needs. It defaults to dry-run, can run typed server-owned actions such as the `node-capacitor-shell` profile only with `confirm: "run setup profile"` and a clean worktree, and does not expose arbitrary `npm install`, `pnpm add`, `npx`, package lists, or shell commands through `run_guarded_command`. The Capacitor profile derives npm or pnpm command plans from project lockfiles and installs `@capacitor/cli` as a dev dependency.
 
 `native_build_run` and `native_device_run` cover native plugin/build workflows without exposing raw `xcodebuild`, `./gradlew`, `xcrun`, or `adb` authority. Agents select typed actions such as `ios_build`, `android_assemble_debug`, `ios_launch_app`, or `android_read_logcat`; contextpatch derives the exact command plan, defaults to dry-run, validates repo-relative artifacts, and requires `confirm: "run native device"` before executing device-state-changing actions.
 
-`git_commit_exact` is a narrowly gated local Git checkpoint tool. It defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` before mutation, stages only those paths, creates at most one local commit, and never fetches or pushes. `git_commit_scoped` covers the related case where unrelated dirty files must be preserved; it requires a clean index and stages only the explicit dirty subset.
+`git_commit_exact` is a narrowly gated local Git checkpoint tool. It defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` before mutation, stages only those paths, creates at most one local commit, and never fetches or pushes. `git_commit_scoped` covers the related case where unrelated dirty files must be preserved; it requires a clean index and stages only the explicit dirty subset. `git_commit_prefix` is the practical large-fixture variant: it expands explicit prefixes to the exact dirty paths underneath them, reports the expanded set in dry-run, then commits only that expanded set with `confirm: "commit prefix paths"`.
 
-`git_restore_exact` and `delete_untracked_exact` cover generated-noise cleanup without exposing broad reset/checkout/clean behavior. They operate only on explicit requested paths and default to dry-run/confirmation-gated mutation.
+`git_restore_exact`, `delete_untracked_exact`, and `delete_generated_prefix` cover generated-noise cleanup without exposing broad reset/checkout/clean behavior. Exact tools operate only on explicit requested paths. Prefix cleanup expands explicit prefixes only to ignored/untracked files and empty directories, refuses tracked paths, and defaults to dry-run/confirmation-gated mutation.
 
 `git_remote_list`, `git_remote_check`, and `git_push_exact` keep remote publishing separate from local commit authority. `git_remote_list` parses `git remote -v` without mutation. `git_remote_check` fetches one explicit remote branch and reports whether `HEAD..remote/branch` is empty without changing source files. `git_push_exact` requires a clean worktree, matching current branch, expected HEAD hash, no remote-ahead divergence after fetch, `confirm: "push exact commit"`, and pushes only `HEAD:refs/heads/<branch>` without force.
 
@@ -129,7 +132,7 @@ See [docs/safety-contract.md](docs/safety-contract.md) for the full contract.
 
 ## Current status
 
-Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution, binary/sidecar/bulk fixture writes, hash-guarded existing-file synchronization, fixture manifest verification/refresh, typed fixture generator and base-image workflows, exact/scoped Git workflows, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution with host-configured validation paths, binary/sidecar/bulk fixture writes, hash-guarded existing-file synchronization, fixture manifest verification/refresh, typed fixture generator/base-image/image-cleanliness workflows, exact/scoped/prefix Git workflows, generated-prefix cleanup, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

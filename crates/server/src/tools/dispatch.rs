@@ -58,6 +58,9 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
             tools::fixtures::call_fixture_manifest_refresh(repo_root, &arguments)
         }
         tools::read_command_log::NAME => tools::process::call_read_command_log(&arguments),
+        tools::image_cleanliness_check_run::NAME => {
+            tools::process::call_image_cleanliness_check_run(&arguments)
+        }
         tools::validation_profile_run::NAME => {
             tools::process::call_validation_profile_run(repo_root, &arguments)
         }
@@ -76,11 +79,17 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
         tools::git_commit_scoped::NAME => {
             tools::git::handlers::call_git_commit_scoped(repo_root, &arguments)
         }
+        tools::git_commit_prefix::NAME => {
+            tools::git::handlers::call_git_commit_prefix(repo_root, &arguments)
+        }
         tools::git_restore_exact::NAME => {
             tools::git::handlers::call_git_restore_exact(repo_root, &arguments)
         }
         tools::delete_untracked_exact::NAME => {
             tools::git::handlers::call_delete_untracked_exact(repo_root, &arguments)
+        }
+        tools::delete_generated_prefix::NAME => {
+            tools::git::handlers::call_delete_generated_prefix(repo_root, &arguments)
         }
         tools::git_remote_list::NAME => tools::git::handlers::call_git_remote_list(repo_root),
         tools::git_remote_check::NAME => {

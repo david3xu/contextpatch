@@ -30,19 +30,22 @@ The expected agent workflow is:
 6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, `harbor run`, the exact `references/check-base-image.sh` or `references/check-base-image.sh task` checks, or `rg` drift searches.
 7. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
 8. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
-9. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
-10. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
-11. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
-12. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
-13. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
-14. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
-15. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
-16. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
-17. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
-18. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
-19. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
-20. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
-21. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
+9. Use `git_commit_prefix` when the desired commit is a large generated or fixture tree under known prefixes; inspect the dry-run expanded path list before confirming.
+10. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
+11. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
+12. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
+13. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
+14. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
+15. Use `image_cleanliness_check_run` for the narrow Docker image check that searches the built image for a forbidden file name such as `solve.sh`; keep dry-run unless Docker execution is explicitly needed.
+16. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
+17. Use `delete_generated_prefix` for ignored/untracked generated files and empty directories under known prefixes, such as `__pycache__`, after reviewing the dry-run path list.
+18. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
+19. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
+20. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
+21. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
+22. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+23. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+24. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
 22. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
 23. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
 24. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
@@ -117,6 +120,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `capability_manifest`
 - `preflight_health`
 - `run_guarded_command`
+- `image_cleanliness_check_run`
 - `fixture_generator_run`
 - `base_image_check_run`
 - `fixture_manifest_verify`
@@ -128,8 +132,10 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `native_device_run`
 - `git_commit_exact`
 - `git_commit_scoped`
+- `git_commit_prefix`
 - `git_restore_exact`
 - `delete_untracked_exact`
+- `delete_generated_prefix`
 - `git_remote_list`
 - `git_remote_check`
 - `git_branch_prepare`
@@ -175,8 +181,10 @@ The current server exposes the implemented safe primitives:
 - `native_device_run`
 - `git_commit_exact`
 - `git_commit_scoped`
+- `git_commit_prefix`
 - `git_restore_exact`
 - `delete_untracked_exact`
+- `delete_generated_prefix`
 - `git_remote_list`
 - `git_remote_check`
 - `git_branch_prepare`
@@ -195,13 +203,15 @@ Use `bulk_write_new_files_base64` as a fallback for many binary/text fixture fil
 
 Use `base_image_check_run` for `references/check-base-image.sh`, and set `project_path: "task"` for Dynamo/Harbor tasks that require `bash references/check-base-image.sh task`. This is the only shell-script-shaped validation exception; it does not make arbitrary `bash` or shell snippets available.
 
+Use `image_cleanliness_check_run` for the Docker image cleanliness gate that checks whether a task image contains a forbidden file such as `solve.sh`. It plans or runs only `docker run --rm --network none --entrypoint find <image> / -name <filename>`, defaults to dry-run, and requires `confirm: "run image cleanliness check"` for execution. Do not ask for generic Docker access for this gate.
+
 Use `write_existing_file_exact_hash` when an existing text file needs whole-file synchronization and exact anchoring by current content hash is easier than a text replacement. It defaults to dry-run and requires `confirm: "write exact hash"` before writing.
 
 Use `fixture_manifest_refresh` after fixture or SPEC changes to regenerate a manifest from explicit `fixture_paths` or `fixture_prefixes`; overwriting an existing manifest requires its current `expected_manifest_sha256`. Use `fixture_manifest_verify` before deriving truth or committing fixture changes; it fails on missing, modified, or unlisted fixture files.
 
 Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values. Use `read_command_log` only for logs that need inspection.
 
-Before launching a profile that depends on optional host tools, call `preflight_health`. It must report availability for the validation executables used by shipped profiles, including `python3`, `pytest`, `harbor`, and the exact `bash references/check-base-image.sh` workflow. If Harbor is unavailable in the current environment, do not claim a completed `harbor run`; verify task-local Oracle/verifier logic directly only as a documented fallback for that environment limitation.
+Before launching a profile that depends on optional host tools, call `preflight_health`. It must report availability and resolved paths for validation executables used by shipped profiles, including `python3`, `pytest`, `harbor`, and the exact `bash references/check-base-image.sh` workflow. If Harbor is installed outside the MCP server process `PATH`, configure the host with `CONTEXTPATCH_VALIDATION_PATHS` rather than asking the model to pass an executable path or environment override. If Harbor is unavailable in the current environment, do not claim a completed `harbor run`; verify task-local Oracle/verifier logic directly only as a documented fallback for that environment limitation.
 
 Use `setup_profile_run` when a real project setup task needs a profile-owned command plan. It defaults to dry-run and requires `confirm: "run setup profile"` plus a clean worktree before executing an external setup command. The first supported profile is `node-capacitor-shell`, with typed actions for Capacitor dependency installation, the fixed `@capacitor/filesystem` plugin dependency, init, adding iOS/Android projects, sync, and iOS CocoaPods install. The profile uses pnpm when `pnpm-lock.yaml` is present and otherwise uses npm; it installs Capacitor runtime packages as dependencies and `@capacitor/cli` as a dev dependency. `ios_pod_install` applies only when the cwd contains a `Podfile`; Swift Package Manager based Capacitor projects do not need it. The caller never supplies raw commands, arbitrary package lists, or shell strings.
 
@@ -215,9 +225,13 @@ Use `git_commit_exact` for the narrow local-commit case that previously required
 
 Use `git_commit_scoped` when the desired local commit is only a subset of dirty paths and unrelated dirty files should remain untouched. It validates that every requested path is dirty, requires the Git index to be clean before staging so pre-staged unrelated work cannot leak into the commit, defaults to dry-run, requires `confirm: "commit scoped paths"` when `dry_run` is false, stages only the requested paths, creates one local commit, and reports the remaining dirty paths. It still does not fetch or push.
 
+Use `git_commit_prefix` when many dirty fixture or generated files live under known prefixes and enumerating each path manually would be noisy. The dry-run expands prefixes to the exact dirty path list and reports unrelated dirty paths that will remain. Execution requires a clean index and `confirm: "commit prefix paths"`, stages only the expanded paths, creates one local commit, and never fetches or pushes.
+
 Commit messages should not include Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for that attribution for the specific commit. Treat authored code and commit messages as project-owned work by the configured repository user.
 
 Use `git_restore_exact` to remove generated tracked dirty paths before an exact commit without exposing broad reset, checkout, clean, or stash behavior. It defaults to dry-run, requires `confirm: "restore exact paths"` for mutation, restores only explicit currently-dirty tracked paths from `HEAD`, and reports any remaining dirty paths.
+
+Use `delete_generated_prefix` for ignored/untracked generated output and empty directories under known prefixes when explicit file deletion would be too brittle. Review the dry-run `would_delete_files` and `would_delete_empty_or_ignored_dirs` lists first. Execution requires `confirm: "delete generated paths"` and refuses tracked paths instead of behaving like `git clean`.
 
 Use `git_remote_check` and `git_push_exact` for the separate remote-publishing boundary. `git_remote_check` fetches one explicit remote branch and reports whether the remote is ahead without source changes. `git_push_exact` requires `confirm: "push exact commit"`, a clean worktree, current branch equal to the requested branch, `expected_head` equal to current `HEAD`, and no remote-ahead divergence after fetch; it pushes only `HEAD:refs/heads/<branch>` and never force-pushes.
 

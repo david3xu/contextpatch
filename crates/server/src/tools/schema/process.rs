@@ -60,6 +60,40 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::image_cleanliness_check_run::NAME,
+                    "description": "Plan or run a narrow Docker image cleanliness check for a simple file name without exposing generic docker.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "image": {
+                                "type": "string",
+                                "description": "Docker image reference to inspect."
+                            },
+                            "filename": {
+                                "type": "string",
+                                "description": "Simple file name to search for with find. Defaults to solve.sh."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without running Docker. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `run image cleanliness check` when dry_run is false."
+                            },
+                            "timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 600,
+                                "description": "Optional timeout in seconds. Defaults to 120."
+                            }
+                        },
+                        "required": ["image"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::validation_profile_run::NAME,
                     "description": "Run a predefined sequence of allowlisted validation commands and return compact results with log ids.",
                     "inputSchema": {

@@ -53,6 +53,7 @@ fn stage1_mcp_tools_work_together() {
         "bulk_write_new_files_base64",
         "create_directory",
         "run_guarded_command",
+        "image_cleanliness_check_run",
         "fixture_generator_run",
         "base_image_check_run",
         "fixture_manifest_verify",
@@ -64,8 +65,10 @@ fn stage1_mcp_tools_work_together() {
         "native_device_run",
         "git_commit_exact",
         "git_commit_scoped",
+        "git_commit_prefix",
         "git_restore_exact",
         "delete_untracked_exact",
+        "delete_generated_prefix",
         "git_remote_list",
         "git_remote_check",
         "git_branch_prepare",
@@ -542,6 +545,50 @@ fn stage2_git_commit_scoped_refuses_preexisting_staged_paths() {
 }
 
 #[test]
+fn stage2_git_commit_prefix_expands_dirty_paths_under_prefixes() {
+    let root = git_repo("stage2_git_commit_prefix_expands_dirty_paths_under_prefixes");
+    fs::create_dir_all(root.join("task/tests")).unwrap();
+    fs::create_dir_all(root.join("task/solution")).unwrap();
+    fs::write(root.join("task/tests/a.txt"), "old\n").unwrap();
+    fs::write(root.join("task/solution/solve.py"), "old\n").unwrap();
+    fs::write(root.join("kept.txt"), "old\n").unwrap();
+    git(&root, &["add", "task", "kept.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("task/tests/a.txt"), "new\n").unwrap();
+    fs::write(root.join("task/solution/solve.py"), "new\n").unwrap();
+    fs::write(root.join("kept.txt"), "new\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_prefix","arguments":{"prefixes":["task"],"subject":"test: prefix commit"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_commit_prefix","arguments":{"prefixes":["task"],"subject":"test: prefix commit","dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_commit_prefix","arguments":{"prefixes":["task"],"subject":"test: prefix commit","dry_run":false,"confirm":"commit prefix paths"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"expanded_path_count\": 2");
+    assert_text(&responses[0], "task/tests/a.txt");
+    assert_text(&responses[0], "task/solution/solve.py");
+    assert_text(&responses[0], "kept.txt");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
+    assert_text(&responses[2], "\"committed\": true");
+    assert_text(&responses[2], "task/tests/a.txt");
+    assert_text(&responses[2], "task/solution/solve.py");
+
+    let committed_files = git_stdout(&root, &["show", "--name-only", "--pretty=", "HEAD"]);
+    assert!(committed_files
+        .lines()
+        .any(|line| line == "task/tests/a.txt"));
+    assert!(committed_files
+        .lines()
+        .any(|line| line == "task/solution/solve.py"));
+    assert!(!committed_files.lines().any(|line| line == "kept.txt"));
+    assert_eq!(git_stdout(&root, &["status", "--short"]), " M kept.txt\n");
+}
+
+#[test]
 fn stage2_git_restore_exact_restores_only_requested_tracked_dirty_paths() {
     let root = git_repo("stage2_git_restore_exact_restores_only_requested_tracked_dirty_paths");
     fs::write(root.join("generated.txt"), "old\n").unwrap();
@@ -570,6 +617,45 @@ fn stage2_git_restore_exact_restores_only_requested_tracked_dirty_paths() {
         "old\n"
     );
     assert_eq!(fs::read_to_string(root.join("kept.txt")).unwrap(), "new\n");
+}
+
+#[test]
+fn stage2_delete_generated_prefix_dry_run_matches_only_generated_paths() {
+    let root = git_repo("stage2_delete_generated_prefix_dry_run_matches_only_generated_paths");
+    fs::create_dir_all(root.join("task/tests/__pycache__")).unwrap();
+    fs::create_dir_all(root.join("task/tests/empty")).unwrap();
+    fs::create_dir_all(root.join("task/tests/nested/empty")).unwrap();
+    fs::write(root.join(".gitignore"), "__pycache__/\n*.pyc\n").unwrap();
+    fs::write(root.join("task/tests/test_outputs.py"), "tracked\n").unwrap();
+    git(&root, &["add", ".gitignore", "task/tests/test_outputs.py"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(
+        root.join("task/tests/__pycache__/test_outputs.pyc"),
+        "cache\n",
+    )
+    .unwrap();
+    fs::write(root.join("task/tests/new.log"), "scratch\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_generated_prefix","arguments":{"prefixes":["task/tests"]}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"delete_generated_prefix","arguments":{"prefixes":["task/tests"],"dry_run":false}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "task/tests/__pycache__/test_outputs.pyc");
+    assert_text(&responses[0], "task/tests/new.log");
+    assert_text(&responses[0], "task/tests/empty");
+    assert_text(&responses[0], "task/tests/nested/empty");
+    assert!(!response_text(&responses[0]).contains("task/tests/test_outputs.py"));
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
+    assert!(root
+        .join("task/tests/__pycache__/test_outputs.pyc")
+        .exists());
+    assert!(root.join("task/tests/test_outputs.py").exists());
 }
 
 #[test]
@@ -613,6 +699,32 @@ fn stage1_mcp_refusals_are_tool_results() {
     );
     assert!(!root.join("bad.bin").exists());
     assert!(!root.join("mismatch.bin").exists());
+}
+
+#[test]
+fn stage2_image_cleanliness_check_run_plans_bounded_docker_find() {
+    let root = git_repo("stage2_image_cleanliness_check_run_plans_bounded_docker_find");
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"image_cleanliness_check_run","arguments":{"image":"example/task:latest"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"image_cleanliness_check_run","arguments":{"image":"example/task:latest","filename":"solve.sh","dry_run":false}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "\"docker\"");
+    assert_text(&responses[0], "\"run\"");
+    assert_text(&responses[0], "\"--network\"");
+    assert_text(&responses[0], "\"none\"");
+    assert_text(&responses[0], "\"--entrypoint\"");
+    assert_text(&responses[0], "\"find\"");
+    assert_text(&responses[0], "\"/\"");
+    assert_text(&responses[0], "\"-name\"");
+    assert_text(&responses[0], "\"solve.sh\"");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
 }
 
 #[test]

@@ -25,6 +25,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `fixture_generator_run` | Declared fixture outputs only | Dry-run/confirmation-gated repo-relative Python generator with changed-path verification |
 | `base_image_check_run` | No source edits | Exact `references/check-base-image.sh` validation workflow, optionally with the exact `task` arg; no arbitrary shell |
+| `image_cleanliness_check_run` | No source edits | Narrow Docker image `find / -name <filename>` check; dry-run default and exact confirmation |
 | `fixture_manifest_verify` | No | Exact fixture file set and SHA-256 digest verification; mismatches are refusals |
 | `fixture_manifest_refresh` | Manifest file only | Regenerates fixture manifest from declared files/prefixes with dry-run, confirmation, and existing-manifest hash guard |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
@@ -34,8 +35,10 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `native_device_run` | External device command | Dry-run default, typed action params, device-state confirmation gate, no raw `xcrun` or `adb` commands |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `git_commit_scoped` | Git index + one local commit | Explicit dirty subset, clean-index gate, preserves unrelated dirty paths, never pushes |
+| `git_commit_prefix` | Git index + one local commit | Explicit prefixes expand to exact dirty paths, clean-index gate, dry-run default, never pushes |
 | `git_restore_exact` | Git worktree/index restore | Explicit dirty tracked paths only, dry-run default, explicit confirmation, never resets the whole worktree |
 | `delete_untracked_exact` | Git worktree cleanup | Explicit untracked regular files only, dry-run default, explicit confirmation, no broad clean |
+| `delete_generated_prefix` | Git worktree cleanup | Explicit prefixes expand only to ignored/untracked files and empty dirs, dry-run default, no broad clean |
 | `git_remote_list` | No | Read-only parsed `git remote -v` |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
@@ -402,6 +405,7 @@ Rules:
 - Arguments that directly reference paths outside the repository root must be refused.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
+- Program resolution may include server-host configuration through `CONTEXTPATCH_VALIDATION_PATHS` in addition to the process `PATH`; callers still supply only executable names, never paths or environment variables.
 - The tool must refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh` with its optional exact `task` argument, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
 
 ### `fixture_generator_run`
@@ -452,6 +456,29 @@ Rules:
 - Execution requires exact confirmation and uses the guarded no-shell process runner.
 - `project_path` values other than `task` must be refused.
 - This tool must not expose arbitrary `bash`, shell snippets, or caller-selected shell scripts.
+
+### `image_cleanliness_check_run`
+
+Plans or runs the narrow Docker image-cleanliness check used by task validators.
+
+Required inputs:
+
+- `image`: Docker image reference
+
+Optional inputs:
+
+- `filename`: simple file name to search for; defaults to `solve.sh`
+- `timeout_secs`: timeout from 1 to 600
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `run image cleanliness check` when `dry_run` is `false`
+
+Rules:
+
+- Dry-run must return the exact plan `docker run --rm --network none --entrypoint find <image> / -name <filename>` without running Docker.
+- Execution requires exact confirmation.
+- The image reference and file name must be bounded single tokens, not shell fragments.
+- The tool must not expose generic Docker arguments, bind mounts, network access, caller-selected entrypoints, shell snippets, or arbitrary commands.
+- A clean result is an exit status success with empty stdout; any found path is reported as a match instead of hidden.
 
 ### `write_existing_file_exact_hash`
 
@@ -564,6 +591,7 @@ Rules:
 - Each command must pass the same `run_guarded_command` allowlist, cwd, timeout, and redaction rules.
 - The first response should be compact: per-command status, duration, timeout state, and log id.
 - Full command output should be retrieved with `read_command_log` only when needed.
+- Profiles may use executable resolution from `CONTEXTPATCH_VALIDATION_PATHS` through the guarded runner; callers cannot pass environment overrides per request.
 - Profiles must not commit, push, reset, checkout, clean, stash, or mutate product files.
 
 ### `setup_profile_run`
@@ -748,6 +776,34 @@ Rules:
 - On success, the tool returns the commit hash, short hash, committed paths, and remaining dirty paths.
 - Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
 
+### `git_commit_prefix`
+
+Creates a local Git commit from all dirty paths under explicit prefixes while preserving unrelated dirty paths.
+
+Required inputs:
+
+- `prefixes`: non-empty list of repository-relative prefixes to expand
+- `subject`: single-line commit subject
+
+Optional inputs:
+
+- `body`: commit body/trailers
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `commit prefix paths` when `dry_run` is `false`
+
+Rules:
+
+- The tool must default to dry-run and perform no mutation unless `dry_run` is `false` and `confirm` exactly equals `commit prefix paths`.
+- Prefixes must normalize inside the repository root and must not use path traversal, absolute paths, NUL bytes, or Git pathspec metacharacters.
+- The tool expands prefixes against the current dirty-path set and reports the exact expanded paths and count before mutation.
+- At least one dirty path must match the prefixes; unrelated dirty paths may exist and must remain uncommitted.
+- The Git index must be clean before mutation so pre-staged unrelated paths cannot leak into the commit.
+- The expanded path count is bounded; large fixture commits should still be reviewable from the dry-run path list.
+- The tool may run `git add -- <expanded paths>` and one local `git commit`; it must not fetch, pull, push, reset, checkout, stash, clean, or modify remotes.
+- The tool must verify that the staged path set exactly matches the expanded path set before committing.
+- On success, the tool returns the commit hash, short hash, committed expanded paths, and remaining dirty paths.
+- Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
+
 ### `git_restore_exact`
 
 Restores explicit dirty tracked paths from `HEAD` without exposing broad checkout, reset, clean, or stash operations. This is for generated-noise cleanup before exact commits.
@@ -790,6 +846,29 @@ Rules:
 - Every requested path must be a regular file, not a directory.
 - The tool must delete only the explicit paths listed, never recurse, glob, or clean unrelated untracked files.
 - On success, the requested paths must no longer be untracked, and the response must report remaining untracked paths.
+
+### `delete_generated_prefix`
+
+Deletes generated untracked or ignored files and empty directories under explicit prefixes without exposing broad clean/reset behavior.
+
+Required inputs:
+
+- `prefixes`: non-empty list of repository-relative prefixes to expand
+
+Optional inputs:
+
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `delete generated paths` when `dry_run` is `false`
+
+Rules:
+
+- The tool must default to dry-run and perform no mutation unless `dry_run` is `false` and `confirm` exactly equals `delete generated paths`.
+- Prefixes must normalize inside the repository root and must not use path traversal, absolute paths, NUL bytes, or Git pathspec metacharacters.
+- The candidate set comes from Git untracked and ignored status plus empty directories found under the prefixes.
+- The tool must refuse if a matched generated directory contains any tracked path.
+- Dry-run must report exact files and directories that would be deleted.
+- Execution may delete regular generated files, ignored generated directories, and empty directories only within the matched prefixes.
+- The tool must not run `git clean`, recurse from arbitrary roots, delete tracked files, or hide unmatched generated files elsewhere in the repository.
 
 ### `git_remote_list`
 
@@ -999,25 +1078,28 @@ The server currently ships:
 12. `capability_manifest`
 13. `preflight_health`
 14. `run_guarded_command`
-15. `fixture_generator_run`
-16. `base_image_check_run`
-17. `fixture_manifest_verify`
-18. `fixture_manifest_refresh`
-19. `read_command_log`
-20. `validation_profile_run`
-21. `git_commit_exact`
-22. `git_commit_scoped`
-23. `git_restore_exact`
-24. `delete_untracked_exact`
-25. `git_remote_list`
-26. `git_remote_check`
-27. `git_branch_prepare`
-28. `git_merge_readiness`
-29. `git_push_exact`
-30. `github_pr_run`
-31. `github_fork_prepare`
-32. `setup_profile_run`
-33. `native_build_run`
-34. `native_device_run`
+15. `image_cleanliness_check_run`
+16. `fixture_generator_run`
+17. `base_image_check_run`
+18. `fixture_manifest_verify`
+19. `fixture_manifest_refresh`
+20. `read_command_log`
+21. `validation_profile_run`
+22. `git_commit_exact`
+23. `git_commit_scoped`
+24. `git_commit_prefix`
+25. `git_restore_exact`
+26. `delete_untracked_exact`
+27. `delete_generated_prefix`
+28. `git_remote_list`
+29. `git_remote_check`
+30. `git_branch_prepare`
+31. `git_merge_readiness`
+32. `git_push_exact`
+33. `github_pr_run`
+34. `github_fork_prepare`
+35. `setup_profile_run`
+36. `native_build_run`
+37. `native_device_run`
 
 Other documented boundary tools, such as `apply_patch` and `delete_guarded`, remain planned until implemented. See `docs/implementation-roadmap.md`.

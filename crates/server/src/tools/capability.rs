@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use contextpatch_core::git::status::status_summary;
+use contextpatch_core::process::guarded_command::resolve_guarded_program;
 use serde_json::{json, Value};
 
 use crate::tools;
@@ -34,33 +35,36 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
             "create_directory": true,
             "status_guard": true,
             "read_command_log": true,
+            "image_cleanliness_check_run": true,
             "setup_profile_run": true,
             "native_build_run": true,
             "native_device_run": true,
             "git_commit_exact": true,
             "git_commit_scoped": true,
+            "git_commit_prefix": true,
             "git_restore_exact": true,
             "delete_untracked_exact": true,
+            "delete_generated_prefix": true,
             "git_remote_list": true,
             "git_remote_check": true,
             "git_branch_prepare": true,
             "git_merge_readiness": true,
             "git_push_exact": true,
             "github_pr_run": true,
-            "github_fork_prepare": true
-            ,
+            "github_fork_prepare": true,
             "bulk_write_new_files_base64": true,
             "fixture_generator_run": true,
-            "base_image_check_run": true
-            ,
+            "base_image_check_run": true,
             "fixture_manifest_verify": true,
             "fixture_manifest_refresh": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
             "local_commit_scoped_paths": true,
+            "local_commit_prefix_paths": true,
             "restore_exact_paths": true,
             "delete_untracked_exact_paths": true,
+            "delete_generated_prefix_paths": true,
             "remote_list": true,
             "remote_check": true,
             "branch_prepare": true,
@@ -71,9 +75,11 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
             "guards": [
                 "requires exact complete dirty-path set",
                 "scoped commits require requested dirty paths and a clean index before staging",
+                "prefix commits expand explicit prefixes to exact dirty paths before staging",
                 "defaults to dry_run",
                 "requires confirm literal for mutation",
                 "restores only explicit dirty paths from HEAD",
+                "generated cleanup expands explicit prefixes to ignored/untracked files and empty dirs",
                 "stages only explicit paths",
                 "creates at most one local commit",
                 "fetches only explicit remote branch",
@@ -129,7 +135,8 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
                 "bulk_write_new_files_base64": "Imports many create-only binary/text fixture files with per-file and total size bounds.",
                 "write_existing_file_exact_hash": "Overwrites an existing file only when the current SHA-256 matches.",
                 "fixture_manifest_verify": "Verifies exact fixture file sets and SHA-256 digests.",
-                "fixture_manifest_refresh": "Regenerates fixture manifests with dry-run, confirmation, and existing-manifest hash guard."
+                "fixture_manifest_refresh": "Regenerates fixture manifests with dry-run, confirmation, and existing-manifest hash guard.",
+                "image_cleanliness_check_run": "Runs a narrow Docker image file-name scan without exposing generic docker."
             },
             "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode", "dynamo-harbor-task"],
             "guards": [
@@ -148,8 +155,7 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
                 "path traversal outside repo root",
                 "secret-printing environment inspection"
             ]
-        }
-        ,
+        },
         "setup_profiles": {
             "mode": "declarative_profile_actions",
             "profiles": {
@@ -391,7 +397,8 @@ pub(crate) fn call_preflight_health(repo_root: &Path) -> Result<String, String> 
             "available": true,
             "mode": "allowlisted_no_shell",
             "default_timeout_secs": 120,
-            "max_timeout_secs": 600
+            "max_timeout_secs": 600,
+            "configured_validation_paths_env": "CONTEXTPATCH_VALIDATION_PATHS"
         },
         "tools": {
             "git": executable_available("git"),
@@ -478,16 +485,20 @@ pub(crate) fn call_preflight_health(repo_root: &Path) -> Result<String, String> 
 }
 
 fn executable_available(program: &str) -> Value {
-    let output = std::process::Command::new(program)
+    let resolved = resolve_guarded_program(program);
+    let executable = resolved.as_deref().unwrap_or_else(|| Path::new(program));
+    let output = std::process::Command::new(executable)
         .arg("--version")
         .output();
     match output {
         Ok(output) => json!({
             "available": output.status.success(),
-            "exit_code": output.status.code().unwrap_or(-1)
+            "exit_code": output.status.code().unwrap_or(-1),
+            "resolved_path": resolved.map(|path| path.display().to_string())
         }),
         Err(error) => json!({
             "available": false,
+            "resolved_path": resolved.map(|path| path.display().to_string()),
             "error": error.to_string()
         }),
     }
@@ -559,7 +570,9 @@ fn xcode_select_available() -> Value {
 }
 
 fn executable_is_available(program: &str) -> bool {
-    std::process::Command::new(program)
+    let resolved = resolve_guarded_program(program);
+    let executable = resolved.as_deref().unwrap_or_else(|| Path::new(program));
+    std::process::Command::new(executable)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

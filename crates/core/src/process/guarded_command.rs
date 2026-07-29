@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::error::ContextPatchError;
 use crate::process::runner::{
-    checked_timeout, display_command, resolve_cwd, run_no_shell_command,
+    checked_timeout, display_command, resolve_cwd, resolve_program, run_no_shell_command,
     validate_common_command_shape,
 };
 
@@ -36,6 +36,13 @@ pub fn run_guarded_command(
         output.stdout,
         output.stderr
     ))
+}
+
+pub fn resolve_guarded_program(program: &str) -> Option<std::path::PathBuf> {
+    if !is_allowlisted_program(program) {
+        return None;
+    }
+    resolve_program(program)
 }
 
 fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchError> {
@@ -72,6 +79,23 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     }
 
     Ok(())
+}
+
+fn is_allowlisted_program(program: &str) -> bool {
+    matches!(
+        program,
+        "git"
+            | "cargo"
+            | "bun"
+            | "npm"
+            | "pnpm"
+            | "python"
+            | "python3"
+            | "pytest"
+            | "harbor"
+            | "bash"
+            | "rg"
+    )
 }
 
 fn allowlist_label(program: &str, args: &[String]) -> String {

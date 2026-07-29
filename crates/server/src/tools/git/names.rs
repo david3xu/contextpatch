@@ -2,6 +2,10 @@ pub mod delete_untracked_exact {
     pub const NAME: &str = "delete_untracked_exact";
 }
 
+pub mod delete_generated_prefix {
+    pub const NAME: &str = "delete_generated_prefix";
+}
+
 pub mod git_branch_prepare {
     pub const NAME: &str = "git_branch_prepare";
 }
@@ -12,6 +16,10 @@ pub mod git_commit_exact {
 
 pub mod git_commit_scoped {
     pub const NAME: &str = "git_commit_scoped";
+}
+
+pub mod git_commit_prefix {
+    pub const NAME: &str = "git_commit_prefix";
 }
 
 pub mod git_merge_readiness {
