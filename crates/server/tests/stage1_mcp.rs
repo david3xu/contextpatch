@@ -48,6 +48,7 @@ fn stage1_mcp_tools_work_together() {
         "native_build_run",
         "native_device_run",
         "git_commit_exact",
+        "git_commit_scoped",
         "git_restore_exact",
         "git_remote_check",
         "git_branch_prepare",
@@ -446,6 +447,70 @@ fn stage2_git_commit_exact_refuses_partial_dirty_path_set() {
     assert_eq!(responses[0]["result"]["isError"], true);
     assert_text(&responses[0], "provided paths must exactly match");
     assert_text(&responses[0], "two.txt");
+}
+
+#[test]
+fn stage2_git_commit_scoped_commits_subset_and_preserves_other_dirty_paths() {
+    let root = git_repo("stage2_git_commit_scoped_commits_subset_and_preserves_other_dirty_paths");
+    fs::write(root.join("included.txt"), "old\n").unwrap();
+    fs::write(root.join("kept.txt"), "old\n").unwrap();
+    git(&root, &["add", "included.txt", "kept.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("included.txt"), "new\n").unwrap();
+    fs::write(root.join("kept.txt"), "new\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_scoped","arguments":{"paths":["included.txt"],"subject":"test: scoped commit"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_commit_scoped","arguments":{"paths":["included.txt"],"subject":"test: scoped commit","dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_commit_scoped","arguments":{"paths":["included.txt"],"subject":"test: scoped commit","dry_run":false,"confirm":"commit scoped paths"}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "\"would_commit\": true");
+    assert_text(&responses[0], "kept.txt");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
+    assert_text(&responses[2], "\"committed\": true");
+    assert_text(&responses[2], "\"paths\"");
+    assert_text(&responses[2], "included.txt");
+    assert_text(&responses[2], "\"remaining_dirty_paths\"");
+    assert_text(&responses[2], "kept.txt");
+
+    let committed_files = git_stdout(&root, &["show", "--name-only", "--pretty=", "HEAD"]);
+    assert!(committed_files.lines().any(|line| line == "included.txt"));
+    assert!(!committed_files.lines().any(|line| line == "kept.txt"));
+
+    let status = git_stdout(&root, &["status", "--short"]);
+    assert_eq!(status, " M kept.txt\n");
+}
+
+#[test]
+fn stage2_git_commit_scoped_refuses_preexisting_staged_paths() {
+    let root = git_repo("stage2_git_commit_scoped_refuses_preexisting_staged_paths");
+    fs::write(root.join("included.txt"), "old\n").unwrap();
+    fs::write(root.join("staged.txt"), "old\n").unwrap();
+    git(&root, &["add", "included.txt", "staged.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("included.txt"), "new\n").unwrap();
+    fs::write(root.join("staged.txt"), "new\n").unwrap();
+    git(&root, &["add", "staged.txt"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_scoped","arguments":{"paths":["included.txt"],"subject":"test: scoped commit","dry_run":false,"confirm":"commit scoped paths"}}}"#,
+        ],
+    );
+
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_text(&responses[0], "index must be clean");
+    assert_text(&responses[0], "staged.txt");
+
+    let log = git_stdout(&root, &["log", "--oneline", "-1"]);
+    assert!(log.contains("initial"));
 }
 
 #[test]

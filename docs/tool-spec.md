@@ -24,6 +24,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
 | `native_device_run` | External device command | Dry-run default, typed action params, device-state confirmation gate, no raw `xcrun` or `adb` commands |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
+| `git_commit_scoped` | Git index + one local commit | Explicit dirty subset, clean-index gate, preserves unrelated dirty paths, never pushes |
 | `git_restore_exact` | Git worktree/index restore | Explicit dirty tracked paths only, dry-run default, explicit confirmation, never resets the whole worktree |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
@@ -48,7 +49,7 @@ Rules:
 - Must report file tools and process-execution availability honestly.
 - Must identify the configured repository root.
 - Must state unsupported operations, including arbitrary shell and destructive Git mutations.
-- Must distinguish the narrow local `git_commit_exact` checkpoint and guarded `git_remote_check`/`git_push_exact` workflow from unsupported broad Git/destructive workflows.
+- Must distinguish the narrow local `git_commit_exact`/`git_commit_scoped` checkpoints and guarded `git_remote_check`/`git_push_exact` workflow from unsupported broad Git/destructive workflows.
 - Must report `git_branch_prepare` honestly when available and distinguish it from broad checkout/rebase/reset authority.
 - Must report `git_merge_readiness` honestly when available and distinguish it from generic merge authority.
 - Must report setup profiles honestly when available and distinguish declarative profile planning from generic package-manager or shell authority.
@@ -495,6 +496,34 @@ Rules:
 - On success, the tool returns the commit hash, short hash, committed paths, and post-commit short status.
 - Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
 
+### `git_commit_scoped`
+
+Creates a local Git commit from an explicit subset of dirty paths while preserving unrelated dirty paths.
+
+Required inputs:
+
+- `paths`: non-empty list of repository-relative dirty paths to include in the commit
+- `subject`: single-line commit subject
+
+Optional inputs:
+
+- `body`: commit body/trailers
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `commit scoped paths` when `dry_run` is `false`
+
+Rules:
+
+- The tool must default to dry-run and perform no mutation unless `dry_run` is `false` and `confirm` exactly equals `commit scoped paths`.
+- Every requested path must currently be dirty. Unrelated dirty paths may exist and must remain uncommitted.
+- The Git index must be clean before mutation so pre-staged unrelated paths cannot be accidentally included.
+- Paths must be normalized repository-relative paths and must not use path traversal, absolute paths, NUL bytes, or Git pathspec metacharacters.
+- Rename/copy status entries are refused until a dedicated tracked-move workflow exists.
+- The tool may run `git add -- <paths>` and one local `git commit`; it must not fetch, pull, push, reset, checkout, stash, clean, or modify remotes.
+- Commit subjects and bodies should remain project-owned and must not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless explicitly requested by the repository owner for that commit.
+- The tool must verify that the staged path set exactly matches `paths` before committing.
+- On success, the tool returns the commit hash, short hash, committed paths, and remaining dirty paths.
+- Commit failure after staging must be reported explicitly; it must not pretend the commit succeeded.
+
 ### `git_restore_exact`
 
 Restores explicit dirty tracked paths from `HEAD` without exposing broad checkout, reset, clean, or stash operations. This is for generated-noise cleanup before exact commits.
@@ -668,12 +697,13 @@ Stage 1 ships:
 10. `read_command_log`
 11. `validation_profile_run`
 12. `git_commit_exact`
-13. `git_remote_check`
-14. `git_branch_prepare`
-15. `git_merge_readiness`
-16. `git_push_exact`
-17. `setup_profile_run`
-18. `native_build_run`
-19. `native_device_run`
+13. `git_commit_scoped`
+14. `git_remote_check`
+15. `git_branch_prepare`
+16. `git_merge_readiness`
+17. `git_push_exact`
+18. `setup_profile_run`
+19. `native_build_run`
+20. `native_device_run`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

@@ -517,6 +517,41 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::git_commit_scoped::NAME,
+            "description": "Dry-run or create one local Git commit from an explicit subset of dirty paths while preserving unrelated dirty files. Never pushes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "Repository-relative dirty paths to stage and commit. Other dirty paths are preserved."
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Commit subject line."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional commit body/trailers."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Validate and preview without staging or committing. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `commit scoped paths` when dry_run is false."
+                    }
+                },
+                "required": ["paths", "subject"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::git_restore_exact::NAME,
             "description": "Dry-run or restore exact dirty repository paths from HEAD. Use for generated noise cleanup before exact commits; never resets the whole worktree.",
             "inputSchema": {
@@ -690,6 +725,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::native_build_run::NAME => call_native_build_run(repo_root, &arguments),
         tools::native_device_run::NAME => call_native_device_run(repo_root, &arguments),
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
+        tools::git_commit_scoped::NAME => call_git_commit_scoped(repo_root, &arguments),
         tools::git_restore_exact::NAME => call_git_restore_exact(repo_root, &arguments),
         tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
         tools::git_branch_prepare::NAME => call_git_branch_prepare(repo_root, &arguments),
@@ -745,6 +781,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "native_build_run": true,
             "native_device_run": true,
             "git_commit_exact": true,
+            "git_commit_scoped": true,
             "git_restore_exact": true,
             "git_remote_check": true,
             "git_branch_prepare": true,
@@ -753,6 +790,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
+            "local_commit_scoped_paths": true,
             "restore_exact_paths": true,
             "remote_check": true,
             "branch_prepare": true,
@@ -762,6 +800,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "commit_attribution": "Do not include Claude, Anthropic, AI, or assistant attribution in commit messages. Use the repository user's authorship and project-owned commit message only.",
             "guards": [
                 "requires exact complete dirty-path set",
+                "scoped commits require requested dirty paths and a clean index before staging",
                 "defaults to dry_run",
                 "requires confirm literal for mutation",
                 "restores only explicit dirty paths from HEAD",
@@ -1630,6 +1669,150 @@ fn call_git_commit_exact(
     .map_err(|error| format!("git_commit_exact refused: {error}"))
 }
 
+fn call_git_commit_scoped(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "commit scoped paths";
+
+    let paths = required_string_array(arguments, "paths")?;
+    let subject = validate_commit_subject(required_string(arguments, "subject")?)?;
+    let body = optional_string(arguments, "body")?
+        .map(validate_commit_body)
+        .transpose()?
+        .unwrap_or_default();
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    if paths.is_empty() {
+        return Err("git_commit_scoped refused: paths must not be empty".to_string());
+    }
+    if paths.len() > 100 {
+        return Err("git_commit_scoped refused: at most 100 paths may be committed".to_string());
+    }
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "git_commit_scoped refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = canonical_repo_root(repo_root, tools::git_commit_scoped::NAME)?;
+    let normalized_paths = normalize_git_paths(tools::git_commit_scoped::NAME, &root, &paths)?;
+    let requested_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
+    if requested_paths.len() != normalized_paths.len() {
+        return Err("git_commit_scoped refused: duplicate paths are not allowed".to_string());
+    }
+
+    let dirty_paths = git_status_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
+    if dirty_paths.is_empty() {
+        return Err("git_commit_scoped refused: repository has no dirty paths".to_string());
+    }
+    let not_dirty = requested_paths
+        .difference(&dirty_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !not_dirty.is_empty() {
+        return Err(format!(
+            "git_commit_scoped refused: every requested path must currently be dirty\nnot_dirty_paths:\n{}",
+            format_set(&not_dirty)
+        ));
+    }
+
+    let staged_before = git_cached_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
+    if !staged_before.is_empty() {
+        return Err(format!(
+            "git_commit_scoped refused: index must be clean before scoped commit so unrelated staged work is not included\nstaged_paths:\n{}",
+            format_set(&staged_before)
+        ));
+    }
+
+    let remaining_dirty_paths_after_commit = dirty_paths
+        .difference(&requested_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::git_commit_scoped::NAME,
+            "dry_run": true,
+            "would_stage_paths": normalized_paths,
+            "would_commit": true,
+            "subject": subject,
+            "body_present": !body.is_empty(),
+            "push": false,
+            "remaining_dirty_paths_after_commit": remaining_dirty_paths_after_commit,
+            "required_confirm_for_commit": CONFIRMATION
+        }))
+        .map_err(|error| format!("git_commit_scoped refused: {error}"));
+    }
+
+    git_success_for_tool(
+        tools::git_commit_scoped::NAME,
+        &root,
+        git_args("add", &normalized_paths),
+    )?;
+    let staged_paths = git_cached_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
+    if staged_paths != requested_paths {
+        return Err(format!(
+            "git_commit_scoped refused after staging: staged paths differ from requested scoped set\nrequested:\n{}\nstaged:\n{}",
+            format_set(&requested_paths),
+            format_set(&staged_paths)
+        ));
+    }
+
+    let mut commit_args = vec![
+        "commit".to_string(),
+        "--quiet".to_string(),
+        "-m".to_string(),
+        subject.clone(),
+    ];
+    if !body.is_empty() {
+        commit_args.push("-m".to_string());
+        commit_args.push(body);
+    }
+    git_success_for_tool(tools::git_commit_scoped::NAME, &root, commit_args).map_err(|error| {
+        format!(
+            "{error}\nindex may contain staged scoped paths because git commit failed after staging"
+        )
+    })?;
+
+    let dirty_after = git_status_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
+    let requested_still_dirty = requested_paths
+        .intersection(&dirty_after)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !requested_still_dirty.is_empty() {
+        return Err(format!(
+            "git_commit_scoped refused after commit: requested paths are still dirty\n{}",
+            format_set(&requested_still_dirty)
+        ));
+    }
+
+    let commit = git_stdout_for_tool(
+        tools::git_commit_scoped::NAME,
+        &root,
+        &["rev-parse", "HEAD"],
+    )?;
+    let short_commit = git_stdout_for_tool(
+        tools::git_commit_scoped::NAME,
+        &root,
+        &["rev-parse", "--short", "HEAD"],
+    )?;
+    let status = git_status_short(&root)?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_commit_scoped::NAME,
+        "dry_run": false,
+        "committed": true,
+        "commit": commit.trim(),
+        "short_commit": short_commit.trim(),
+        "paths": normalized_paths,
+        "push": false,
+        "remaining_dirty_paths": dirty_after,
+        "status_short": status
+    }))
+    .map_err(|error| format!("git_commit_scoped refused: {error}"))
+}
+
 fn call_git_restore_exact(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
@@ -2376,8 +2559,12 @@ fn git_status_paths_for_tool(tool_name: &str, root: &Path) -> Result<BTreeSet<St
 }
 
 fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
-    let output = git_output(root, &["diff", "--cached", "--name-only", "-z"])?;
-    parse_nul_paths(&output.stdout, "git diff --cached")
+    git_cached_paths_for_tool(tools::git_commit_exact::NAME, root)
+}
+
+fn git_cached_paths_for_tool(tool_name: &str, root: &Path) -> Result<BTreeSet<String>, String> {
+    let output = git_output_for_tool(tool_name, root, &["diff", "--cached", "--name-only", "-z"])?;
+    parse_nul_paths_for_tool(tool_name, &output.stdout, "git diff --cached")
 }
 
 fn parse_porcelain_paths_for_tool(
@@ -2403,20 +2590,6 @@ fn parse_porcelain_paths_for_tool(
         paths.insert(path.to_string());
     }
     Ok(paths)
-}
-
-fn parse_nul_paths(bytes: &[u8], label: &str) -> Result<BTreeSet<String>, String> {
-    bytes
-        .split(|byte| *byte == 0)
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| {
-            std::str::from_utf8(entry)
-                .map(|path| path.to_string())
-                .map_err(|error| {
-                    format!("git_commit_exact refused: {label} path is not UTF-8: {error}")
-                })
-        })
-        .collect()
 }
 
 fn parse_nul_paths_for_tool(

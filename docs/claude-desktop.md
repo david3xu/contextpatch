@@ -29,14 +29,15 @@ The expected agent workflow is:
 5. Use `capability_manifest` and `preflight_health` to determine whether this server can support the current workflow.
 6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, or `rg` drift searches.
 7. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
-8. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
-9. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
-10. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
-11. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
-12. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
-13. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
-14. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
-15. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
+8. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
+9. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
+10. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
+11. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
+12. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
+13. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+14. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+15. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
+16. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
 
 ## Build and configure Claude Desktop
 
@@ -107,12 +108,13 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `native_build_run`
 - `native_device_run`
 - `git_commit_exact`
+- `git_commit_scoped`
 - `git_remote_check`
 - `git_branch_prepare`
 - `git_merge_readiness`
 - `git_push_exact`
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all nineteen tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all twenty tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -159,6 +161,8 @@ Use `native_device_run` for bounded simulator/emulator/device smoke actions. It 
 The `capability_manifest` includes compact examples for setup, native build, and native device actions. Claude Desktop should prefer those examples over guessing raw command syntax.
 
 Use `git_commit_exact` for the narrow local-commit case that previously required leaving contextpatch entirely: the tool validates that `paths` exactly equals the repository's full dirty-path set, defaults to dry-run, requires `confirm: "commit exact paths"` when `dry_run` is false, stages only those paths, creates one local commit, and reports the commit hash. It still does not run fetch or push.
+
+Use `git_commit_scoped` when the desired local commit is only a subset of dirty paths and unrelated dirty files should remain untouched. It validates that every requested path is dirty, requires the Git index to be clean before staging so pre-staged unrelated work cannot leak into the commit, defaults to dry-run, requires `confirm: "commit scoped paths"` when `dry_run` is false, stages only the requested paths, creates one local commit, and reports the remaining dirty paths. It still does not fetch or push.
 
 Commit messages should not include Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for that attribution for the specific commit. Treat authored code and commit messages as project-owned work by the configured repository user.
 

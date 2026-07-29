@@ -3,6 +3,7 @@ pub mod create_directory;
 pub mod diff_preview;
 pub mod git_branch_prepare;
 pub mod git_commit_exact;
+pub mod git_commit_scoped;
 pub mod git_merge_readiness;
 pub mod git_push_exact;
 pub mod git_remote_check;
