@@ -154,6 +154,8 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `github_pr_run`
 - `github_fork_prepare`
 
+Each advertised tool includes MCP annotations intended to let Claude Desktop offer persistent "always allow" approval instead of only "allow once." If Claude still only shows one-time approval, restart Claude Desktop after rebuilding the server and confirm the configuration points at the new binary.
+
 If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all forty-three tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text

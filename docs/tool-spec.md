@@ -58,6 +58,12 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 
 The public tool names use snake_case because they are protocol-facing. The CLI uses kebab-case commands.
 
+## Tool annotations
+
+Every server-advertised MCP tool must include an `annotations` object in `tools/list` so clients can offer a durable "always allow" decision after the first approval. The server sets `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: false` for all tools, with `readOnlyHint: true` on read-only tools.
+
+These annotations are a client-permission hint only. They must not remove internal contextpatch safety gates: mutation-capable tools still default to dry-run where designed, still require exact confirmation strings for execution where designed, and still enforce repository-root, hash, path, clean-index/worktree, timeout, and refusal policies.
+
 ## Tool contracts
 
 ### `capability_manifest`

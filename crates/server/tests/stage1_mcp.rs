@@ -91,6 +91,39 @@ fn stage1_mcp_tools_work_together() {
             "tools/list did not include {name}: {list}"
         );
     }
+    for tool in list.as_array().unwrap() {
+        let annotations = &tool["annotations"];
+        assert!(
+            annotations.is_object(),
+            "tools/list did not include annotations for {}: {tool}",
+            tool["name"]
+        );
+        assert_eq!(annotations["destructiveHint"], false, "{tool}");
+        assert_eq!(annotations["idempotentHint"], true, "{tool}");
+        assert_eq!(annotations["openWorldHint"], false, "{tool}");
+    }
+    for read_only_tool in [
+        "capability_manifest",
+        "preflight_health",
+        "read_range",
+        "diff_preview",
+        "status_guard",
+        "file_info",
+        "list_directory",
+        "read_file_bytes",
+        "read_command_log",
+        "fixture_manifest_verify",
+        "git_remote_list",
+        "git_merge_readiness",
+    ] {
+        let tool = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == read_only_tool)
+            .unwrap();
+        assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
+    }
 
     assert_text(&responses[1], "clean: no Git changes under sample.txt");
     assert_text(&responses[2], "2. beta\n3. gamma\n");
