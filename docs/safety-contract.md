@@ -24,6 +24,9 @@ This document is normative. If implementation behavior conflicts with this file,
 14. If sidecar artifact creation is exposed, it must write only under a fixed non-repository artifact root, create-only, and report that it does not mutate the repo.
 15. If untracked cleanup is exposed, it must delete only explicit untracked regular files with dry-run and confirmation gates, not expose broad `git clean`.
 16. If GitHub PR or fork support is exposed, it must use narrow typed workflows with dry-run/confirmation for mutations, not arbitrary `gh` passthrough.
+17. If fixture-generator execution is exposed, it must be a typed repo-relative script workflow with dry-run, confirmation, pre-existing dirty-path gates, timeout, and post-run changed-path verification.
+18. If bulk fixture import is exposed, it must be create-only, repo-root-confined, file-count and byte-count bounded, and must refuse overwrites and traversal.
+19. If a shell-script validation exception is exposed, it must be fixed to a specific repository script such as `references/check-base-image.sh`, not arbitrary shell authority.
 
 ## Required refusal cases
 
@@ -64,6 +67,8 @@ The server should not expose generic `write_file`, unrestricted `delete`, recurs
 
 Binary file creation, if exposed, must be create-only for one explicit path, refuse existing targets, decode bounded base64 content, optionally enforce an expected decoded byte count, and use the same repository-root and atomic publish guards as text create-only writes.
 
+Bulk fixture import, if exposed, must remain a bounded create-only variant of binary file creation. It may create missing parents only when explicitly requested, but it must reject overwrites, traversal, duplicate paths, excessive file counts, and excessive total decoded bytes.
+
 Sidecar artifact creation, if exposed, must use a fixed artifact root outside the repository. It must reject absolute paths and traversal, refuse overwrites, optionally create parents only under that artifact root, and never claim repository mutation semantics.
 
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
@@ -83,6 +88,21 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 9. Prefer predefined validation profiles for repeated workflows, but require every profile command to pass the same no-shell allowlist and timeout rules.
 10. Store only redacted command logs, address them by opaque ids, and read them back through `read_command_log` rather than exposing arbitrary paths.
 11. Add latency instrumentation with monotonic durations and response sizes so performance work is evidence-based, while never recording secrets, environment values, or unredacted command output in timing metadata.
+
+## Fixture workflow expectation
+
+Fixture generation support exists to cover data-heavy benchmark tasks without granting broad shell or filesystem authority.
+
+Rules:
+
+1. Prefer `fixture_generator_run` for repo-relative Python generators whose outputs can be declared as exact paths or prefixes.
+2. Permit temporary untracked generator scripts by listing them as allowed pre-existing dirty paths, but require callers to delete them before commit when they are not submission artifacts.
+3. Require dry-run by default and exact confirmation before running the generator.
+4. Verify after execution that all dirty paths are either allowed pre-existing dirty paths or declared outputs.
+5. Refuse and report undeclared changed paths rather than pretending the run was safe.
+6. Keep `pip`, Docker, arbitrary `python -m`, arbitrary shell scripts, and caller-supplied shell snippets outside the fixture workflow.
+7. Use `bulk_write_new_files_base64` only as a bounded create-only fallback for fixture files that cannot be generated on the host.
+8. Keep the base-image shell-script exception fixed to `references/check-base-image.sh` through `base_image_check_run`.
 
 ## GitHub workflow expectation
 
@@ -138,4 +158,5 @@ Rules:
 - No broad fetch, checkout, merge, or push; only `git_remote_check`, `git_branch_prepare`, `git_merge_readiness`, and `git_push_exact` under their explicit guards
 - No generic package-manager or scaffold runner; only declarative setup profiles under `setup_profile_run`
 - No generic native build/device runner; only typed `native_build_run`, `native_device_run`, and setup-profile actions under their explicit guards
+- No generic fixture generator runner; only `fixture_generator_run` with declared output verification and `bulk_write_new_files_base64` create-only imports
 - No hidden network calls for edit operations

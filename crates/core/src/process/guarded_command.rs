@@ -56,6 +56,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         }
         "pytest" => true,
         "harbor" => matches!(subcommand, Some("run")),
+        "bash" => args == ["references/check-base-image.sh"],
         "rg" => subcommand.is_some(),
         _ => false,
     };
@@ -154,6 +155,7 @@ mod tests {
             ],
         )
         .unwrap();
+        validate_command("bash", &["references/check-base-image.sh".to_string()]).unwrap();
 
         assert!(
             validate_command("pip", &["install".to_string(), "pytest".to_string()])
@@ -173,6 +175,10 @@ mod tests {
                 .to_string()
                 .contains("not allowlisted")
         );
+        assert!(validate_command("bash", &["scripts/other.sh".to_string()])
+            .unwrap_err()
+            .to_string()
+            .contains("not allowlisted"));
     }
 
     #[test]

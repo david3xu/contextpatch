@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod protocol;
 mod tools;
 
@@ -354,6 +356,48 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::bulk_write_new_files_base64::NAME,
+            "description": "Create many new repository files from base64 entries in one bounded, create-only fixture import.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entries": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 500,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "Repository-relative destination path. Existing files are refused."
+                                },
+                                "content_base64": {
+                                    "type": "string",
+                                    "description": "Base64-encoded file content."
+                                },
+                                "expected_bytes": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 20971520,
+                                    "description": "Optional decoded byte count guard for this entry."
+                                }
+                            },
+                            "required": ["path", "content_base64"],
+                            "additionalProperties": false
+                        },
+                        "description": "Files to create. Total decoded size is limited to 20 MiB."
+                    },
+                    "parents": {
+                        "type": "boolean",
+                        "description": "When true, create missing parent directories inside the repository root. Defaults to false."
+                    }
+                },
+                "required": ["entries"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::create_directory::NAME,
             "description": "Create a new directory only when the destination does not already exist.",
             "inputSchema": {
@@ -401,6 +445,83 @@ fn tool_definitions() -> Value {
                     }
                 },
                 "required": ["program", "args"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::fixture_generator_run::NAME,
+            "description": "Plan or run a repo-relative Python fixture generator that may mutate only declared output paths or prefixes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "script_path": {
+                        "type": "string",
+                        "description": "Repository-relative .py script to run with python3. The script itself may be the only pre-existing dirty path unless allowed_existing_dirty_paths is provided."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Arguments passed after the script path. Use only explicit argv strings; no shell interpolation is performed."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory relative to the repository root. Defaults to the repository root."
+                    },
+                    "expected_output_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Exact repository-relative paths the generator may create or modify."
+                    },
+                    "expected_output_prefixes": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Repository-relative directory prefixes under which the generator may create or modify files."
+                    },
+                    "allowed_existing_dirty_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Pre-existing dirty paths allowed before the run. Defaults to the script path only, supporting temporary untracked generators that are deleted before commit."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Optional timeout in seconds. Defaults to 120, maximum 600."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Plan only without running Python. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `run fixture generator` when dry_run is false."
+                    }
+                },
+                "required": ["script_path"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::base_image_check_run::NAME,
+            "description": "Plan or run the exact repository base-image check script references/check-base-image.sh without enabling arbitrary shell access.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Optional timeout in seconds. Defaults to 120, maximum 600."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Plan only without running the script. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `run base image check` when dry_run is false."
+                    }
+                },
                 "additionalProperties": false
             }
         },
@@ -905,8 +1026,13 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::write_new_file_base64::NAME => call_write_new_file_base64(repo_root, &arguments),
         tools::artifact_write_text::NAME => call_artifact_write_text(repo_root, &arguments),
         tools::artifact_write_base64::NAME => call_artifact_write_base64(repo_root, &arguments),
+        tools::bulk_write_new_files_base64::NAME => {
+            call_bulk_write_new_files_base64(repo_root, &arguments)
+        }
         tools::create_directory::NAME => call_create_directory(repo_root, &arguments),
         tools::run_guarded_command::NAME => call_run_guarded_command(repo_root, &arguments),
+        tools::fixture_generator_run::NAME => call_fixture_generator_run(repo_root, &arguments),
+        tools::base_image_check_run::NAME => call_base_image_check_run(repo_root, &arguments),
         tools::read_command_log::NAME => call_read_command_log(&arguments),
         tools::validation_profile_run::NAME => call_validation_profile_run(repo_root, &arguments),
         tools::setup_profile_run::NAME => call_setup_profile_run(repo_root, &arguments),
@@ -986,6 +1112,10 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "git_push_exact": true,
             "github_pr_run": true,
             "github_fork_prepare": true
+            ,
+            "bulk_write_new_files_base64": true,
+            "fixture_generator_run": true,
+            "base_image_check_run": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
@@ -1051,7 +1181,13 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "python3": ["repo-relative .py script"],
                 "pytest": ["validation invocation"],
                 "harbor": ["run"],
+                "bash": ["references/check-base-image.sh only"],
                 "rg": ["search"]
+            },
+            "typed_workflows": {
+                "fixture_generator_run": "Runs repo-relative Python generators after planning, confirmation, and declared-output verification.",
+                "base_image_check_run": "Runs only references/check-base-image.sh; arbitrary shell scripts remain unsupported.",
+                "bulk_write_new_files_base64": "Imports many create-only binary/text fixture files with per-file and total size bounds."
             },
             "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode"],
             "guards": [
@@ -1522,6 +1658,118 @@ fn call_artifact_write_base64(
     )
 }
 
+fn call_bulk_write_new_files_base64(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const MAX_FILES: usize = 500;
+    const MAX_TOTAL_DECODED_BYTES: usize = 20 * 1024 * 1024;
+
+    let entries = arguments
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "bulk_write_new_files_base64 refused: entries is required".to_string())?;
+    if entries.is_empty() {
+        return Err("bulk_write_new_files_base64 refused: entries must not be empty".to_string());
+    }
+    if entries.len() > MAX_FILES {
+        return Err(format!(
+            "bulk_write_new_files_base64 refused: {} entries exceeds maximum {MAX_FILES}",
+            entries.len()
+        ));
+    }
+    let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
+    let root = canonical_repo_root(repo_root, tools::bulk_write_new_files_base64::NAME)?;
+
+    let mut decoded_entries = Vec::with_capacity(entries.len());
+    let mut seen_paths = BTreeSet::new();
+    let mut total_bytes = 0usize;
+
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry.as_object().ok_or_else(|| {
+            format!("bulk_write_new_files_base64 refused: entry {index} must be an object")
+        })?;
+        let path = required_string(entry, "path")?;
+        let normalized =
+            normalize_repo_relative_path(tools::bulk_write_new_files_base64::NAME, path)?;
+        if !seen_paths.insert(normalized.clone()) {
+            return Err(format!(
+                "bulk_write_new_files_base64 refused: duplicate path `{normalized}`"
+            ));
+        }
+        let content_base64 = required_string(entry, "content_base64")?;
+        let bytes = decode_base64(content_base64)
+            .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))?;
+        if let Some(expected_bytes) = optional_u64(entry, "expected_bytes")? {
+            let expected_bytes = usize::try_from(expected_bytes).map_err(|_| {
+                "bulk_write_new_files_base64 refused: expected_bytes is too large".to_string()
+            })?;
+            if bytes.len() != expected_bytes {
+                return Err(format!(
+                    "bulk_write_new_files_base64 refused: `{normalized}` decoded content is {} bytes, expected {expected_bytes}",
+                    bytes.len()
+                ));
+            }
+        }
+        total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+            "bulk_write_new_files_base64 refused: decoded byte total overflow".to_string()
+        })?;
+        if total_bytes > MAX_TOTAL_DECODED_BYTES {
+            return Err(format!(
+                "bulk_write_new_files_base64 refused: decoded content is {total_bytes} bytes, maximum is {MAX_TOTAL_DECODED_BYTES}"
+            ));
+        }
+        let target = root.join(&normalized);
+        if target.exists() {
+            return Err(format!(
+                "bulk_write_new_files_base64 refused: target already exists: {normalized}"
+            ));
+        }
+        if !parents {
+            let parent = target.parent().ok_or_else(|| {
+                format!("bulk_write_new_files_base64 refused: path `{normalized}` has no parent")
+            })?;
+            if !parent.is_dir() {
+                return Err(format!(
+                    "bulk_write_new_files_base64 refused: parent does not exist for `{normalized}`"
+                ));
+            }
+        }
+        decoded_entries.push((normalized, bytes));
+    }
+
+    for (path, _) in &decoded_entries {
+        if parents {
+            let target = root.join(path);
+            let parent = target.parent().ok_or_else(|| {
+                format!("bulk_write_new_files_base64 refused: path `{path}` has no parent")
+            })?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("bulk_write_new_files_base64 refused: failed to create parents: {error}")
+            })?;
+        }
+    }
+
+    let mut created = Vec::with_capacity(decoded_entries.len());
+    for (path, bytes) in decoded_entries {
+        let summary = write_new_file_bytes_in_root(&root, Path::new(&path), &bytes)
+            .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))?;
+        created.push(json!({
+            "path": summary.path.display().to_string(),
+            "bytes_written": summary.bytes_written
+        }));
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::bulk_write_new_files_base64::NAME,
+        "created": true,
+        "file_count": created.len(),
+        "total_bytes_written": total_bytes,
+        "files": created
+    }))
+    .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))
+}
+
 fn write_artifact(
     repo_root: &Path,
     path: &str,
@@ -1551,6 +1799,209 @@ fn write_artifact(
         "repo_mutation": false
     }))
     .map_err(|error| format!("{tool_name} refused: {error}"))
+}
+
+fn call_fixture_generator_run(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "run fixture generator";
+
+    let script_path = required_string(arguments, "script_path")?;
+    if !script_path.ends_with(".py") {
+        return Err("fixture_generator_run refused: script_path must end with .py".to_string());
+    }
+    let args = optional_string_array(arguments, "args")?;
+    let exact_outputs = optional_string_array(arguments, "expected_output_paths")?;
+    let output_prefixes = optional_string_array(arguments, "expected_output_prefixes")?;
+    if exact_outputs.is_empty() && output_prefixes.is_empty() {
+        return Err("fixture_generator_run refused: at least one expected output path or prefix is required".to_string());
+    }
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
+    let cwd = optional_string(arguments, "cwd")?;
+    let root = canonical_repo_root(repo_root, tools::fixture_generator_run::NAME)?;
+    let script = normalize_git_path(tools::fixture_generator_run::NAME, &root, script_path)?;
+    if !root.join(&script).is_file() {
+        return Err(format!(
+            "fixture_generator_run refused: script_path `{script}` is not a file"
+        ));
+    }
+    let exact_outputs =
+        normalize_repo_relative_paths(tools::fixture_generator_run::NAME, &exact_outputs)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    let output_prefixes =
+        normalize_repo_relative_paths(tools::fixture_generator_run::NAME, &output_prefixes)?;
+    let allowed_existing_dirty = if arguments.contains_key("allowed_existing_dirty_paths") {
+        normalize_git_paths(
+            tools::fixture_generator_run::NAME,
+            &root,
+            &required_string_array(arguments, "allowed_existing_dirty_paths")?,
+        )?
+    } else {
+        vec![script.clone()]
+    }
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+
+    let before = git_status_paths_for_tool(tools::fixture_generator_run::NAME, &root)?;
+    let unexpected_before = before
+        .difference(&allowed_existing_dirty)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !unexpected_before.is_empty() {
+        return Err(format!(
+            "fixture_generator_run refused: worktree has dirty paths outside allowed_existing_dirty_paths before generator run\n{}",
+            format_set(&unexpected_before)
+        ));
+    }
+
+    let mut command_args = Vec::with_capacity(args.len() + 1);
+    command_args.push(script.clone());
+    command_args.extend(args);
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::fixture_generator_run::NAME,
+            "dry_run": true,
+            "would_run": {
+                "program": "python3",
+                "args": command_args,
+                "cwd": cwd.unwrap_or("."),
+                "timeout_secs": timeout_secs
+            },
+            "allowed_existing_dirty_paths": allowed_existing_dirty,
+            "expected_output_paths": exact_outputs,
+            "expected_output_prefixes": output_prefixes,
+            "confirm_required": CONFIRMATION
+        }))
+        .map_err(|error| format!("fixture_generator_run refused: {error}"));
+    }
+    let confirm = optional_string(arguments, "confirm")?;
+    let Some(confirm) = confirm else {
+        return Err(format!(
+            "fixture_generator_run refused: confirm must be {CONFIRMATION:?}"
+        ));
+    };
+    if confirm != CONFIRMATION {
+        return Err(format!(
+            "fixture_generator_run refused: confirm must be {CONFIRMATION:?}"
+        ));
+    }
+
+    let output = run_guarded_command(
+        &root,
+        cwd.map(Path::new),
+        "python3",
+        &command_args,
+        Some(timeout_secs),
+    )
+    .map_err(|error| format!("fixture_generator_run refused: {error}"))?;
+    if !guarded_output_succeeded(&output) {
+        return Err(format!(
+            "fixture_generator_run refused: generator command failed\n{output}"
+        ));
+    }
+
+    let after = git_status_paths_for_tool(tools::fixture_generator_run::NAME, &root)?;
+    let unauthorized = after
+        .iter()
+        .filter(|path| {
+            !allowed_existing_dirty.contains(*path)
+                && !exact_outputs.contains(*path)
+                && !matches_any_prefix(path, &output_prefixes)
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !unauthorized.is_empty() {
+        return Err(format!(
+            "fixture_generator_run refused: generator changed paths outside declared outputs\n{}",
+            format_set(&unauthorized)
+        ));
+    }
+
+    let output_changes = after
+        .iter()
+        .filter(|path| exact_outputs.contains(*path) || matches_any_prefix(path, &output_prefixes))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::fixture_generator_run::NAME,
+        "ran": true,
+        "program": "python3",
+        "script_path": script,
+        "changed_output_paths": output_changes,
+        "status_paths_after": after,
+        "command_output": output
+    }))
+    .map_err(|error| format!("fixture_generator_run refused: {error}"))
+}
+
+fn call_base_image_check_run(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "run base image check";
+    const SCRIPT: &str = "references/check-base-image.sh";
+
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
+    let root = canonical_repo_root(repo_root, tools::base_image_check_run::NAME)?;
+    if !root.join(SCRIPT).is_file() {
+        return Err(format!(
+            "base_image_check_run refused: required script `{SCRIPT}` is not present"
+        ));
+    }
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::base_image_check_run::NAME,
+            "dry_run": true,
+            "would_run": {
+                "program": "bash",
+                "args": [SCRIPT],
+                "cwd": ".",
+                "timeout_secs": timeout_secs
+            },
+            "scope": "exact base-image check script only; arbitrary shell remains unsupported",
+            "confirm_required": CONFIRMATION
+        }))
+        .map_err(|error| format!("base_image_check_run refused: {error}"));
+    }
+    let confirm = optional_string(arguments, "confirm")?;
+    let Some(confirm) = confirm else {
+        return Err(format!(
+            "base_image_check_run refused: confirm must be {CONFIRMATION:?}"
+        ));
+    };
+    if confirm != CONFIRMATION {
+        return Err(format!(
+            "base_image_check_run refused: confirm must be {CONFIRMATION:?}"
+        ));
+    }
+
+    let output = run_guarded_command(
+        &root,
+        None,
+        "bash",
+        &[SCRIPT.to_string()],
+        Some(timeout_secs),
+    )
+    .map_err(|error| format!("base_image_check_run refused: {error}"))?;
+    if !guarded_output_succeeded(&output) {
+        return Err(format!(
+            "base_image_check_run refused: check command failed\n{output}"
+        ));
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::base_image_check_run::NAME,
+        "ran": true,
+        "script": SCRIPT,
+        "command_output": output
+    }))
+    .map_err(|error| format!("base_image_check_run refused: {error}"))
 }
 
 fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
@@ -3140,6 +3591,37 @@ fn validate_relative_path(tool_name: &str, raw: &str) -> Result<PathBuf, String>
         }
     }
     Ok(path.to_path_buf())
+}
+
+fn normalize_repo_relative_paths(tool_name: &str, paths: &[String]) -> Result<Vec<String>, String> {
+    paths
+        .iter()
+        .map(|path| normalize_repo_relative_path(tool_name, path))
+        .collect()
+}
+
+fn normalize_repo_relative_path(tool_name: &str, raw: &str) -> Result<String, String> {
+    let path = validate_relative_path(tool_name, raw)?;
+    let parts = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(value) => Ok(value.to_string_lossy().into_owned()),
+            _ => Err(format!(
+                "{tool_name} refused: path must be a normalized relative path"
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(parts.join("/"))
+}
+
+fn matches_any_prefix(path: &str, prefixes: &[String]) -> bool {
+    prefixes
+        .iter()
+        .any(|prefix| path == prefix || path.starts_with(&format!("{prefix}/")))
+}
+
+fn guarded_output_succeeded(output: &str) -> bool {
+    output.lines().any(|line| line.trim() == "exit_code: 0")
 }
 
 fn decode_base64(input: &str) -> Result<Vec<u8>, String> {

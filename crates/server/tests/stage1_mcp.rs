@@ -48,8 +48,11 @@ fn stage1_mcp_tools_work_together() {
         "write_new_file_base64",
         "artifact_write_text",
         "artifact_write_base64",
+        "bulk_write_new_files_base64",
         "create_directory",
         "run_guarded_command",
+        "fixture_generator_run",
+        "base_image_check_run",
         "read_command_log",
         "validation_profile_run",
         "setup_profile_run",
@@ -639,6 +642,9 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"github_workflows\"");
     assert_text(&responses[0], "\"pr_create\"");
     assert_text(&responses[0], "\"github_fork_prepare\"");
+    assert_text(&responses[0], "\"fixture_generator_run\"");
+    assert_text(&responses[0], "\"base_image_check_run\"");
+    assert_text(&responses[0], "\"bulk_write_new_files_base64\"");
     assert_text(&responses[0], "\"action\": \"ios_build\"");
     assert_text(&responses[0], "\"action\": \"android_read_logcat\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
@@ -657,6 +663,87 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[5], "\"tool\": \"github_fork_prepare\"");
     assert_text(&responses[5], "\"dry_run\": true");
     assert_text(&responses[5], "\"fork\"");
+}
+
+#[test]
+fn stage2_fixture_workflow_tools_cover_generator_base_image_and_bulk_import() {
+    let root = git_repo("stage2_fixture_workflow_tools_cover_generator_base_image_and_bulk_import");
+    fs::create_dir_all(root.join("scripts")).unwrap();
+    fs::create_dir_all(root.join("references")).unwrap();
+    fs::write(root.join("README.md"), "readme\n").unwrap();
+    fs::write(
+        root.join("scripts/gen.py"),
+        r#"import pathlib
+import sys
+
+target = pathlib.Path(sys.argv[1])
+target.parent.mkdir(parents=True, exist_ok=True)
+target.write_bytes(b"\x00fixture")
+if len(sys.argv) > 2:
+    pathlib.Path(sys.argv[2]).write_text("rogue\n")
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("references/check-base-image.sh"),
+        "#!/usr/bin/env bash\nexit 0\n",
+    )
+    .unwrap();
+    git(
+        &root,
+        &["add", "README.md", "references/check-base-image.sh"],
+    );
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_write_new_files_base64","arguments":{"parents":true,"entries":[{"path":"task/environment/data/a.bin","content_base64":"AQI=","expected_bytes":2},{"path":"task/environment/data/b.txt","content_base64":"aGkK","expected_bytes":3}]}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bulk_write_new_files_base64","arguments":{"entries":[{"path":"task/environment/data/a.bin","content_base64":"AA=="}]}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"bulk_write_new_files_base64","arguments":{"entries":[{"path":"../escape.bin","content_base64":"AA=="}]}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"fixture_generator_run","arguments":{"script_path":"scripts/gen.py","args":["generated/dry.bin"],"expected_output_prefixes":["generated"],"allowed_existing_dirty_paths":["scripts/gen.py","task/environment/data/a.bin","task/environment/data/b.txt"],"dry_run":true,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"fixture_generator_run","arguments":{"script_path":"scripts/gen.py","args":["generated/out.bin"],"expected_output_prefixes":["generated"],"allowed_existing_dirty_paths":["scripts/gen.py","task/environment/data/a.bin","task/environment/data/b.txt"],"dry_run":false,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"fixture_generator_run","arguments":{"script_path":"scripts/gen.py","args":["generated/out.bin"],"expected_output_prefixes":["generated"],"allowed_existing_dirty_paths":["scripts/gen.py","task/environment/data/a.bin","task/environment/data/b.txt"],"dry_run":false,"confirm":"run fixture generator","timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"fixture_generator_run","arguments":{"script_path":"scripts/gen.py","args":["generated/out2.bin","rogue.txt"],"expected_output_prefixes":["generated"],"allowed_existing_dirty_paths":["scripts/gen.py","generated/out.bin","task/environment/data/a.bin","task/environment/data/b.txt"],"dry_run":false,"confirm":"run fixture generator","timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"dry_run":true,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"dry_run":false,"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"base_image_check_run","arguments":{"dry_run":false,"confirm":"run base image check","timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"bash","args":["scripts/gen.py"],"timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"file_count\": 2");
+    assert_eq!(
+        fs::read(root.join("task/environment/data/a.bin")).unwrap(),
+        [1, 2]
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("task/environment/data/b.txt")).unwrap(),
+        "hi\n"
+    );
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "target already exists");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "normalized relative path");
+    assert_text(&responses[3], "\"dry_run\": true");
+    assert!(!root.join("generated/dry.bin").exists());
+    assert_eq!(responses[4]["result"]["isError"], true);
+    assert_text(&responses[4], "confirm must be");
+    assert_text(&responses[5], "\"ran\": true");
+    assert_eq!(
+        fs::read(root.join("generated/out.bin")).unwrap(),
+        b"\0fixture"
+    );
+    assert_eq!(responses[6]["result"]["isError"], true);
+    assert_text(&responses[6], "outside declared outputs");
+    assert_text(&responses[6], "rogue.txt");
+    assert_text(&responses[7], "\"dry_run\": true");
+    assert_text(&responses[7], "references/check-base-image.sh");
+    assert_eq!(responses[8]["result"]["isError"], true);
+    assert_text(&responses[8], "confirm must be");
+    assert_text(&responses[9], "\"ran\": true");
+    assert_eq!(responses[10]["result"]["isError"], true);
+    assert_text(&responses[10], "not allowlisted");
 }
 
 #[test]

@@ -1,9 +1,12 @@
 pub mod artifact_write_base64;
 pub mod artifact_write_text;
+pub mod base_image_check_run;
+pub mod bulk_write_new_files_base64;
 pub mod capability_manifest;
 pub mod create_directory;
 pub mod delete_untracked_exact;
 pub mod diff_preview;
+pub mod fixture_generator_run;
 pub mod git_branch_prepare;
 pub mod git_commit_exact;
 pub mod git_commit_scoped;

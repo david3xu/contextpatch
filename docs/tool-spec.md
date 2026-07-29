@@ -19,8 +19,11 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `write_new_file_base64` | Yes | Destination must not exist; base64 decoded bytes with optional expected size |
 | `artifact_write_text` | Sidecar artifact only | Writes outside repo under fixed artifact root; create-only, no repo mutation |
 | `artifact_write_base64` | Sidecar artifact only | Binary sidecar artifact under fixed artifact root; create-only, size/byte-count guards |
+| `bulk_write_new_files_base64` | Yes | Bounded multi-file create-only import from base64 entries |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
+| `fixture_generator_run` | Declared fixture outputs only | Dry-run/confirmation-gated repo-relative Python generator with changed-path verification |
+| `base_image_check_run` | No source edits | Exact `references/check-base-image.sh` validation workflow; no arbitrary shell |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
 | `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
 | `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
@@ -313,6 +316,26 @@ Rules:
 - Refuse invalid base64 or decoded content larger than 20 MiB.
 - When `expected_bytes` is provided, refuse if the decoded byte count does not match.
 
+### `bulk_write_new_files_base64`
+
+Creates many new repository files from base64 entries in one bounded fixture import.
+
+Required inputs:
+
+- `entries`: array of objects with `path`, `content_base64`, and optional `expected_bytes`
+
+Optional inputs:
+
+- `parents`: defaults to `false`; when `true`, create missing parent directories inside the repository root.
+
+Rules:
+
+- Refuse an empty entry list or more than 500 files.
+- Refuse duplicate paths, absolute paths, traversal, NUL bytes, and existing destinations.
+- Refuse missing parent directories unless `parents` is true.
+- Refuse invalid base64, per-entry byte-count mismatches, or total decoded content larger than 20 MiB.
+- Write each file through the same create-only root guard as `write_new_file_base64`.
+
 ### `create_directory`
 
 Creates a new directory only when the destination does not exist.
@@ -347,7 +370,7 @@ Runs a bounded validation-oriented command without invoking a shell.
 
 Required inputs:
 
-- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python`, `python3`, `pytest`, `harbor`, or `rg`
+- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python`, `python3`, `pytest`, `harbor`, `bash`, or `rg`
 - `args`: command arguments; the first argument must be an allowlisted subcommand
 
 Optional inputs:
@@ -369,11 +392,59 @@ Rules:
   - `python`/`python3`: a repo-relative `.py` script path as the first argument
   - `pytest`: validation invocation
   - `harbor`: `run`
+  - `bash`: exactly `references/check-base-image.sh`
   - `rg`: search invocation
 - Arguments that directly reference paths outside the repository root must be refused.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
-- The tool must refuse arbitrary shell, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
+- The tool must refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh`, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
+
+### `fixture_generator_run`
+
+Plans or runs a repo-relative Python fixture generator that may mutate only declared outputs.
+
+Required inputs:
+
+- `script_path`: repository-relative `.py` file
+
+Optional inputs:
+
+- `args`: argument array passed after the script path
+- `cwd`: working directory relative to the repository root
+- `expected_output_paths`: exact changed paths allowed after execution
+- `expected_output_prefixes`: changed-path prefixes allowed after execution
+- `allowed_existing_dirty_paths`: dirty paths allowed before execution; defaults to the script path
+- `timeout_secs`: timeout from 1 to 600
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `run fixture generator` when `dry_run` is `false`
+
+Rules:
+
+- The script must be a repository-relative `.py` file executed as `python3 <script_path> ...` without shell interpolation.
+- At least one expected output path or prefix is required.
+- Dry-run must return the exact command plan and must not run Python.
+- Execution requires exact confirmation.
+- Before execution, the worktree may be dirty only at `allowed_existing_dirty_paths`; this permits temporary untracked generator scripts while preventing unrelated changes from being hidden.
+- After execution, every dirty path other than allowed pre-existing dirty paths must match `expected_output_paths` or `expected_output_prefixes`.
+- If the generator exits non-zero or leaves undeclared changes, the tool must refuse and report the command output or undeclared paths.
+- The tool does not commit or delete the generator; callers should use `delete_untracked_exact` for temporary scripts that must not enter the submission.
+
+### `base_image_check_run`
+
+Plans or runs the exact `references/check-base-image.sh` validation workflow.
+
+Optional inputs:
+
+- `timeout_secs`: timeout from 1 to 600
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `run base image check` when `dry_run` is `false`
+
+Rules:
+
+- The required script path is fixed as `references/check-base-image.sh`.
+- Dry-run must return the exact `bash references/check-base-image.sh` plan without running it.
+- Execution requires exact confirmation and uses the guarded no-shell process runner.
+- This tool must not expose arbitrary `bash`, shell snippets, or caller-selected shell scripts.
 
 ### `read_command_log`
 
@@ -830,9 +901,9 @@ Rules:
 - Refuse hash mismatch.
 - Report the deleted path.
 
-## MVP implementation subset
+## Current MCP implementation subset
 
-Stage 1 ships:
+The server currently ships:
 
 1. `replace_exact`
 2. `read_range`
@@ -840,27 +911,30 @@ Stage 1 ships:
 4. `write_new_file_base64`
 5. `artifact_write_text`
 6. `artifact_write_base64`
-7. `create_directory`
-8. `diff_preview`
-9. `status_guard`
-10. `capability_manifest`
-11. `preflight_health`
-12. `run_guarded_command`
-13. `read_command_log`
-14. `validation_profile_run`
-15. `git_commit_exact`
-16. `git_commit_scoped`
-17. `git_restore_exact`
-18. `delete_untracked_exact`
-19. `git_remote_list`
-20. `git_remote_check`
-21. `git_branch_prepare`
-22. `git_merge_readiness`
-23. `git_push_exact`
-24. `github_pr_run`
-25. `github_fork_prepare`
-26. `setup_profile_run`
-27. `native_build_run`
-28. `native_device_run`
+7. `bulk_write_new_files_base64`
+8. `create_directory`
+9. `diff_preview`
+10. `status_guard`
+11. `capability_manifest`
+12. `preflight_health`
+13. `run_guarded_command`
+14. `fixture_generator_run`
+15. `base_image_check_run`
+16. `read_command_log`
+17. `validation_profile_run`
+18. `git_commit_exact`
+19. `git_commit_scoped`
+20. `git_restore_exact`
+21. `delete_untracked_exact`
+22. `git_remote_list`
+23. `git_remote_check`
+24. `git_branch_prepare`
+25. `git_merge_readiness`
+26. `git_push_exact`
+27. `github_pr_run`
+28. `github_fork_prepare`
+29. `setup_profile_run`
+30. `native_build_run`
+31. `native_device_run`
 
-The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.
+Other documented boundary tools, such as `apply_patch` and `delete_guarded`, remain planned until implemented. See `docs/implementation-roadmap.md`.

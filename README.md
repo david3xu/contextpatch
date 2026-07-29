@@ -68,9 +68,12 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `write_new_file_base64`
 - `artifact_write_text`
 - `artifact_write_base64`
+- `bulk_write_new_files_base64`
 - `create_directory`
 - `status_guard`
 - `run_guarded_command`
+- `fixture_generator_run`
+- `base_image_check_run`
 - `read_command_log`
 - `validation_profile_run`
 - `setup_profile_run`
@@ -88,9 +91,9 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `github_pr_run`
 - `github_fork_prepare`
 
-`run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata. It supports repo-relative Python scripts, `pytest`, and `harbor run` for project validation; it still refuses Docker, `pip`, arbitrary `python -m`, shell commands, and generic package installation.
+`run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata. It supports repo-relative Python scripts, `pytest`, `harbor run`, and the exact `references/check-base-image.sh` base-image check for project validation; it still refuses Docker, `pip`, arbitrary `python -m`, arbitrary shell scripts, and generic package installation.
 
-`write_new_file_base64` creates binary repository files with the same create-only root guard as text file creation. `artifact_write_text` and `artifact_write_base64` create sidecar artifacts outside the repository tree for generators, trap checks, or local helper files that must not be committed.
+`write_new_file_base64` creates binary repository files with the same create-only root guard as text file creation. `bulk_write_new_files_base64` imports many create-only fixture files in one bounded call. `artifact_write_text` and `artifact_write_base64` create sidecar artifacts outside the repository tree for generators, trap checks, or local helper files that must not be committed. `fixture_generator_run` handles the common Dynamo pattern of temporarily staging a repo-relative Python generator, running it with declared output paths/prefixes, verifying it did not touch undeclared files, and then letting the caller delete the temporary generator before commit.
 
 `validation_profile_run` compresses common validation sequences into one guarded call and returns compact command summaries with log ids. `read_command_log` retrieves those redacted logs on demand so large outputs do not have to ride in the first JSON-RPC response.
 
@@ -123,7 +126,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution, binary and sidecar artifact writes, exact/scoped Git workflows, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution, binary/sidecar/bulk fixture writes, typed fixture generator and base-image workflows, exact/scoped Git workflows, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 
