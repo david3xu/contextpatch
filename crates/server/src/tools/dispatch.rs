@@ -92,6 +92,9 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
         tools::git_stage_exact::NAME => {
             tools::git::handlers::call_git_stage_exact(repo_root, &arguments)
         }
+        tools::git_staged_scope_check::NAME => {
+            tools::git::handlers::call_git_staged_scope_check(repo_root, &arguments)
+        }
         tools::git_restore_exact::NAME => {
             tools::git::handlers::call_git_restore_exact(repo_root, &arguments)
         }

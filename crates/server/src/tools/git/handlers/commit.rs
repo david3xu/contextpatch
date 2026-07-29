@@ -507,3 +507,91 @@ pub(crate) fn call_git_stage_exact(
     }))
     .map_err(|error| format!("git_stage_exact refused: {error}"))
 }
+
+pub(crate) fn call_git_staged_scope_check(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let allowed_paths = optional_string_array(arguments, "allowed_paths")?;
+    let allowed_prefixes = optional_string_array(arguments, "allowed_prefixes")?;
+    let required_paths = optional_string_array(arguments, "required_paths")?;
+
+    if allowed_paths.len() > 500 {
+        return Err(
+            "git_staged_scope_check refused: at most 500 allowed_paths are supported".to_string(),
+        );
+    }
+    if allowed_prefixes.len() > 50 {
+        return Err(
+            "git_staged_scope_check refused: at most 50 allowed_prefixes are supported".to_string(),
+        );
+    }
+    if required_paths.len() > 500 {
+        return Err(
+            "git_staged_scope_check refused: at most 500 required_paths are supported".to_string(),
+        );
+    }
+
+    let root = canonical_repo_root(repo_root, tools::git_staged_scope_check::NAME)?;
+    let normalized_allowed_paths =
+        normalize_git_paths(tools::git_staged_scope_check::NAME, &root, &allowed_paths)?;
+    let normalized_allowed_prefixes = normalize_git_prefixes(
+        tools::git_staged_scope_check::NAME,
+        &root,
+        &allowed_prefixes,
+    )?;
+    let normalized_required_paths =
+        normalize_git_paths(tools::git_staged_scope_check::NAME, &root, &required_paths)?;
+
+    let allowed_path_set: BTreeSet<String> = normalized_allowed_paths.iter().cloned().collect();
+    if allowed_path_set.len() != normalized_allowed_paths.len() {
+        return Err(
+            "git_staged_scope_check refused: duplicate allowed_paths are not allowed".to_string(),
+        );
+    }
+    let allowed_prefix_set: BTreeSet<String> =
+        normalized_allowed_prefixes.iter().cloned().collect();
+    if allowed_prefix_set.len() != normalized_allowed_prefixes.len() {
+        return Err(
+            "git_staged_scope_check refused: duplicate allowed_prefixes are not allowed"
+                .to_string(),
+        );
+    }
+    let required_path_set: BTreeSet<String> = normalized_required_paths.iter().cloned().collect();
+    if required_path_set.len() != normalized_required_paths.len() {
+        return Err(
+            "git_staged_scope_check refused: duplicate required_paths are not allowed".to_string(),
+        );
+    }
+
+    let staged_paths = git_cached_paths_for_tool(tools::git_staged_scope_check::NAME, &root)?;
+    let disallowed_paths = staged_paths
+        .iter()
+        .filter(|path| {
+            !allowed_path_set.contains(*path)
+                && !normalized_allowed_prefixes
+                    .iter()
+                    .any(|prefix| *path == prefix || path.starts_with(&format!("{prefix}/")))
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let missing_required_paths = required_path_set
+        .difference(&staged_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let passed = disallowed_paths.is_empty() && missing_required_paths.is_empty();
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_staged_scope_check::NAME,
+        "read_only": true,
+        "passed": passed,
+        "staged_paths": staged_paths,
+        "staged_path_count": staged_paths.len(),
+        "allowed_paths": normalized_allowed_paths,
+        "allowed_prefixes": normalized_allowed_prefixes,
+        "required_paths": normalized_required_paths,
+        "disallowed_paths": disallowed_paths,
+        "missing_required_paths": missing_required_paths
+    }))
+    .map_err(|error| format!("git_staged_scope_check refused: {error}"))
+}

@@ -45,3 +45,7 @@ pub mod git_restore_exact {
 pub mod git_stage_exact {
     pub const NAME: &str = "git_stage_exact";
 }
+
+pub mod git_staged_scope_check {
+    pub const NAME: &str = "git_staged_scope_check";
+}

@@ -40,6 +40,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `native_device_run` | External device command | Dry-run default, typed action params, device-state confirmation gate, no raw `xcrun` or `adb` commands |
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `git_stage_exact` | Git index only | Explicit dirty paths, clean-index gate, dry-run default, no commit |
+| `git_staged_scope_check` | No | Read-only staged-path policy check against allowed exact paths/prefixes and optional required paths |
 | `git_commit_scoped` | Git index + one local commit | Explicit dirty subset, clean-index gate, preserves unrelated dirty paths, never pushes |
 | `git_commit_prefix` | Git index + one local commit | Explicit prefixes expand to exact dirty paths, clean-index gate, dry-run default, never pushes |
 | `git_restore_exact` | Git worktree/index restore | Explicit dirty tracked paths only, dry-run default, explicit confirmation, never resets the whole worktree |
@@ -711,6 +712,7 @@ Rules:
 - The first response should be compact: per-command status, duration, timeout state, and log id.
 - Full command output should be retrieved with `read_command_log` only when needed.
 - Profiles may use executable resolution from `CONTEXTPATCH_VALIDATION_PATHS` through the guarded runner; callers cannot pass environment overrides per request.
+- The `dynamo-harbor-task` profile must append a structured `harbor_summary` object with oracle rewards, nop rewards, deterministic repeat checks, expected oracle/nop pass checks, missing-reward diagnostics, and an aggregate `passed` boolean.
 - Profiles must not commit, push, reset, checkout, clean, stash, or mutate product files.
 
 ### `setup_profile_run`
@@ -917,6 +919,23 @@ Rules:
 - Rename/copy status entries are refused until a dedicated tracked-move workflow exists.
 - The tool may run `git add -- <paths>` only; it must not commit, fetch, pull, push, reset, checkout, stash, clean, or modify remotes.
 - On success, the tool returns staged paths and remaining dirty paths.
+
+### `git_staged_scope_check`
+
+Checks the current Git index against a declared staged-path policy without mutating it.
+
+Optional inputs:
+
+- `allowed_paths`: repository-relative paths that may be staged exactly
+- `allowed_prefixes`: repository-relative prefixes or directories under which staged paths are allowed
+- `required_paths`: repository-relative paths that must be staged
+
+Rules:
+
+- The tool is read-only and must not run `git add`, `git restore`, `git commit`, fetch, push, reset, checkout, stash, clean, or modify remotes.
+- Paths and prefixes must be normalized repository-relative values and must not use path traversal, absolute paths, NUL bytes, or Git pathspec metacharacters.
+- A staged path passes when it equals one allowed path or is inside one allowed prefix.
+- The response must include the staged paths, allowed paths, allowed prefixes, required paths, disallowed paths, missing required paths, staged path count, and aggregate `passed` boolean.
 
 ### `git_commit_prefix`
 
@@ -1234,20 +1253,21 @@ The server currently ships:
 26. `validation_profile_run`
 27. `git_commit_exact`
 28. `git_stage_exact`
-29. `git_commit_scoped`
-30. `git_commit_prefix`
-31. `git_restore_exact`
-32. `delete_untracked_exact`
-33. `delete_generated_prefix`
-34. `git_remote_list`
-35. `git_remote_check`
-36. `git_branch_prepare`
-37. `git_merge_readiness`
-38. `git_push_exact`
-39. `github_pr_run`
-40. `github_fork_prepare`
-41. `setup_profile_run`
-42. `native_build_run`
-43. `native_device_run`
+29. `git_staged_scope_check`
+30. `git_commit_scoped`
+31. `git_commit_prefix`
+32. `git_restore_exact`
+33. `delete_untracked_exact`
+34. `delete_generated_prefix`
+35. `git_remote_list`
+36. `git_remote_check`
+37. `git_branch_prepare`
+38. `git_merge_readiness`
+39. `git_push_exact`
+40. `github_pr_run`
+41. `github_fork_prepare`
+42. `setup_profile_run`
+43. `native_build_run`
+44. `native_device_run`
 
 Other documented boundary tools, such as `apply_patch` and `delete_guarded`, remain planned until implemented. See `docs/implementation-roadmap.md`.

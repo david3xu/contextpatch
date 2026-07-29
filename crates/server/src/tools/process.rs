@@ -295,6 +295,9 @@ pub(crate) fn call_validation_profile_run(
     ];
     let mut failed = false;
     let mut ran = 0usize;
+    let mut harbor_oracle_rewards = Vec::new();
+    let mut harbor_nop_rewards = Vec::new();
+    let mut harbor_missing_rewards = Vec::new();
 
     for (index, command) in commands.iter().enumerate() {
         ran += 1;
@@ -324,6 +327,23 @@ pub(crate) fn call_validation_profile_run(
         let duration_ms = extract_field(&output, "duration_ms").unwrap_or("unknown");
         let command_failed = timed_out == "true" || exit_code != "0";
         failed |= command_failed;
+        if profile == "dynamo-harbor-task" && command.program == "harbor" {
+            let agent = harbor_agent(&command.args).unwrap_or("unknown");
+            match extract_harbor_reward(&output) {
+                Some(reward) if agent == "oracle" => harbor_oracle_rewards.push(reward),
+                Some(reward) if agent == "nop" => harbor_nop_rewards.push(reward),
+                Some(_) => harbor_missing_rewards.push(format!(
+                    "{}. {} | unrecognized_agent: {agent}",
+                    index + 1,
+                    command.display()
+                )),
+                None => harbor_missing_rewards.push(format!(
+                    "{}. {} | reward: missing | log_id: {log_id}",
+                    index + 1,
+                    command.display()
+                )),
+            }
+        }
         lines.push(format!(
             "{}. {} | exit_code: {exit_code} | timed_out: {timed_out} | duration_ms: {duration_ms} | log_id: {log_id}",
             index + 1,
@@ -337,6 +357,34 @@ pub(crate) fn call_validation_profile_run(
 
     lines.insert(3, format!("commands_run: {ran}"));
     lines.insert(4, format!("failed: {failed}"));
+    if profile == "dynamo-harbor-task" {
+        let harbor_oracle_all_one = harbor_oracle_rewards.len() == 2
+            && harbor_oracle_rewards
+                .iter()
+                .all(|reward| (*reward - 1.0).abs() <= f64::EPSILON);
+        let harbor_nop_all_below_one =
+            harbor_nop_rewards.len() == 2 && harbor_nop_rewards.iter().all(|reward| *reward < 1.0);
+        let harbor_oracle_deterministic = rewards_deterministic(&harbor_oracle_rewards);
+        let harbor_nop_deterministic = rewards_deterministic(&harbor_nop_rewards);
+        let harbor_passed = !failed
+            && harbor_oracle_all_one
+            && harbor_nop_all_below_one
+            && harbor_oracle_deterministic
+            && harbor_nop_deterministic
+            && harbor_missing_rewards.is_empty();
+        let summary = serde_json::json!({
+            "profile": "dynamo-harbor-task",
+            "oracle_rewards": harbor_oracle_rewards,
+            "nop_rewards": harbor_nop_rewards,
+            "oracle_all_one": harbor_oracle_all_one,
+            "nop_all_below_one": harbor_nop_all_below_one,
+            "oracle_deterministic": harbor_oracle_deterministic,
+            "nop_deterministic": harbor_nop_deterministic,
+            "missing_rewards": harbor_missing_rewards,
+            "passed": harbor_passed
+        });
+        lines.push(format!("harbor_summary: {summary}"));
+    }
     lines.push(format!("duration_ms: {}", started.elapsed().as_millis()));
     Ok(lines.join("\n"))
 }
@@ -572,6 +620,41 @@ fn extract_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let prefix = format!("{key}: ");
     text.lines()
         .find_map(|line| line.strip_prefix(&prefix).map(str::trim))
+}
+
+fn harbor_agent<'a>(args: &'a [&'static str]) -> Option<&'a str> {
+    args.windows(2)
+        .find_map(|window| (window[0] == "--agent").then_some(window[1]))
+}
+
+fn extract_harbor_reward(text: &str) -> Option<f64> {
+    text.lines().filter_map(parse_reward_line).next_back()
+}
+
+fn parse_reward_line(line: &str) -> Option<f64> {
+    let lower = line.to_ascii_lowercase();
+    let reward_index = lower.find("reward");
+    let score_index = lower.find("score");
+    let index = match (reward_index, score_index) {
+        (Some(reward), Some(score)) => reward.min(score),
+        (Some(reward), None) => reward,
+        (None, Some(score)) => score,
+        (None, None) => return None,
+    };
+    line[index..]
+        .split(|ch: char| !(ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+' | 'e' | 'E')))
+        .filter(|token| token.chars().any(|ch| ch.is_ascii_digit()))
+        .filter_map(|token| token.parse::<f64>().ok())
+        .next()
+}
+
+fn rewards_deterministic(rewards: &[f64]) -> bool {
+    match rewards.split_first() {
+        Some((first, rest)) if !rest.is_empty() => rest
+            .iter()
+            .all(|reward| (*reward - *first).abs() <= f64::EPSILON),
+        _ => false,
+    }
 }
 
 pub(crate) fn write_command_log(text: &str) -> Result<String, String> {

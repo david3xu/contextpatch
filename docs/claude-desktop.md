@@ -30,29 +30,30 @@ The expected agent workflow is:
 6. Use `capability_manifest` and `preflight_health` to determine whether this server can support the current workflow.
 7. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, `harbor run`, the exact `references/check-base-image.sh` or `references/check-base-image.sh task` checks, or `rg` drift searches.
 8. Use `git_stage_exact` when files must be staged/tracked before the work is ready to commit.
-9. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
-10. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
-11. Use `git_commit_prefix` when the desired commit is a large generated or fixture tree under known prefixes; inspect the dry-run expanded path list before confirming.
-12. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
-13. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
-14. Use `artifact_python_run` for Python scratch analysis from the sidecar artifact root instead of creating temporary scripts inside the repository.
-15. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
-16. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
-17. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
-18. Use `image_cleanliness_check_run` for the narrow Docker image check that searches the built image for a forbidden file name such as `solve.sh`; keep dry-run unless Docker execution is explicitly needed.
-19. Use `docker_image_inspect` for the narrow read-only Docker image metadata workflow; do not ask for arbitrary Docker commands.
-20. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
-21. Use `delete_generated_prefix` for ignored/untracked generated files and empty directories under known prefixes, such as `__pycache__`, after reviewing the dry-run path list.
-22. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
-23. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
-24. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
-25. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
-26. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
-27. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
-28. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
-29. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
-30. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
-31. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
+9. Use `git_staged_scope_check` to audit that staged files are limited to allowed exact paths/prefixes, such as `.gitignore` plus `task/`, before reporting staged-scope readiness.
+10. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
+11. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
+12. Use `git_commit_prefix` when the desired commit is a large generated or fixture tree under known prefixes; inspect the dry-run expanded path list before confirming.
+13. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
+14. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
+15. Use `artifact_python_run` for Python scratch analysis from the sidecar artifact root instead of creating temporary scripts inside the repository.
+16. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
+17. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
+18. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
+19. Use `image_cleanliness_check_run` for the narrow Docker image check that searches the built image for a forbidden file name such as `solve.sh`; keep dry-run unless Docker execution is explicitly needed.
+20. Use `docker_image_inspect` for the narrow read-only Docker image metadata workflow; do not ask for arbitrary Docker commands.
+21. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
+22. Use `delete_generated_prefix` for ignored/untracked generated files and empty directories under known prefixes, such as `__pycache__`, after reviewing the dry-run path list.
+23. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
+24. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
+25. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
+26. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
+27. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+28. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+29. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
+30. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
+31. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
+32. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
 32. Use `write_existing_file_exact_hash` for whole-file synchronization only when the current file SHA-256 is known and reviewed.
 33. Use `fixture_manifest_verify` and `fixture_manifest_refresh` to enforce exact fixture file sets and SHA-256 digests instead of asking for ad hoc hashing scripts.
 
@@ -141,6 +142,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `native_device_run`
 - `git_commit_exact`
 - `git_stage_exact`
+- `git_staged_scope_check`
 - `git_commit_scoped`
 - `git_commit_prefix`
 - `git_restore_exact`
@@ -221,7 +223,7 @@ Use `write_existing_file_exact_hash` when an existing text file needs whole-file
 
 Use `fixture_manifest_refresh` after fixture or SPEC changes to regenerate a manifest from explicit `fixture_paths` or `fixture_prefixes`; overwriting an existing manifest requires its current `expected_manifest_sha256`. Use `fixture_manifest_verify` before deriving truth or committing fixture changes; it fails on missing, modified, or unlisted fixture files.
 
-Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values. Use `read_command_log` only for logs that need inspection.
+Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values; the Dynamo/Harbor profile also includes a structured `harbor_summary` for oracle/nop rewards and determinism. Use `read_command_log` only for logs that need inspection.
 
 Before launching a profile that depends on optional host tools, call `preflight_health`. It must report availability and resolved paths for validation executables used by shipped profiles, including `python3`, `pytest`, `harbor`, and the exact `bash references/check-base-image.sh` workflow. If Harbor is installed outside the MCP server process `PATH`, configure the host with `CONTEXTPATCH_VALIDATION_PATHS` rather than asking the model to pass an executable path or environment override. If Harbor is unavailable in the current environment, do not claim a completed `harbor run`; verify task-local Oracle/verifier logic directly only as a documented fallback for that environment limitation.
 

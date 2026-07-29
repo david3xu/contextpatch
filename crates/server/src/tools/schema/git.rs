@@ -141,6 +141,38 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::git_staged_scope_check::NAME,
+                    "description": "Read-only check that staged paths are limited to allowed exact paths and prefixes, with optional required staged paths.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "allowed_paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Repository-relative paths that may be staged exactly."
+                            },
+                            "allowed_prefixes": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Repository-relative prefixes or directories under which staged paths are allowed."
+                            },
+                            "required_paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Optional repository-relative paths that must be staged."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::git_restore_exact::NAME,
                     "description": "Dry-run or restore exact dirty repository paths from HEAD. Use for generated noise cleanup before exact commits; never resets the whole worktree.",
                     "inputSchema": {

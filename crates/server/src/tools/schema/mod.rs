@@ -47,6 +47,7 @@ fn add_always_allow_annotations(definition: &mut Value) {
             | "fixture_manifest_verify"
             | "git_remote_list"
             | "git_merge_readiness"
+            | "git_staged_scope_check"
     );
 
     object.insert(

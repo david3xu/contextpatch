@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -72,6 +73,7 @@ fn stage1_mcp_tools_work_together() {
         "git_commit_scoped",
         "git_commit_prefix",
         "git_stage_exact",
+        "git_staged_scope_check",
         "git_restore_exact",
         "delete_untracked_exact",
         "delete_generated_prefix",
@@ -115,6 +117,7 @@ fn stage1_mcp_tools_work_together() {
         "fixture_manifest_verify",
         "git_remote_list",
         "git_merge_readiness",
+        "git_staged_scope_check",
     ] {
         let tool = list
             .as_array()
@@ -858,6 +861,33 @@ fn stage2_git_stage_exact_stages_without_committing() {
 }
 
 #[test]
+fn stage2_git_staged_scope_check_reports_policy_result() {
+    let root = git_repo("stage2_git_staged_scope_check_reports_policy_result");
+    fs::create_dir_all(root.join("task")).unwrap();
+    fs::write(root.join(".gitignore"), "jobs/\n").unwrap();
+    fs::write(root.join("task/task.toml"), "name = \"task\"\n").unwrap();
+    fs::write(root.join("README.md"), "readme\n").unwrap();
+    git(&root, &["add", ".gitignore", "task/task.toml", "README.md"]);
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_staged_scope_check","arguments":{"allowed_paths":[".gitignore"],"allowed_prefixes":["task"],"required_paths":["task/task.toml"]}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"tool\": \"git_staged_scope_check\"");
+    assert_text(&responses[0], "\"read_only\": true");
+    assert_text(&responses[0], "\"passed\": false");
+    assert_text(&responses[0], "\"staged_path_count\": 3");
+    assert_text(
+        &responses[0],
+        "\"disallowed_paths\": [\n    \"README.md\"\n  ]",
+    );
+    assert_text(&responses[0], "\"missing_required_paths\": []");
+}
+
+#[test]
 fn stage2_command_log_offset_pages_long_logs() {
     let root = git_repo("stage2_command_log_offset_pages_long_logs");
 
@@ -1322,6 +1352,54 @@ fn stage2_validation_profile_writes_readable_command_logs() {
 }
 
 #[test]
+fn stage2_dynamo_harbor_profile_reports_structured_rewards() {
+    let root = git_repo("stage2_dynamo_harbor_profile_reports_structured_rewards");
+    fs::create_dir_all(root.join("references")).unwrap();
+    fs::write(
+        root.join("references/check-base-image.sh"),
+        "#!/bin/sh\nexit 0\n",
+    )
+    .unwrap();
+
+    let bin = temp_root("stage2_dynamo_harbor_profile_bin");
+    fs::write(
+        bin.join("harbor"),
+        "#!/bin/sh\ncase \"$*\" in\n  *\"--agent oracle\"*) echo 'reward: 1.0' ;;\n  *\"--agent nop\"*) echo 'reward: 0.0' ;;\n  *) echo 'reward: 0.5' ;;\nesac\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(bin.join("harbor")).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(bin.join("harbor"), permissions).unwrap();
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let test_path = format!("{}:{original_path}", bin.display());
+    let responses = run_server_with_env(
+        &root,
+        &[
+            (
+                "CONTEXTPATCH_VALIDATION_PATHS",
+                bin.to_str().unwrap().to_string(),
+            ),
+            ("PATH", test_path),
+        ],
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validation_profile_run","arguments":{"profile":"dynamo-harbor-task","timeout_secs":30}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "profile: dynamo-harbor-task");
+    assert_text(&responses[0], "failed: false");
+    assert_text(&responses[0], "harbor_summary:");
+    assert_text(&responses[0], "\"oracle_rewards\":[1.0,1.0]");
+    assert_text(&responses[0], "\"nop_rewards\":[0.0,0.0]");
+    assert_text(&responses[0], "\"oracle_all_one\":true");
+    assert_text(&responses[0], "\"nop_all_below_one\":true");
+    assert_text(&responses[0], "\"oracle_deterministic\":true");
+    assert_text(&responses[0], "\"nop_deterministic\":true");
+    assert_text(&responses[0], "\"passed\":true");
+}
+
+#[test]
 fn stage2_guarded_command_returns_while_mcp_stdin_stays_open() {
     let root = git_repo("stage2_guarded_command_returns_while_mcp_stdin_stays_open");
     let mut child = Command::new(contextpatch_server())
@@ -1405,11 +1483,16 @@ fn stage2_rg_files_returns_while_mcp_stdin_stays_open() {
 }
 
 fn run_server(root: &Path, requests: &[&str]) -> Vec<Value> {
+    run_server_with_env(root, &[], requests)
+}
+
+fn run_server_with_env(root: &Path, envs: &[(&str, String)], requests: &[&str]) -> Vec<Value> {
     let mut child = Command::new(contextpatch_server())
         .arg("--repo-root")
         .arg(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .envs(envs.iter().map(|(key, value)| (*key, value)))
         .spawn()
         .unwrap();
 

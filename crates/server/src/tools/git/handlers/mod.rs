@@ -4,6 +4,7 @@ pub mod sync;
 
 pub(crate) use commit::{
     call_git_commit_exact, call_git_commit_prefix, call_git_commit_scoped, call_git_stage_exact,
+    call_git_staged_scope_check,
 };
 pub(crate) use restore::{
     call_delete_generated_prefix, call_delete_untracked_exact, call_git_restore_exact,
