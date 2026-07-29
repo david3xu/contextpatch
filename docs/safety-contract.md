@@ -21,7 +21,9 @@ This document is normative. If implementation behavior conflicts with this file,
 11. If setup support is exposed, it must be declarative and profile-owned: callers choose a profile/action with typed params, never raw package-manager or shell commands.
 12. If native build or device support is exposed, it must be declarative and action-owned: callers choose typed build/device actions, never raw `xcodebuild`, Gradle, `xcrun`, or `adb` commands.
 13. If binary file creation is exposed, it must be create-only, repo-root-confined, atomic, byte-count-guardable, and size-bounded.
-14. If GitHub PR support is exposed, it must use narrow typed workflows with dry-run/confirmation for PR creation, not arbitrary `gh` passthrough.
+14. If sidecar artifact creation is exposed, it must write only under a fixed non-repository artifact root, create-only, and report that it does not mutate the repo.
+15. If untracked cleanup is exposed, it must delete only explicit untracked regular files with dry-run and confirmation gates, not expose broad `git clean`.
+16. If GitHub PR or fork support is exposed, it must use narrow typed workflows with dry-run/confirmation for mutations, not arbitrary `gh` passthrough.
 
 ## Required refusal cases
 
@@ -52,7 +54,7 @@ If the platform cannot provide the expected atomic behavior, the operation must 
 
 ## Git guard expectation
 
-Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves. The allowed commit workflows are `git_commit_exact` and `git_commit_scoped`: both default to dry-run, require explicit confirmation before mutation, stage only requested paths, create at most one local commit, and never push. `git_commit_exact` requires an exact complete dirty-path set. `git_commit_scoped` permits an explicit subset of dirty paths only when the index is clean, preserving unrelated dirty paths.
+Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves. The allowed commit workflows are `git_commit_exact` and `git_commit_scoped`: both default to dry-run, require explicit confirmation before mutation, stage only requested paths, create at most one local commit, and never push. `git_commit_exact` requires an exact complete dirty-path set. `git_commit_scoped` permits an explicit subset of dirty paths only when the index is clean, preserving unrelated dirty paths. `git_remote_list` may run only read-only remote inspection. `delete_untracked_exact` may remove only explicit untracked regular files after dry-run and confirmation; it must not recurse, glob, or clean unrelated files.
 
 Remote Git authority is intentionally split. `git_remote_check` may fetch exactly one explicit remote branch and report local/remote divergence without changing source files. `git_branch_prepare` may fetch exactly one explicit remote base branch, create or switch to one validated local branch from that base, and reset an existing local branch only when the worktree is clean and `confirm: "reset branch from remote base"` is supplied. `git_merge_readiness` may optionally fetch one explicit remote branch, then run read-only merge-base, rev-count, and diff-name queries to identify files changed on both sides of two validated refs. `git_push_exact` may push only the current `HEAD` to the matching named remote branch after verifying a clean worktree, current branch match, expected HEAD hash, no remote-ahead divergence, and explicit `confirm: "push exact commit"`. Tools must not expose broad reset, checkout, merge, merge-tree through generic command execution, rebase, stash, clean, force-push, push tags, push multiple refs, delete refs, or discard user work outside those explicit branch-prep reset guards.
 
@@ -61,6 +63,8 @@ Remote Git authority is intentionally split. `git_remote_check` may fetch exactl
 The server should not expose generic `write_file`, unrestricted `delete`, recursive directory writes, or shell execution as default tools. Directory creation, if exposed, must be create-only for one explicit path, refuse existing targets, and keep all created components inside the repository root.
 
 Binary file creation, if exposed, must be create-only for one explicit path, refuse existing targets, decode bounded base64 content, optionally enforce an expected decoded byte count, and use the same repository-root and atomic publish guards as text create-only writes.
+
+Sidecar artifact creation, if exposed, must use a fixed artifact root outside the repository. It must reject absolute paths and traversal, refuse overwrites, optionally create parents only under that artifact root, and never claim repository mutation semantics.
 
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
 
@@ -82,14 +86,14 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 
 ## GitHub workflow expectation
 
-GitHub automation is review workflow support, not broad platform authority. Tools may inspect authentication state, view PR details, read PR checks, and create one pull request through an explicit typed action.
+GitHub automation is review workflow support, not broad platform authority. Tools may inspect authentication state, view PR details, read PR checks, create one pull request, and prepare a fork through explicit typed actions.
 
 Rules:
 
 1. Use `gh` with explicit argv and no shell.
-2. Keep read-only PR actions separate from mutating PR creation.
-3. Default PR creation to dry-run and return the exact command plan.
-4. Require exact confirmation before creating a PR.
+2. Keep read-only PR actions separate from mutating PR creation and fork preparation.
+3. Default PR creation and fork preparation to dry-run and return the exact command plan.
+4. Require exact confirmation before creating a PR or preparing a fork.
 5. Do not expose arbitrary `gh` subcommands, secret reads, workflow dispatch, release publishing, repository deletion, forceful Git operations, or broad issue/project mutation through this surface.
 
 ## Setup profile expectation

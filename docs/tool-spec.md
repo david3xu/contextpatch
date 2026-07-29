@@ -17,6 +17,8 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
 | `write_new_file_base64` | Yes | Destination must not exist; base64 decoded bytes with optional expected size |
+| `artifact_write_text` | Sidecar artifact only | Writes outside repo under fixed artifact root; create-only, no repo mutation |
+| `artifact_write_base64` | Sidecar artifact only | Binary sidecar artifact under fixed artifact root; create-only, size/byte-count guards |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
@@ -27,11 +29,14 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `git_commit_exact` | Git index + one local commit | Exact full dirty-path set, dry-run default, explicit confirmation, never pushes |
 | `git_commit_scoped` | Git index + one local commit | Explicit dirty subset, clean-index gate, preserves unrelated dirty paths, never pushes |
 | `git_restore_exact` | Git worktree/index restore | Explicit dirty tracked paths only, dry-run default, explicit confirmation, never resets the whole worktree |
+| `delete_untracked_exact` | Git worktree cleanup | Explicit untracked regular files only, dry-run default, explicit confirmation, no broad clean |
+| `git_remote_list` | No | Read-only parsed `git remote -v` |
 | `git_remote_check` | Remote-tracking refs only | Fetches one explicit remote branch and reports HEAD/remote divergence without source edits |
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
 | `git_merge_readiness` | Optional remote-tracking ref update only | Validated refs, optional single-branch fetch, merge-base/ahead/diff-name analysis, no merge |
 | `git_push_exact` | Remote branch update | Clean worktree, exact HEAD, no remote-ahead divergence, explicit confirmation, no force |
 | `github_pr_run` | GitHub mutation for PR creation only | `gh`-backed auth/check/view plus confirmation-gated PR creation |
+| `github_fork_prepare` | GitHub fork mutation | `gh repo fork` plan by default, explicit confirmation for mutation |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
 
 ## Naming
@@ -266,6 +271,47 @@ Rules:
 - Refuse invalid base64 or decoded content larger than 20 MiB.
 - When `expected_bytes` is provided, refuse if the decoded byte count does not match.
 - Write atomically.
+
+### `artifact_write_text`
+
+Creates a new UTF-8 text artifact outside the repository under a fixed `contextpatch` artifact root.
+
+Required inputs:
+
+- `path`
+- `content`
+
+Optional inputs:
+
+- `parents`: defaults to `false`; when `true`, create missing parent directories under the artifact root.
+
+Rules:
+
+- Refuse absolute paths, `..`, `.` components, and NUL bytes.
+- Refuse if the artifact already exists.
+- Refuse missing parent directories unless `parents` is true.
+- Write atomically through the same create-only byte path as repository file creation.
+- Return the artifact root and created path, and report `repo_mutation: false`.
+
+### `artifact_write_base64`
+
+Creates a new binary artifact outside the repository under the same fixed artifact root.
+
+Required inputs:
+
+- `path`
+- `content_base64`
+
+Optional inputs:
+
+- `expected_bytes`: decoded byte-count guard
+- `parents`: defaults to `false`; when `true`, create missing parent directories under the artifact root.
+
+Rules:
+
+- Apply all `artifact_write_text` path and create-only rules.
+- Refuse invalid base64 or decoded content larger than 20 MiB.
+- When `expected_bytes` is provided, refuse if the decoded byte count does not match.
 
 ### `create_directory`
 
@@ -573,6 +619,37 @@ Rules:
 - The tool may run only `git restore --staged --worktree -- <paths>` plus read-only Git status/tracking checks.
 - On success, the requested paths must no longer be dirty, and the response must report any remaining dirty paths.
 
+### `delete_untracked_exact`
+
+Deletes explicit untracked regular files without exposing broad `git clean` or recursive filesystem deletion.
+
+Required inputs:
+
+- `paths`: non-empty list of repository-relative untracked file paths
+
+Optional inputs:
+
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `delete untracked files` when `dry_run` is `false`
+
+Rules:
+
+- The tool must default to dry-run and perform no mutation unless `dry_run` is `false` and `confirm` exactly equals `delete untracked files`.
+- Every requested path must be normalized under the repository root and currently reported by Git as untracked.
+- Every requested path must be a regular file, not a directory.
+- The tool must delete only the explicit paths listed, never recurse, glob, or clean unrelated untracked files.
+- On success, the requested paths must no longer be untracked, and the response must report remaining untracked paths.
+
+### `git_remote_list`
+
+Reads configured Git remotes without exposing broader `git remote` mutation.
+
+Rules:
+
+- The tool may run only read-only `git remote -v`.
+- The response must parse remotes into name, URL, and fetch/push kind.
+- The tool must not add, rename, remove, or set-url for remotes.
+
 ### `git_remote_check`
 
 Fetches one explicit remote branch and reports whether the local `HEAD` is behind that remote branch.
@@ -695,6 +772,24 @@ Rules:
 - `pr_create` with `dry_run: false` must require the exact confirmation literal.
 - The tool must not expose arbitrary `gh` subcommands, repository deletion, workflow dispatch, release publishing, secret access, or forceful Git operations.
 
+### `github_fork_prepare`
+
+Plans or runs the narrow GitHub fork workflow for the current repository through `gh repo fork`.
+
+Optional inputs:
+
+- `remote`: defaults to true; when true, pass `--remote`
+- `dry_run`: defaults to true
+- `confirm`: literal `prepare github fork` when `dry_run` is false
+
+Rules:
+
+- The tool must default to dry-run and return the exact `gh repo fork` command plan.
+- The tool must require exact confirmation before mutating GitHub or remotes.
+- The tool must use explicit argv and no shell.
+- The tool must not clone because the MCP server is already bound to one repository root.
+- The tool must not expose arbitrary `gh repo` subcommands, repository deletion, or broad remote mutation.
+
 ### Latency instrumentation
 
 Future Stage 2B command and workflow tools should expose optional timing metadata. The metadata should be diagnostic, not part of the safety decision itself.
@@ -743,23 +838,29 @@ Stage 1 ships:
 2. `read_range`
 3. `write_new_file`
 4. `write_new_file_base64`
-5. `create_directory`
-6. `diff_preview`
-7. `status_guard`
-8. `capability_manifest`
-9. `preflight_health`
-10. `run_guarded_command`
-11. `read_command_log`
-12. `validation_profile_run`
-13. `git_commit_exact`
-14. `git_commit_scoped`
-15. `git_remote_check`
-16. `git_branch_prepare`
-17. `git_merge_readiness`
-18. `git_push_exact`
-19. `github_pr_run`
-20. `setup_profile_run`
-21. `native_build_run`
-22. `native_device_run`
+5. `artifact_write_text`
+6. `artifact_write_base64`
+7. `create_directory`
+8. `diff_preview`
+9. `status_guard`
+10. `capability_manifest`
+11. `preflight_health`
+12. `run_guarded_command`
+13. `read_command_log`
+14. `validation_profile_run`
+15. `git_commit_exact`
+16. `git_commit_scoped`
+17. `git_restore_exact`
+18. `delete_untracked_exact`
+19. `git_remote_list`
+20. `git_remote_check`
+21. `git_branch_prepare`
+22. `git_merge_readiness`
+23. `git_push_exact`
+24. `github_pr_run`
+25. `github_fork_prepare`
+26. `setup_profile_run`
+27. `native_build_run`
+28. `native_device_run`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

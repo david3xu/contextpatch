@@ -1,8 +1,9 @@
 mod protocol;
 mod tools;
 
-use std::collections::BTreeSet;
+use std::collections::{hash_map::DefaultHasher, BTreeSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -294,6 +295,58 @@ fn tool_definitions() -> Value {
                         "minimum": 0,
                         "maximum": 20971520,
                         "description": "Optional decoded byte count guard."
+                    }
+                },
+                "required": ["path", "content_base64"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::artifact_write_text::NAME,
+            "description": "Create a new UTF-8 text artifact outside the repository under the fixed contextpatch artifact directory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Artifact path relative to the fixed artifact root. Parent directory must already exist unless parents is true."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full artifact content to write."
+                    },
+                    "parents": {
+                        "type": "boolean",
+                        "description": "When true, create missing parent directories under the artifact root. Defaults to false."
+                    }
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::artifact_write_base64::NAME,
+            "description": "Create a new binary artifact outside the repository under the fixed contextpatch artifact directory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Artifact path relative to the fixed artifact root. Parent directory must already exist unless parents is true."
+                    },
+                    "content_base64": {
+                        "type": "string",
+                        "description": "Base64-encoded artifact content to write."
+                    },
+                    "expected_bytes": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 20971520,
+                        "description": "Optional decoded byte count guard."
+                    },
+                    "parents": {
+                        "type": "boolean",
+                        "description": "When true, create missing parent directories under the artifact root. Defaults to false."
                     }
                 },
                 "required": ["path", "content_base64"],
@@ -604,6 +657,42 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::delete_untracked_exact::NAME,
+            "description": "Dry-run or delete explicit untracked files only. Refuses tracked files, directories, globs, and broad cleanup.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "Repository-relative untracked file paths to delete."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Validate and preview without deleting. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `delete untracked files` when dry_run is false."
+                    }
+                },
+                "required": ["paths"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": tools::git_remote_list::NAME,
+            "description": "Read-only Git remote inspection, equivalent to a parsed git remote -v.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::git_remote_check::NAME,
             "description": "Fetch one remote branch and report whether the remote branch is ahead of HEAD. Does not modify source files.",
             "inputSchema": {
@@ -766,6 +855,28 @@ fn tool_definitions() -> Value {
                 "required": ["action"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": tools::github_fork_prepare::NAME,
+            "description": "Plan or run a guarded gh repo fork workflow for the current repository.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "remote": {
+                        "type": "boolean",
+                        "description": "Pass --remote to add fork remotes. Defaults to true."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Plan only without mutating GitHub or remotes. Defaults to true."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `prepare github fork` when dry_run is false."
+                    }
+                },
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -792,6 +903,8 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::status_guard::NAME => call_status_guard(repo_root, &arguments),
         tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
         tools::write_new_file_base64::NAME => call_write_new_file_base64(repo_root, &arguments),
+        tools::artifact_write_text::NAME => call_artifact_write_text(repo_root, &arguments),
+        tools::artifact_write_base64::NAME => call_artifact_write_base64(repo_root, &arguments),
         tools::create_directory::NAME => call_create_directory(repo_root, &arguments),
         tools::run_guarded_command::NAME => call_run_guarded_command(repo_root, &arguments),
         tools::read_command_log::NAME => call_read_command_log(&arguments),
@@ -802,11 +915,14 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::git_commit_exact::NAME => call_git_commit_exact(repo_root, &arguments),
         tools::git_commit_scoped::NAME => call_git_commit_scoped(repo_root, &arguments),
         tools::git_restore_exact::NAME => call_git_restore_exact(repo_root, &arguments),
+        tools::delete_untracked_exact::NAME => call_delete_untracked_exact(repo_root, &arguments),
+        tools::git_remote_list::NAME => call_git_remote_list(repo_root),
         tools::git_remote_check::NAME => call_git_remote_check(repo_root, &arguments),
         tools::git_branch_prepare::NAME => call_git_branch_prepare(repo_root, &arguments),
         tools::git_merge_readiness::NAME => call_git_merge_readiness(repo_root, &arguments),
         tools::git_push_exact::NAME => call_git_push_exact(repo_root, &arguments),
         tools::github_pr_run::NAME => call_github_pr_run(repo_root, &arguments),
+        tools::github_fork_prepare::NAME => call_github_fork_prepare(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
     };
 
@@ -851,6 +967,8 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "replace_exact": true,
             "write_new_file": true,
             "write_new_file_base64": true,
+            "artifact_write_text": true,
+            "artifact_write_base64": true,
             "create_directory": true,
             "status_guard": true,
             "read_command_log": true,
@@ -860,16 +978,21 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "git_commit_exact": true,
             "git_commit_scoped": true,
             "git_restore_exact": true,
+            "delete_untracked_exact": true,
+            "git_remote_list": true,
             "git_remote_check": true,
             "git_branch_prepare": true,
             "git_merge_readiness": true,
             "git_push_exact": true,
-            "github_pr_run": true
+            "github_pr_run": true,
+            "github_fork_prepare": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
             "local_commit_scoped_paths": true,
             "restore_exact_paths": true,
+            "delete_untracked_exact_paths": true,
+            "remote_list": true,
             "remote_check": true,
             "branch_prepare": true,
             "merge_readiness": true,
@@ -903,12 +1026,15 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
         },
         "github_workflows": {
             "available": true,
-            "tool": tools::github_pr_run::NAME,
+            "tools": [tools::github_pr_run::NAME, tools::github_fork_prepare::NAME],
             "actions": ["auth_status", "pr_view", "pr_checks", "pr_create"],
+            "fork_actions": ["dry_run fork plan", "confirmed gh repo fork"],
             "guards": [
                 "uses gh with explicit argv only",
                 "pr_create defaults to dry_run",
                 "pr_create requires confirm literal when mutating",
+                "fork prepare defaults to dry_run",
+                "fork prepare requires confirm literal when mutating",
                 "no arbitrary gh passthrough"
             ]
         },
@@ -1339,6 +1465,119 @@ fn call_write_new_file_base64(
         summary.path.display(),
         summary.bytes_written
     ))
+}
+
+fn call_artifact_write_text(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let path = required_string(arguments, "path")?;
+    let content = required_string(arguments, "content")?;
+    let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
+    write_artifact(
+        repo_root,
+        path,
+        content.as_bytes(),
+        parents,
+        tools::artifact_write_text::NAME,
+    )
+}
+
+fn call_artifact_write_base64(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const MAX_DECODED_BYTES: usize = 20 * 1024 * 1024;
+
+    let path = required_string(arguments, "path")?;
+    let content_base64 = required_string(arguments, "content_base64")?;
+    let expected_bytes = optional_u64(arguments, "expected_bytes")?;
+    let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
+    let bytes = decode_base64(content_base64)
+        .map_err(|error| format!("artifact_write_base64 refused: {error}"))?;
+    if bytes.len() > MAX_DECODED_BYTES {
+        return Err(format!(
+            "artifact_write_base64 refused: decoded content is {} bytes, maximum is {MAX_DECODED_BYTES}",
+            bytes.len()
+        ));
+    }
+    if let Some(expected_bytes) = expected_bytes {
+        let expected_bytes = usize::try_from(expected_bytes).map_err(|_| {
+            "artifact_write_base64 refused: expected_bytes is too large".to_string()
+        })?;
+        if bytes.len() != expected_bytes {
+            return Err(format!(
+                "artifact_write_base64 refused: decoded content is {} bytes, expected {expected_bytes}",
+                bytes.len()
+            ));
+        }
+    }
+
+    write_artifact(
+        repo_root,
+        path,
+        &bytes,
+        parents,
+        tools::artifact_write_base64::NAME,
+    )
+}
+
+fn write_artifact(
+    repo_root: &Path,
+    path: &str,
+    bytes: &[u8],
+    parents: bool,
+    tool_name: &str,
+) -> Result<String, String> {
+    let artifact_root = artifact_root(repo_root, tool_name)?;
+    let relative = validate_relative_path(tool_name, path)?;
+    let target = artifact_root.join(&relative);
+    if parents {
+        let parent = target
+            .parent()
+            .ok_or_else(|| format!("{tool_name} refused: artifact path has no parent"))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("{tool_name} refused: failed to create parents: {error}"))?;
+    }
+    let summary = write_new_file_bytes_in_root(&artifact_root, &relative, bytes)
+        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tool_name,
+        "created": true,
+        "artifact_root": artifact_root.display().to_string(),
+        "path": summary.path.display().to_string(),
+        "bytes_written": summary.bytes_written,
+        "repo_mutation": false
+    }))
+    .map_err(|error| format!("{tool_name} refused: {error}"))
+}
+
+fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
+    let root = canonical_repo_root(repo_root, tool_name)?;
+    let mut hasher = DefaultHasher::new();
+    root.display().to_string().hash(&mut hasher);
+    let repo_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repo")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let artifact_root = std::env::temp_dir()
+        .join("contextpatch-artifacts")
+        .join(format!("{repo_name}-{:016x}", hasher.finish()));
+    fs::create_dir_all(&artifact_root)
+        .map_err(|error| format!("{tool_name} refused: failed to create artifact root: {error}"))?;
+    artifact_root
+        .canonicalize()
+        .map_err(|error| format!("{tool_name} refused: failed to resolve artifact root: {error}"))
 }
 
 fn call_create_directory(
@@ -2030,6 +2269,123 @@ fn call_git_restore_exact(
     .map_err(|error| format!("git_restore_exact refused: {error}"))
 }
 
+fn call_delete_untracked_exact(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "delete untracked files";
+    let paths = required_string_array(arguments, "paths")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    if paths.is_empty() {
+        return Err("delete_untracked_exact refused: paths must not be empty".to_string());
+    }
+    if paths.len() > 100 {
+        return Err("delete_untracked_exact refused: at most 100 paths may be deleted".to_string());
+    }
+    if !dry_run && confirm != Some(CONFIRMATION) {
+        return Err(format!(
+            "delete_untracked_exact refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let root = canonical_repo_root(repo_root, tools::delete_untracked_exact::NAME)?;
+    let normalized_paths = normalize_git_paths(tools::delete_untracked_exact::NAME, &root, &paths)?;
+    let requested_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
+    if requested_paths.len() != normalized_paths.len() {
+        return Err("delete_untracked_exact refused: duplicate paths are not allowed".to_string());
+    }
+
+    let untracked_paths = git_untracked_paths_for_tool(tools::delete_untracked_exact::NAME, &root)?;
+    let not_untracked = requested_paths
+        .difference(&untracked_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !not_untracked.is_empty() {
+        return Err(format!(
+            "delete_untracked_exact refused: every requested path must be an untracked file\nnot_untracked_paths:\n{}",
+            format_set(&not_untracked)
+        ));
+    }
+    for path in &normalized_paths {
+        let target = root.join(path);
+        if !target.is_file() {
+            return Err(format!(
+                "delete_untracked_exact refused: `{path}` is not a regular file"
+            ));
+        }
+    }
+
+    if dry_run {
+        let remaining_untracked_paths = untracked_paths
+            .difference(&requested_paths)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::delete_untracked_exact::NAME,
+            "dry_run": true,
+            "would_delete_paths": normalized_paths,
+            "remaining_untracked_paths_after_delete": remaining_untracked_paths,
+            "required_confirm_for_delete": CONFIRMATION
+        }))
+        .map_err(|error| format!("delete_untracked_exact refused: {error}"));
+    }
+
+    for path in &normalized_paths {
+        fs::remove_file(root.join(path)).map_err(|error| {
+            format!("delete_untracked_exact refused: failed to delete `{path}`: {error}")
+        })?;
+    }
+    let untracked_after = git_untracked_paths_for_tool(tools::delete_untracked_exact::NAME, &root)?;
+    let still_untracked = requested_paths
+        .intersection(&untracked_after)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !still_untracked.is_empty() {
+        return Err(format!(
+            "delete_untracked_exact refused after delete: requested paths are still untracked\n{}",
+            format_set(&still_untracked)
+        ));
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::delete_untracked_exact::NAME,
+        "dry_run": false,
+        "deleted": true,
+        "deleted_paths": normalized_paths,
+        "remaining_untracked_paths": untracked_after
+    }))
+    .map_err(|error| format!("delete_untracked_exact refused: {error}"))
+}
+
+fn call_git_remote_list(repo_root: &Path) -> Result<String, String> {
+    let root = canonical_repo_root(repo_root, tools::git_remote_list::NAME)?;
+    let output = git_stdout_for_tool(tools::git_remote_list::NAME, &root, &["remote", "-v"])?;
+    let mut remotes = Vec::new();
+    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_whitespace();
+        let name = fields
+            .next()
+            .ok_or_else(|| "git_remote_list refused: malformed remote output".to_string())?;
+        let url = fields
+            .next()
+            .ok_or_else(|| "git_remote_list refused: malformed remote output".to_string())?;
+        let kind = fields.next().unwrap_or("").trim_matches(['(', ')']);
+        remotes.push(json!({
+            "name": name,
+            "url": url,
+            "kind": kind
+        }));
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::git_remote_list::NAME,
+        "remotes": remotes
+    }))
+    .map_err(|error| format!("git_remote_list refused: {error}"))
+}
+
 fn call_git_remote_check(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
@@ -2596,6 +2952,65 @@ fn call_github_pr_run(
     .map_err(|error| format!("github_pr_run refused: {error}"))
 }
 
+fn call_github_fork_prepare(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "prepare github fork";
+
+    let root = canonical_repo_root(repo_root, tools::github_fork_prepare::NAME)?;
+    let remote = optional_bool(arguments, "remote")?.unwrap_or(true);
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+
+    let mut args = vec!["repo".to_string(), "fork".to_string()];
+    if remote {
+        args.push("--remote".to_string());
+    }
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::github_fork_prepare::NAME,
+            "dry_run": true,
+            "program": "gh",
+            "args": args,
+            "cwd": root.display().to_string(),
+            "required_confirm_for_fork": CONFIRMATION
+        }))
+        .map_err(|error| format!("github_fork_prepare refused: {error}"));
+    }
+
+    let confirm = required_string(arguments, "confirm")?;
+    if confirm != CONFIRMATION {
+        return Err(format!(
+            "github_fork_prepare refused: dry_run=false requires confirm: {CONFIRMATION:?}"
+        ));
+    }
+
+    let output = Command::new("gh")
+        .args(&args)
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("github_fork_prepare refused: failed to run gh: {error}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let remotes = git_stdout_for_tool(tools::github_fork_prepare::NAME, &root, &["remote", "-v"])?;
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::github_fork_prepare::NAME,
+        "dry_run": false,
+        "program": "gh",
+        "args": args,
+        "cwd": root.display().to_string(),
+        "exit_code": output.status.code(),
+        "success": output.status.success(),
+        "stdout": stdout,
+        "stderr": stderr,
+        "remotes": remotes
+    }))
+    .map_err(|error| format!("github_fork_prepare refused: {error}"))
+}
+
 fn required_string<'a>(
     arguments: &'a serde_json::Map<String, Value>,
     key: &str,
@@ -2702,6 +3117,29 @@ fn nonempty_tool_string(tool: &str, key: &str, value: &str) -> Result<String, St
         return Err(format!("{tool} refused: {key} must not be empty"));
     }
     Ok(trimmed.to_string())
+}
+
+fn validate_relative_path(tool_name: &str, raw: &str) -> Result<PathBuf, String> {
+    if raw.is_empty() || raw.contains('\0') {
+        return Err(format!(
+            "{tool_name} refused: path must not be empty or contain NUL"
+        ));
+    }
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Err(format!("{tool_name} refused: path must be relative"));
+    }
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            _ => {
+                return Err(format!(
+                    "{tool_name} refused: path must be a normalized relative path"
+                ))
+            }
+        }
+    }
+    Ok(path.to_path_buf())
 }
 
 fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
@@ -2865,6 +3303,15 @@ fn git_status_paths_for_tool(tool_name: &str, root: &Path) -> Result<BTreeSet<St
     parse_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
 }
 
+fn git_untracked_paths_for_tool(tool_name: &str, root: &Path) -> Result<BTreeSet<String>, String> {
+    let output = git_output_for_tool(
+        tool_name,
+        root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    parse_untracked_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
+}
+
 fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
     git_cached_paths_for_tool(tools::git_commit_exact::NAME, root)
 }
@@ -2895,6 +3342,29 @@ fn parse_porcelain_paths_for_tool(
         let path = std::str::from_utf8(&entry[3..])
             .map_err(|error| format!("{tool_name} refused: {label} path is not UTF-8: {error}"))?;
         paths.insert(path.to_string());
+    }
+    Ok(paths)
+}
+
+fn parse_untracked_porcelain_paths_for_tool(
+    tool_name: &str,
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, String> {
+    let mut paths = BTreeSet::new();
+    let entries = bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
+    for entry in entries {
+        if entry.len() < 4 || entry[2] != b' ' {
+            return Err(format!("{tool_name} refused: unexpected {label} entry"));
+        }
+        if entry[0] == b'?' && entry[1] == b'?' {
+            let path = std::str::from_utf8(&entry[3..]).map_err(|error| {
+                format!("{tool_name} refused: {label} path is not UTF-8: {error}")
+            })?;
+            paths.insert(path.to_string());
+        }
     }
     Ok(paths)
 }

@@ -1,5 +1,8 @@
+pub mod artifact_write_base64;
+pub mod artifact_write_text;
 pub mod capability_manifest;
 pub mod create_directory;
+pub mod delete_untracked_exact;
 pub mod diff_preview;
 pub mod git_branch_prepare;
 pub mod git_commit_exact;
@@ -7,7 +10,9 @@ pub mod git_commit_scoped;
 pub mod git_merge_readiness;
 pub mod git_push_exact;
 pub mod git_remote_check;
+pub mod git_remote_list;
 pub mod git_restore_exact;
+pub mod github_fork_prepare;
 pub mod github_pr_run;
 pub mod native_build_run;
 pub mod native_device_run;

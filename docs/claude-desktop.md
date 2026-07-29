@@ -25,20 +25,24 @@ The expected agent workflow is:
 1. Use `read_range` to inspect a bounded file section.
 2. Use `diff_preview` before `replace_exact` when reviewing exact anchored edits.
 3. Use `status_guard` before writes when a clean repository or clean target path is required.
-4. Use `create_directory` for create-only directory creation, then `write_new_file` for create-only file creation inside that directory.
+4. Use `create_directory` for create-only directory creation, then `write_new_file` or `write_new_file_base64` for create-only repository file creation inside that directory.
 5. Use `capability_manifest` and `preflight_health` to determine whether this server can support the current workflow.
 6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, `harbor run`, or `rg` drift searches.
 7. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
 8. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
 9. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
-10. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
-11. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
-12. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
-13. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
-14. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
-15. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
-15. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
-16. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
+10. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
+11. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
+12. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
+13. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
+14. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
+15. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
+16. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+17. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+18. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
+19. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
+20. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
+21. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
 
 ## Build and configure Claude Desktop
 
@@ -100,6 +104,8 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `status_guard`
 - `write_new_file`
 - `write_new_file_base64`
+- `artifact_write_text`
+- `artifact_write_base64`
 - `create_directory`
 - `capability_manifest`
 - `preflight_health`
@@ -111,13 +117,17 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `native_device_run`
 - `git_commit_exact`
 - `git_commit_scoped`
+- `git_restore_exact`
+- `delete_untracked_exact`
+- `git_remote_list`
 - `git_remote_check`
 - `git_branch_prepare`
 - `git_merge_readiness`
 - `git_push_exact`
 - `github_pr_run`
+- `github_fork_prepare`
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all twenty-two tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all twenty-eight tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -134,6 +144,9 @@ The current server exposes the implemented safe primitives:
 - `replace_exact`
 - `status_guard`
 - `write_new_file`
+- `write_new_file_base64`
+- `artifact_write_text`
+- `artifact_write_base64`
 - `create_directory`
 - `capability_manifest`
 - `preflight_health`
@@ -144,12 +157,18 @@ The current server exposes the implemented safe primitives:
 - `native_build_run`
 - `native_device_run`
 - `git_commit_exact`
+- `git_commit_scoped`
+- `git_restore_exact`
+- `delete_untracked_exact`
+- `git_remote_list`
 - `git_remote_check`
 - `git_branch_prepare`
 - `git_merge_readiness`
 - `git_push_exact`
+- `github_pr_run`
+- `github_fork_prepare`
 
-Other documented tools remain roadmap items until implemented.
+Other documented boundary tools remain roadmap items until implemented.
 
 `run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary. Project validation can also run repo-relative Python scripts (`python3 scripts/name.py`), `pytest`, and `harbor run`; `pip`, Docker, arbitrary `python -m`, and shell commands remain refused.
 

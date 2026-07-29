@@ -64,6 +64,9 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `validation_profile_run` | Collapse common multi-command validation sequences into one auditable MCP call |
 | `git_commit_exact` | Allow a narrow local commit checkpoint after exact-path validation |
 | `git_commit_scoped` | Allow a narrow local commit checkpoint for explicit dirty subsets while preserving unrelated dirty paths |
+| `git_restore_exact` | Restore explicit dirty tracked paths without exposing broad checkout/reset |
+| `delete_untracked_exact` | Remove explicit untracked regular files without exposing broad `git clean` |
+| `git_remote_list` | Inspect configured remotes without exposing remote mutation |
 | `git_remote_check` | Fetch exactly one explicit remote branch and report local/remote divergence without source edits |
 | `git_branch_prepare` | Prepare one local branch from one explicit remote base branch after clean-worktree and required-file gates |
 | `git_merge_readiness` | Analyze PR/merge readiness between two refs without exposing generic merge commands |
@@ -71,8 +74,12 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `setup_profile_run` | Plan typed, profile-owned setup actions for real projects without exposing generic package-manager or shell authority |
 | `native_build_run` | Plan or run typed native build/test validators without exposing raw `xcodebuild` or Gradle authority |
 | `native_device_run` | Plan or run bounded simulator/emulator/device smoke actions without exposing raw `xcrun` or `adb` authority |
+| `write_new_file_base64` | Create binary repository fixtures through the same create-only root guard as text writes |
+| `artifact_write_text` / `artifact_write_base64` | Create sidecar artifacts outside the repo tree for generators and local helper scripts that must not be committed |
+| `github_pr_run` | Inspect PR state/checks and create one PR through a dry-run/confirmation-gated `gh` workflow |
+| `github_fork_prepare` | Prepare a GitHub fork through a dry-run/confirmation-gated `gh repo fork` workflow |
 
-Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, broad automatic commits, generic package-manager execution, or generic native-tool execution. Git mutation remains split by risk boundary: `git_commit_exact` and `git_commit_scoped` are local only, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing. Setup support is split into `setup_profile_run`, which plans external-mutator commands from typed server-owned profiles and executes them only behind dry-run, clean-worktree, changed-path, and confirmation guards. Native build/device support is split into typed build/test validators and bounded device-smoke actions so agents do not need to know raw command syntax.
+Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, broad automatic commits, generic package-manager execution, generic native-tool execution, arbitrary `gh` passthrough, or recursive cleanup. Git mutation remains split by risk boundary: `git_commit_exact` and `git_commit_scoped` are local only, `git_restore_exact` and `delete_untracked_exact` require explicit path lists and confirmation before cleanup, `git_remote_list` is read-only remote inspection, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing. Setup support is split into `setup_profile_run`, which plans external-mutator commands from typed server-owned profiles and executes them only behind dry-run, clean-worktree, changed-path, and confirmation guards. Native build/device support is split into typed build/test validators and bounded device-smoke actions so agents do not need to know raw command syntax. GitHub support is split into PR and fork workflows with dry-run defaults and exact confirmation for mutations. Sidecar artifact writes are create-only and intentionally outside the repository tree.
 
 ## Stage 2A-setup: profile-driven setup mutation
 

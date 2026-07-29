@@ -14,6 +14,7 @@ fn contextpatch_server() -> &'static str {
 fn stage1_mcp_tools_work_together() {
     let root = git_repo("stage1_mcp_tools_work_together");
     fs::write(root.join("sample.txt"), "alpha\nbeta\ngamma\n").unwrap();
+    fs::write(root.join("scratch.log"), "temporary\n").unwrap();
     git(&root, &["add", "sample.txt"]);
     git(&root, &["commit", "--quiet", "-m", "initial"]);
 
@@ -27,8 +28,11 @@ fn stage1_mcp_tools_work_together() {
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"create_directory","arguments":{"path":"native-plugins/background-audio","parents":true}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"write_new_file","arguments":{"path":"native-plugins/background-audio/plugin.ts","content":"new file\n"}}}"#,
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"write_new_file_base64","arguments":{"path":"fixture.bin","content_base64":"AAEC/w==","expected_bytes":4}}}"#,
-            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
-            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"status_guard","arguments":{"path":"sample.txt"}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"artifact_write_text","arguments":{"path":"stage1/tool.txt","content":"sidecar\n","parents":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"delete_untracked_exact","arguments":{"paths":["scratch.log"],"dry_run":false,"confirm":"delete untracked files"}}}"#,
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"git_remote_list","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
+            r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"status_guard","arguments":{"path":"sample.txt"}}}"#,
         ],
     );
 
@@ -42,6 +46,8 @@ fn stage1_mcp_tools_work_together() {
         "status_guard",
         "write_new_file",
         "write_new_file_base64",
+        "artifact_write_text",
+        "artifact_write_base64",
         "create_directory",
         "run_guarded_command",
         "read_command_log",
@@ -52,11 +58,14 @@ fn stage1_mcp_tools_work_together() {
         "git_commit_exact",
         "git_commit_scoped",
         "git_restore_exact",
+        "delete_untracked_exact",
+        "git_remote_list",
         "git_remote_check",
         "git_branch_prepare",
         "git_merge_readiness",
         "git_push_exact",
         "github_pr_run",
+        "github_fork_prepare",
     ] {
         assert!(
             list.as_array()
@@ -73,7 +82,10 @@ fn stage1_mcp_tools_work_together() {
     assert_text(&responses[4], "created");
     assert_text(&responses[5], "created");
     assert_text(&responses[6], "created");
-    assert_text(&responses[7], "replaced bytes");
+    assert_text(&responses[7], "\"repo_mutation\": false");
+    assert_text(&responses[8], "\"deleted\": true");
+    assert_text(&responses[9], "\"tool\": \"git_remote_list\"");
+    assert_text(&responses[10], "replaced bytes");
     assert_eq!(
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "alpha\ndelta\ngamma\n"
@@ -86,10 +98,11 @@ fn stage1_mcp_tools_work_together() {
         fs::read(root.join("fixture.bin")).unwrap(),
         vec![0, 1, 2, 255]
     );
+    assert!(!root.join("scratch.log").exists());
 
-    assert_eq!(responses[8]["result"]["isError"], true);
-    assert_text(&responses[8], "status_guard refused");
-    assert_text(&responses[8], "sample.txt");
+    assert_eq!(responses[11]["result"]["isError"], true);
+    assert_text(&responses[11], "status_guard refused");
+    assert_text(&responses[11], "sample.txt");
 }
 
 #[test]
@@ -557,6 +570,8 @@ fn stage1_mcp_refusals_are_tool_results() {
     let root = git_repo("stage1_mcp_refusals_are_tool_results");
     fs::write(root.join("sample.txt"), "beta beta\n").unwrap();
     fs::create_dir(root.join("existing")).unwrap();
+    git(&root, &["add", "sample.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
 
     let responses = run_server(
         &root,
@@ -566,6 +581,8 @@ fn stage1_mcp_refusals_are_tool_results() {
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_directory","arguments":{"path":"existing"}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write_new_file_base64","arguments":{"path":"bad.bin","content_base64":"not base64!"}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"write_new_file_base64","arguments":{"path":"mismatch.bin","content_base64":"AAEC","expected_bytes":4}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"artifact_write_base64","arguments":{"path":"bad.bin","content_base64":"not base64!"}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"delete_untracked_exact","arguments":{"paths":["sample.txt"],"dry_run":false,"confirm":"delete untracked files"}}}"#,
         ],
     );
 
@@ -579,6 +596,10 @@ fn stage1_mcp_refusals_are_tool_results() {
     assert_text(&responses[3], "invalid characters");
     assert_eq!(responses[4]["result"]["isError"], true);
     assert_text(&responses[4], "expected 4");
+    assert_eq!(responses[5]["result"]["isError"], true);
+    assert_text(&responses[5], "invalid characters");
+    assert_eq!(responses[6]["result"]["isError"], true);
+    assert_text(&responses[6], "not_untracked_paths");
     assert_eq!(
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "beta beta\n"
@@ -599,6 +620,7 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status","--porcelain=v1"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["reset"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"pr_create","base":"main","head":"feature/task","title":"Add task solution","body":"Ready for review.","dry_run":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"github_fork_prepare","arguments":{"dry_run":true}}}"#,
         ],
     );
 
@@ -616,6 +638,7 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"tool\": \"native_device_run\"");
     assert_text(&responses[0], "\"github_workflows\"");
     assert_text(&responses[0], "\"pr_create\"");
+    assert_text(&responses[0], "\"github_fork_prepare\"");
     assert_text(&responses[0], "\"action\": \"ios_build\"");
     assert_text(&responses[0], "\"action\": \"android_read_logcat\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
@@ -631,6 +654,9 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[4], "\"dry_run\": true");
     assert_text(&responses[4], "\"pr\"");
     assert_text(&responses[4], "\"create\"");
+    assert_text(&responses[5], "\"tool\": \"github_fork_prepare\"");
+    assert_text(&responses[5], "\"dry_run\": true");
+    assert_text(&responses[5], "\"fork\"");
 }
 
 #[test]
