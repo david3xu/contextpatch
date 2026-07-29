@@ -1,0 +1,265 @@
+use serde_json::{json, Value};
+
+use crate::tools;
+
+pub(crate) fn definitions() -> Vec<Value> {
+    vec![
+        json!({
+                    "name": tools::git_commit_exact::NAME,
+                    "description": "Dry-run or create one local Git commit from an exact full dirty-path set. Never pushes.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "description": "Exact repository-relative dirty paths that must be the complete changed-path set."
+                            },
+                            "subject": {
+                                "type": "string",
+                                "description": "Commit subject line."
+                            },
+                            "body": {
+                                "type": "string",
+                                "description": "Optional commit body/trailers."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without staging or committing. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `commit exact paths` when dry_run is false."
+                            }
+                        },
+                        "required": ["paths", "subject"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::git_commit_scoped::NAME,
+                    "description": "Dry-run or create one local Git commit from an explicit subset of dirty paths while preserving unrelated dirty files. Never pushes.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "description": "Repository-relative dirty paths to stage and commit. Other dirty paths are preserved."
+                            },
+                            "subject": {
+                                "type": "string",
+                                "description": "Commit subject line."
+                            },
+                            "body": {
+                                "type": "string",
+                                "description": "Optional commit body/trailers."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without staging or committing. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `commit scoped paths` when dry_run is false."
+                            }
+                        },
+                        "required": ["paths", "subject"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::git_restore_exact::NAME,
+                    "description": "Dry-run or restore exact dirty repository paths from HEAD. Use for generated noise cleanup before exact commits; never resets the whole worktree.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "description": "Repository-relative dirty paths to restore from HEAD. Every path must currently be dirty."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without restoring. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `restore exact paths` when dry_run is false."
+                            }
+                        },
+                        "required": ["paths"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::delete_untracked_exact::NAME,
+                    "description": "Dry-run or delete explicit untracked files only. Refuses tracked files, directories, globs, and broad cleanup.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "description": "Repository-relative untracked file paths to delete."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without deleting. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `delete untracked files` when dry_run is false."
+                            }
+                        },
+                        "required": ["paths"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::git_remote_list::NAME,
+                    "description": "Read-only Git remote inspection, equivalent to a parsed git remote -v.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::git_remote_check::NAME,
+                    "description": "Fetch one remote branch and report whether the remote branch is ahead of HEAD. Does not modify source files.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "remote": {
+                                "type": "string",
+                                "description": "Git remote name. Defaults to origin."
+                            },
+                            "branch": {
+                                "type": "string",
+                                "description": "Branch name to compare with the remote-tracking ref."
+                            }
+                        },
+                        "required": ["branch"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::git_branch_prepare::NAME,
+                    "description": "Prepare and switch to a local branch from one explicit remote base branch with guard checks.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "remote": {
+                                "type": "string",
+                                "description": "Git remote name. Defaults to origin."
+                            },
+                            "base_branch": {
+                                "type": "string",
+                                "description": "Remote base branch to fetch and prepare from."
+                            },
+                            "branch": {
+                                "type": "string",
+                                "description": "Local branch to create or switch to."
+                            },
+                            "required_files": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Optional repository-relative files that must exist after preparation."
+                            },
+                            "reset_existing": {
+                                "type": "boolean",
+                                "description": "Reset an existing local branch to the fetched remote base. Defaults to false."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `reset branch from remote base` when reset_existing is true."
+                            }
+                        },
+                        "required": ["base_branch", "branch"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::git_merge_readiness::NAME,
+                    "description": "Read-only merge/PR readiness analysis between two refs, including changed-on-both-sides conflict candidates.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "base_ref": {
+                                "type": "string",
+                                "description": "Base ref to compare, such as HEAD, main, origin/main, refs/heads/main, or a commit hash."
+                            },
+                            "target_ref": {
+                                "type": "string",
+                                "description": "Target ref to compare, such as feature, origin/feature, refs/remotes/origin/feature, or a commit hash."
+                            },
+                            "fetch": {
+                                "type": "boolean",
+                                "description": "Optionally fetch one explicit remote branch before analysis. Defaults to false."
+                            },
+                            "remote": {
+                                "type": "string",
+                                "description": "Remote name used only when fetch is true. Defaults to origin."
+                            },
+                            "target_branch": {
+                                "type": "string",
+                                "description": "Remote branch to fetch when fetch is true. Inferred from target_ref when target_ref is a remote-tracking ref."
+                            }
+                        },
+                        "required": ["base_ref", "target_ref"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::git_push_exact::NAME,
+                    "description": "Push the current branch HEAD to the matching remote branch only after exact hash and divergence checks.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "remote": {
+                                "type": "string",
+                                "description": "Git remote name."
+                            },
+                            "branch": {
+                                "type": "string",
+                                "description": "Current branch name and matching remote branch name."
+                            },
+                            "expected_head": {
+                                "type": "string",
+                                "description": "Full or short commit hash expected at HEAD."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `push exact commit`."
+                            }
+                        },
+                        "required": ["remote", "branch", "expected_head", "confirm"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+    ]
+}

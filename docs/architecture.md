@@ -71,6 +71,8 @@ Must call `core` for edit behavior instead of owning filesystem mutation logic.
 
 Server setup and native tools are adapters only: they parse JSON into typed core params, call `core::setup`, `core::native_build`, or `core::native_device`, and format MCP responses. They must not derive package-manager, build, simulator, or device commands directly.
 
+The server crate should keep `main.rs` small and move tool schemas, dispatch, handlers, and domain helpers into modules under `crates/server/src/tools/`. See [Server Refactor Plan](server-refactor-plan.md) for the planned split.
+
 ## Core feature organization
 
 Core code is grouped by product capability rather than adapter:
