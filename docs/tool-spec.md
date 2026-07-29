@@ -16,6 +16,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `move_tracked` | Yes | Source exists, destination absent, Git state visible |
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
+| `write_new_file_base64` | Yes | Destination must not exist; base64 decoded bytes with optional expected size |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
 | `read_command_log` | No | Reads captured guarded-command logs by opaque id |
@@ -30,6 +31,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
 | `git_merge_readiness` | Optional remote-tracking ref update only | Validated refs, optional single-branch fetch, merge-base/ahead/diff-name analysis, no merge |
 | `git_push_exact` | Remote branch update | Clean worktree, exact HEAD, no remote-ahead divergence, explicit confirmation, no force |
+| `github_pr_run` | GitHub mutation for PR creation only | `gh`-backed auth/check/view plus confirmation-gated PR creation |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
 
 ## Naming
@@ -221,7 +223,7 @@ Rules:
 
 ### `write_new_file`
 
-Creates a new file only when the destination does not exist.
+Creates a new UTF-8 text file only when the destination does not exist.
 
 Required inputs:
 
@@ -241,6 +243,28 @@ Rules:
 - Refuse if the file already exists.
 - Refuse parent traversal outside the repository root.
 - Refuse missing parent directories.
+- Write atomically.
+
+### `write_new_file_base64`
+
+Creates a new binary file from base64 only when the destination does not exist.
+
+Required inputs:
+
+- `path`
+- `content_base64`
+
+Optional inputs:
+
+- `expected_bytes`: decoded byte-count guard
+
+Rules:
+
+- Refuse if the file already exists.
+- Refuse parent traversal outside the repository root.
+- Refuse missing parent directories.
+- Refuse invalid base64 or decoded content larger than 20 MiB.
+- When `expected_bytes` is provided, refuse if the decoded byte count does not match.
 - Write atomically.
 
 ### `create_directory`
@@ -277,7 +301,7 @@ Runs a bounded validation-oriented command without invoking a shell.
 
 Required inputs:
 
-- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, or `rg`
+- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python`, `python3`, `pytest`, `harbor`, or `rg`
 - `args`: command arguments; the first argument must be an allowlisted subcommand
 
 Optional inputs:
@@ -296,11 +320,14 @@ Rules:
   - `bun`: `run`, `test`
   - `npm`: `run`, `test`
   - `pnpm`: `run`, `test`
+  - `python`/`python3`: a repo-relative `.py` script path as the first argument
+  - `pytest`: validation invocation
+  - `harbor`: `run`
   - `rg`: search invocation
 - Arguments that directly reference paths outside the repository root must be refused.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
-- The tool must refuse arbitrary shell, environment inspection, destructive Git commands, package installation, and automatic commits.
+- The tool must refuse arbitrary shell, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
 
 ### `read_command_log`
 
@@ -641,6 +668,33 @@ Rules:
 - The tool must not use force push, delete refs, push tags, push multiple branches, or push a different local branch.
 - On success, the response must include the pushed commit hash, branch, remote, previous remote head, refspec, and post-push status.
 
+### `github_pr_run`
+
+Runs narrow GitHub pull-request workflows through `gh` without exposing arbitrary `gh` command execution.
+
+Required inputs:
+
+- `action`: one of `auth_status`, `pr_view`, `pr_checks`, or `pr_create`
+
+Action-specific inputs:
+
+- `pr_view` and `pr_checks`: `number`
+- `pr_create`: `base`, `head`, `title`, `body`
+
+Optional inputs:
+
+- `draft`: create a draft PR when `action` is `pr_create`
+- `dry_run`: defaults to true for `pr_create`
+- `confirm`: literal `create pull request` when `pr_create` uses `dry_run: false`
+
+Rules:
+
+- The tool must use the GitHub CLI as `gh` with explicit argv, no shell.
+- Read-only actions may execute directly.
+- `pr_create` must default to dry-run and return the command plan without mutating GitHub.
+- `pr_create` with `dry_run: false` must require the exact confirmation literal.
+- The tool must not expose arbitrary `gh` subcommands, repository deletion, workflow dispatch, release publishing, secret access, or forceful Git operations.
+
 ### Latency instrumentation
 
 Future Stage 2B command and workflow tools should expose optional timing metadata. The metadata should be diagnostic, not part of the safety decision itself.
@@ -688,22 +742,24 @@ Stage 1 ships:
 1. `replace_exact`
 2. `read_range`
 3. `write_new_file`
-4. `create_directory`
-5. `diff_preview`
-6. `status_guard`
-7. `capability_manifest`
-8. `preflight_health`
-9. `run_guarded_command`
-10. `read_command_log`
-11. `validation_profile_run`
-12. `git_commit_exact`
-13. `git_commit_scoped`
-14. `git_remote_check`
-15. `git_branch_prepare`
-16. `git_merge_readiness`
-17. `git_push_exact`
-18. `setup_profile_run`
-19. `native_build_run`
-20. `native_device_run`
+4. `write_new_file_base64`
+5. `create_directory`
+6. `diff_preview`
+7. `status_guard`
+8. `capability_manifest`
+9. `preflight_health`
+10. `run_guarded_command`
+11. `read_command_log`
+12. `validation_profile_run`
+13. `git_commit_exact`
+14. `git_commit_scoped`
+15. `git_remote_check`
+16. `git_branch_prepare`
+17. `git_merge_readiness`
+18. `git_push_exact`
+19. `github_pr_run`
+20. `setup_profile_run`
+21. `native_build_run`
+22. `native_device_run`
 
 The remaining tools stay documented as planned Stage 2 boundaries until implemented. See `docs/implementation-roadmap.md`.

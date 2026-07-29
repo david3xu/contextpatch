@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use contextpatch_core::fs::create_directory::create_directory_in_root;
 use contextpatch_core::fs::read_range::read_range_in_root;
-use contextpatch_core::fs::write_new_file::write_new_file_in_root;
+use contextpatch_core::fs::write_new_file::{write_new_file_bytes_in_root, write_new_file_in_root};
 use contextpatch_core::git::status::{status_summary, status_summary_for_path};
 use contextpatch_core::native_build::{native_build_run, NativeBuildParams};
 use contextpatch_core::native_device::{native_device_run, NativeDeviceParams};
@@ -276,6 +276,31 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": tools::write_new_file_base64::NAME,
+            "description": "Create a new binary file from base64 only when the destination does not already exist.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the configured repository root. Parent directory must already exist."
+                    },
+                    "content_base64": {
+                        "type": "string",
+                        "description": "Base64-encoded file content to write."
+                    },
+                    "expected_bytes": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 20971520,
+                        "description": "Optional decoded byte count guard."
+                    }
+                },
+                "required": ["path", "content_base64"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": tools::create_directory::NAME,
             "description": "Create a new directory only when the destination does not already exist.",
             "inputSchema": {
@@ -302,7 +327,7 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "program": {
                         "type": "string",
-                        "description": "Allowlisted executable name: git, cargo, bun, npm, or rg."
+                        "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, harbor, or rg."
                     },
                     "args": {
                         "type": "array",
@@ -692,6 +717,55 @@ fn tool_definitions() -> Value {
                 "required": ["remote", "branch", "expected_head", "confirm"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": tools::github_pr_run::NAME,
+            "description": "Run narrow GitHub PR workflows through gh: auth status, PR view/checks, or confirmation-gated PR creation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["auth_status", "pr_view", "pr_checks", "pr_create"],
+                        "description": "GitHub workflow action."
+                    },
+                    "number": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Pull request number for pr_view or pr_checks."
+                    },
+                    "base": {
+                        "type": "string",
+                        "description": "Base branch for pr_create."
+                    },
+                    "head": {
+                        "type": "string",
+                        "description": "Head branch for pr_create."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Pull request title for pr_create."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Pull request body for pr_create."
+                    },
+                    "draft": {
+                        "type": "boolean",
+                        "description": "Create a draft pull request. Defaults to false."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "For pr_create, default true. When true, returns the gh command plan without mutating GitHub."
+                    },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required literal value `create pull request` when dry_run is false for pr_create."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -717,6 +791,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::replace_exact::NAME => call_replace_exact(repo_root, &arguments),
         tools::status_guard::NAME => call_status_guard(repo_root, &arguments),
         tools::write_new_file::NAME => call_write_new_file(repo_root, &arguments),
+        tools::write_new_file_base64::NAME => call_write_new_file_base64(repo_root, &arguments),
         tools::create_directory::NAME => call_create_directory(repo_root, &arguments),
         tools::run_guarded_command::NAME => call_run_guarded_command(repo_root, &arguments),
         tools::read_command_log::NAME => call_read_command_log(&arguments),
@@ -731,6 +806,7 @@ fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
         tools::git_branch_prepare::NAME => call_git_branch_prepare(repo_root, &arguments),
         tools::git_merge_readiness::NAME => call_git_merge_readiness(repo_root, &arguments),
         tools::git_push_exact::NAME => call_git_push_exact(repo_root, &arguments),
+        tools::github_pr_run::NAME => call_github_pr_run(repo_root, &arguments),
         unknown => Err(format!("unknown tool: {unknown}")),
     };
 
@@ -774,6 +850,7 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "diff_preview": true,
             "replace_exact": true,
             "write_new_file": true,
+            "write_new_file_base64": true,
             "create_directory": true,
             "status_guard": true,
             "read_command_log": true,
@@ -786,7 +863,8 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
             "git_remote_check": true,
             "git_branch_prepare": true,
             "git_merge_readiness": true,
-            "git_push_exact": true
+            "git_push_exact": true,
+            "github_pr_run": true
         },
         "git_workflows": {
             "local_commit_exact_paths": true,
@@ -823,6 +901,17 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 }
             ]
         },
+        "github_workflows": {
+            "available": true,
+            "tool": tools::github_pr_run::NAME,
+            "actions": ["auth_status", "pr_view", "pr_checks", "pr_create"],
+            "guards": [
+                "uses gh with explicit argv only",
+                "pr_create defaults to dry_run",
+                "pr_create requires confirm literal when mutating",
+                "no arbitrary gh passthrough"
+            ]
+        },
         "process_execution": {
             "available": true,
             "mode": "allowlisted_no_shell",
@@ -832,6 +921,10 @@ fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
                 "bun": ["run", "test"],
                 "npm": ["run", "test"],
                 "pnpm": ["run", "test"],
+                "python": ["repo-relative .py script"],
+                "python3": ["repo-relative .py script"],
+                "pytest": ["validation invocation"],
+                "harbor": ["run"],
                 "rg": ["search"]
             },
             "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode"],
@@ -1204,6 +1297,45 @@ fn call_write_new_file(
 
     Ok(format!(
         "created {} ({} bytes written)",
+        summary.path.display(),
+        summary.bytes_written
+    ))
+}
+
+fn call_write_new_file_base64(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const MAX_DECODED_BYTES: usize = 20 * 1024 * 1024;
+
+    let path = required_string(arguments, "path")?;
+    let content_base64 = required_string(arguments, "content_base64")?;
+    let expected_bytes = optional_u64(arguments, "expected_bytes")?;
+    let bytes = decode_base64(content_base64)
+        .map_err(|error| format!("write_new_file_base64 refused: {error}"))?;
+    if bytes.len() > MAX_DECODED_BYTES {
+        return Err(format!(
+            "write_new_file_base64 refused: decoded content is {} bytes, maximum is {MAX_DECODED_BYTES}",
+            bytes.len()
+        ));
+    }
+    if let Some(expected_bytes) = expected_bytes {
+        let expected_bytes = usize::try_from(expected_bytes).map_err(|_| {
+            "write_new_file_base64 refused: expected_bytes is too large".to_string()
+        })?;
+        if bytes.len() != expected_bytes {
+            return Err(format!(
+                "write_new_file_base64 refused: decoded content is {} bytes, expected {expected_bytes}",
+                bytes.len()
+            ));
+        }
+    }
+
+    let summary = write_new_file_bytes_in_root(repo_root, Path::new(path), &bytes)
+        .map_err(|error| format!("write_new_file_base64 refused: {error}"))?;
+
+    Ok(format!(
+        "created {} ({} bytes written from base64)",
         summary.path.display(),
         summary.bytes_written
     ))
@@ -2352,6 +2484,118 @@ fn call_git_push_exact(
     .map_err(|error| format!("git_push_exact refused: {error}"))
 }
 
+fn call_github_pr_run(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    const CONFIRMATION: &str = "create pull request";
+
+    let action = required_string(arguments, "action")?;
+    let root = canonical_repo_root(repo_root, tools::github_pr_run::NAME)?;
+    let args: Vec<String> = match action {
+        "auth_status" => vec!["auth".to_string(), "status".to_string()],
+        "pr_view" => {
+            let number = optional_u64(arguments, "number")?.ok_or_else(|| {
+                "github_pr_run refused: number is required for pr_view".to_string()
+            })?;
+            vec![
+                "pr".to_string(),
+                "view".to_string(),
+                number.to_string(),
+                "--json".to_string(),
+                "number,title,state,url,author,headRefName,baseRefName,comments,reviews,statusCheckRollup".to_string(),
+            ]
+        }
+        "pr_checks" => {
+            let number = optional_u64(arguments, "number")?.ok_or_else(|| {
+                "github_pr_run refused: number is required for pr_checks".to_string()
+            })?;
+            vec!["pr".to_string(), "checks".to_string(), number.to_string()]
+        }
+        "pr_create" => {
+            let base = nonempty_tool_string(
+                tools::github_pr_run::NAME,
+                "base",
+                required_string(arguments, "base")?,
+            )?;
+            let head = nonempty_tool_string(
+                tools::github_pr_run::NAME,
+                "head",
+                required_string(arguments, "head")?,
+            )?;
+            let title = nonempty_tool_string(
+                tools::github_pr_run::NAME,
+                "title",
+                required_string(arguments, "title")?,
+            )?;
+            let body = required_string(arguments, "body")?.to_string();
+            let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+            let draft = optional_bool(arguments, "draft")?.unwrap_or(false);
+            let mut args = vec![
+                "pr".to_string(),
+                "create".to_string(),
+                "--base".to_string(),
+                base,
+                "--head".to_string(),
+                head,
+                "--title".to_string(),
+                title,
+                "--body".to_string(),
+                body,
+            ];
+            if draft {
+                args.push("--draft".to_string());
+            }
+            if dry_run {
+                return serde_json::to_string_pretty(&json!({
+                    "tool": tools::github_pr_run::NAME,
+                    "action": "pr_create",
+                    "dry_run": true,
+                    "program": "gh",
+                    "args": args,
+                    "cwd": root.display().to_string()
+                }))
+                .map_err(|error| format!("github_pr_run refused: {error}"));
+            }
+            let confirm = required_string(arguments, "confirm")?;
+            if confirm != CONFIRMATION {
+                return Err(format!(
+                    "github_pr_run refused: confirm must be {CONFIRMATION:?}"
+                ));
+            }
+            args
+        }
+        _ => {
+            return Err(format!(
+                "github_pr_run refused: unsupported action `{action}`"
+            ))
+        }
+    };
+
+    let output = Command::new("gh")
+        .args(&args)
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("github_pr_run refused: failed to run gh: {error}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code();
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::github_pr_run::NAME,
+        "action": action,
+        "program": "gh",
+        "args": args,
+        "cwd": root.display().to_string(),
+        "exit_code": exit_code,
+        "success": output.status.success(),
+        "stdout": stdout,
+        "stderr": stderr
+    }))
+    .map_err(|error| format!("github_pr_run refused: {error}"))
+}
+
 fn required_string<'a>(
     arguments: &'a serde_json::Map<String, Value>,
     key: &str,
@@ -2450,6 +2694,69 @@ fn optional_bool(
             .ok_or_else(|| format!("invalid boolean argument: {key}")),
         None => Ok(None),
     }
+}
+
+fn nonempty_tool_string(tool: &str, key: &str, value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{tool} refused: {key} must not be empty"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    let mut values = Vec::new();
+    let mut padding_started = false;
+    for byte in input.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => {
+                padding_started = true;
+                64
+            }
+            b'\r' | b'\n' | b'\t' | b' ' => continue,
+            _ => return Err("content_base64 contains invalid characters".to_string()),
+        };
+        if padding_started && value != 64 {
+            return Err("content_base64 has data after padding".to_string());
+        }
+        values.push(value);
+    }
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    if values.len() % 4 != 0 {
+        return Err("content_base64 length must be a multiple of 4".to_string());
+    }
+
+    let mut output = Vec::with_capacity(values.len() / 4 * 3);
+    for chunk in values.chunks_exact(4) {
+        let pad = chunk.iter().filter(|value| **value == 64).count();
+        if pad > 2 || (pad > 0 && chunk[2] != 64 && chunk[3] == 64 && pad != 1) {
+            return Err("content_base64 has invalid padding".to_string());
+        }
+        if chunk[0] == 64 || chunk[1] == 64 || (chunk[2] == 64 && chunk[3] != 64) {
+            return Err("content_base64 has invalid padding".to_string());
+        }
+        let a = u32::from(chunk[0]);
+        let b = u32::from(chunk[1]);
+        let c = u32::from(if chunk[2] == 64 { 0 } else { chunk[2] });
+        let d = u32::from(if chunk[3] == 64 { 0 } else { chunk[3] });
+        let triple = (a << 18) | (b << 12) | (c << 6) | d;
+        output.push(((triple >> 16) & 0xff) as u8);
+        if chunk[2] != 64 {
+            output.push(((triple >> 8) & 0xff) as u8);
+        }
+        if chunk[3] != 64 {
+            output.push((triple & 0xff) as u8);
+        }
+    }
+
+    Ok(output)
 }
 
 fn validate_commit_subject(subject: &str) -> Result<String, String> {

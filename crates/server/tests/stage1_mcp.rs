@@ -26,8 +26,9 @@ fn stage1_mcp_tools_work_together() {
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"diff_preview","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"create_directory","arguments":{"path":"native-plugins/background-audio","parents":true}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"write_new_file","arguments":{"path":"native-plugins/background-audio/plugin.ts","content":"new file\n"}}}"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
-            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"status_guard","arguments":{"path":"sample.txt"}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"write_new_file_base64","arguments":{"path":"fixture.bin","content_base64":"AAEC/w==","expected_bytes":4}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"status_guard","arguments":{"path":"sample.txt"}}}"#,
         ],
     );
 
@@ -40,6 +41,7 @@ fn stage1_mcp_tools_work_together() {
         "replace_exact",
         "status_guard",
         "write_new_file",
+        "write_new_file_base64",
         "create_directory",
         "run_guarded_command",
         "read_command_log",
@@ -54,6 +56,7 @@ fn stage1_mcp_tools_work_together() {
         "git_branch_prepare",
         "git_merge_readiness",
         "git_push_exact",
+        "github_pr_run",
     ] {
         assert!(
             list.as_array()
@@ -69,7 +72,8 @@ fn stage1_mcp_tools_work_together() {
     assert_text(&responses[3], "-beta\n+delta");
     assert_text(&responses[4], "created");
     assert_text(&responses[5], "created");
-    assert_text(&responses[6], "replaced bytes");
+    assert_text(&responses[6], "created");
+    assert_text(&responses[7], "replaced bytes");
     assert_eq!(
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "alpha\ndelta\ngamma\n"
@@ -78,10 +82,14 @@ fn stage1_mcp_tools_work_together() {
         fs::read_to_string(root.join("native-plugins/background-audio/plugin.ts")).unwrap(),
         "new file\n"
     );
+    assert_eq!(
+        fs::read(root.join("fixture.bin")).unwrap(),
+        vec![0, 1, 2, 255]
+    );
 
-    assert_eq!(responses[7]["result"]["isError"], true);
-    assert_text(&responses[7], "status_guard refused");
-    assert_text(&responses[7], "sample.txt");
+    assert_eq!(responses[8]["result"]["isError"], true);
+    assert_text(&responses[8], "status_guard refused");
+    assert_text(&responses[8], "sample.txt");
 }
 
 #[test]
@@ -556,6 +564,8 @@ fn stage1_mcp_refusals_are_tool_results() {
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"sample.txt","old":"beta","new":"delta"}}}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write_new_file","arguments":{"path":"sample.txt","content":"replacement"}}}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_directory","arguments":{"path":"existing"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"write_new_file_base64","arguments":{"path":"bad.bin","content_base64":"not base64!"}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"write_new_file_base64","arguments":{"path":"mismatch.bin","content_base64":"AAEC","expected_bytes":4}}}"#,
         ],
     );
 
@@ -565,10 +575,16 @@ fn stage1_mcp_refusals_are_tool_results() {
     assert_text(&responses[1], "already exists");
     assert_eq!(responses[2]["result"]["isError"], true);
     assert_text(&responses[2], "already exists");
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "invalid characters");
+    assert_eq!(responses[4]["result"]["isError"], true);
+    assert_text(&responses[4], "expected 4");
     assert_eq!(
         fs::read_to_string(root.join("sample.txt")).unwrap(),
         "beta beta\n"
     );
+    assert!(!root.join("bad.bin").exists());
+    assert!(!root.join("mismatch.bin").exists());
 }
 
 #[test]
@@ -582,6 +598,7 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"preflight_health","arguments":{}}}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status","--porcelain=v1"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["reset"],"timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"pr_create","base":"main","head":"feature/task","title":"Add task solution","body":"Ready for review.","dry_run":true}}}"#,
         ],
     );
 
@@ -597,6 +614,8 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"tool\": \"setup_profile_run\"");
     assert_text(&responses[0], "\"tool\": \"native_build_run\"");
     assert_text(&responses[0], "\"tool\": \"native_device_run\"");
+    assert_text(&responses[0], "\"github_workflows\"");
+    assert_text(&responses[0], "\"pr_create\"");
     assert_text(&responses[0], "\"action\": \"ios_build\"");
     assert_text(&responses[0], "\"action\": \"android_read_logcat\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
@@ -608,6 +627,10 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[2], "exit_code: 0");
     assert_eq!(responses[3]["result"]["isError"], true);
     assert_text(&responses[3], "not allowlisted");
+    assert_text(&responses[4], "\"tool\": \"github_pr_run\"");
+    assert_text(&responses[4], "\"dry_run\": true");
+    assert_text(&responses[4], "\"pr\"");
+    assert_text(&responses[4], "\"create\"");
 }
 
 #[test]

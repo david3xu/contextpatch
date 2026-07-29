@@ -27,7 +27,7 @@ The expected agent workflow is:
 3. Use `status_guard` before writes when a clean repository or clean target path is required.
 4. Use `create_directory` for create-only directory creation, then `write_new_file` for create-only file creation inside that directory.
 5. Use `capability_manifest` and `preflight_health` to determine whether this server can support the current workflow.
-6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, or `rg` drift searches.
+6. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, `harbor run`, or `rg` drift searches.
 7. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
 8. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
 9. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
@@ -36,6 +36,7 @@ The expected agent workflow is:
 12. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
 13. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
 14. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+15. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
 15. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
 16. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
 
@@ -98,6 +99,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `replace_exact`
 - `status_guard`
 - `write_new_file`
+- `write_new_file_base64`
 - `create_directory`
 - `capability_manifest`
 - `preflight_health`
@@ -113,8 +115,9 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `git_branch_prepare`
 - `git_merge_readiness`
 - `git_push_exact`
+- `github_pr_run`
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all twenty tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all twenty-two tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -148,7 +151,7 @@ The current server exposes the implemented safe primitives:
 
 Other documented tools remain roadmap items until implemented.
 
-`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary.
+`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary. Project validation can also run repo-relative Python scripts (`python3 scripts/name.py`), `pytest`, and `harbor run`; `pip`, Docker, arbitrary `python -m`, and shell commands remain refused.
 
 Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, or `datacore-m6-vscode`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values. Use `read_command_log` only for logs that need inspection.
 

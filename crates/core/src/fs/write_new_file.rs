@@ -27,8 +27,16 @@ pub fn write_new_file_in_root(
     path: &Path,
     content: &str,
 ) -> Result<WriteNewFileSummary, ContextPatchError> {
+    write_new_file_bytes_in_root(repo_root, path, content.as_bytes())
+}
+
+pub fn write_new_file_bytes_in_root(
+    repo_root: &Path,
+    path: &Path,
+    content: &[u8],
+) -> Result<WriteNewFileSummary, ContextPatchError> {
     let target_path = resolve_new_file(repo_root, path)?;
-    write_new_file_atomic(&target_path, content.as_bytes())?;
+    write_new_file_atomic(&target_path, content)?;
 
     Ok(WriteNewFileSummary {
         path: target_path,
@@ -178,6 +186,18 @@ mod tests {
         assert!(error
             .to_string()
             .contains("failed to resolve parent directory"));
+    }
+
+    #[test]
+    fn creates_binary_file() {
+        let root = temp_root("creates_binary_file");
+
+        let summary =
+            super::write_new_file_bytes_in_root(&root, Path::new("sample.bin"), &[0, 159, 255])
+                .unwrap();
+
+        assert_eq!(summary.bytes_written, 3);
+        assert_eq!(fs::read(summary.path).unwrap(), vec![0, 159, 255]);
     }
 
     fn temp_root(name: &str) -> std::path::PathBuf {

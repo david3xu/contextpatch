@@ -51,6 +51,11 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         "bun" => matches!(subcommand, Some("run" | "test")),
         "npm" => matches!(subcommand, Some("run" | "test")),
         "pnpm" => matches!(subcommand, Some("run" | "test")),
+        "python" | "python3" => {
+            subcommand.is_some_and(|script| script.ends_with(".py") && !script.starts_with('-'))
+        }
+        "pytest" => true,
+        "harbor" => matches!(subcommand, Some("run")),
         "rg" => subcommand.is_some(),
         _ => false,
     };
@@ -125,6 +130,49 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("not allowlisted"));
+    }
+
+    #[test]
+    fn allows_project_python_pytest_and_harbor_but_not_pip_or_docker() {
+        validate_command(
+            "python3",
+            &[
+                "scripts/generate_fixtures.py".to_string(),
+                "--verify".to_string(),
+            ],
+        )
+        .unwrap();
+        validate_command("pytest", &["tests".to_string(), "-q".to_string()]).unwrap();
+        validate_command(
+            "harbor",
+            &[
+                "run".to_string(),
+                "-p".to_string(),
+                "task".to_string(),
+                "--agent".to_string(),
+                "oracle".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert!(
+            validate_command("pip", &["install".to_string(), "pytest".to_string()])
+                .unwrap_err()
+                .to_string()
+                .contains("not allowlisted")
+        );
+        assert!(
+            validate_command("docker", &["run".to_string(), "image".to_string()])
+                .unwrap_err()
+                .to_string()
+                .contains("not allowlisted")
+        );
+        assert!(
+            validate_command("python3", &["-m".to_string(), "pip".to_string()])
+                .unwrap_err()
+                .to_string()
+                .contains("not allowlisted")
+        );
     }
 
     #[test]

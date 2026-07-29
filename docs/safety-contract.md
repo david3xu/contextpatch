@@ -20,6 +20,8 @@ This document is normative. If implementation behavior conflicts with this file,
 10. If remote Git support is exposed, it must be split into explicit remote-check, branch-preparation, merge-readiness, and exact-push tools, not added to generic command execution.
 11. If setup support is exposed, it must be declarative and profile-owned: callers choose a profile/action with typed params, never raw package-manager or shell commands.
 12. If native build or device support is exposed, it must be declarative and action-owned: callers choose typed build/device actions, never raw `xcodebuild`, Gradle, `xcrun`, or `adb` commands.
+13. If binary file creation is exposed, it must be create-only, repo-root-confined, atomic, byte-count-guardable, and size-bounded.
+14. If GitHub PR support is exposed, it must use narrow typed workflows with dry-run/confirmation for PR creation, not arbitrary `gh` passthrough.
 
 ## Required refusal cases
 
@@ -58,6 +60,8 @@ Remote Git authority is intentionally split. `git_remote_check` may fetch exactl
 
 The server should not expose generic `write_file`, unrestricted `delete`, recursive directory writes, or shell execution as default tools. Directory creation, if exposed, must be create-only for one explicit path, refuse existing targets, and keep all created components inside the repository root.
 
+Binary file creation, if exposed, must be create-only for one explicit path, refuse existing targets, decode bounded base64 content, optionally enforce an expected decoded byte count, and use the same repository-root and atomic publish guards as text create-only writes.
+
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
 
 ## Guarded validation command expectation
@@ -75,6 +79,18 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 9. Prefer predefined validation profiles for repeated workflows, but require every profile command to pass the same no-shell allowlist and timeout rules.
 10. Store only redacted command logs, address them by opaque ids, and read them back through `read_command_log` rather than exposing arbitrary paths.
 11. Add latency instrumentation with monotonic durations and response sizes so performance work is evidence-based, while never recording secrets, environment values, or unredacted command output in timing metadata.
+
+## GitHub workflow expectation
+
+GitHub automation is review workflow support, not broad platform authority. Tools may inspect authentication state, view PR details, read PR checks, and create one pull request through an explicit typed action.
+
+Rules:
+
+1. Use `gh` with explicit argv and no shell.
+2. Keep read-only PR actions separate from mutating PR creation.
+3. Default PR creation to dry-run and return the exact command plan.
+4. Require exact confirmation before creating a PR.
+5. Do not expose arbitrary `gh` subcommands, secret reads, workflow dispatch, release publishing, repository deletion, forceful Git operations, or broad issue/project mutation through this surface.
 
 ## Setup profile expectation
 
