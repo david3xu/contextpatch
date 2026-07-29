@@ -57,7 +57,7 @@ contextpatch write-new-file <path> --content <text>
 contextpatch status-guard [path]
 ```
 
-The MCP server exposes the same Stage 1 surface to local agent clients:
+The MCP server exposes the safe tool surface to local agent clients:
 
 - `capability_manifest`
 - `preflight_health`
@@ -65,6 +65,10 @@ The MCP server exposes the same Stage 1 surface to local agent clients:
 - `diff_preview`
 - `replace_exact`
 - `write_new_file`
+- `write_new_file_base64`
+- `artifact_write_text`
+- `artifact_write_base64`
+- `create_directory`
 - `status_guard`
 - `run_guarded_command`
 - `read_command_log`
@@ -73,12 +77,20 @@ The MCP server exposes the same Stage 1 surface to local agent clients:
 - `native_build_run`
 - `native_device_run`
 - `git_commit_exact`
+- `git_commit_scoped`
+- `git_restore_exact`
+- `delete_untracked_exact`
+- `git_remote_list`
 - `git_remote_check`
 - `git_branch_prepare`
 - `git_merge_readiness`
 - `git_push_exact`
+- `github_pr_run`
+- `github_fork_prepare`
 
-`run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata.
+`run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata. It supports repo-relative Python scripts, `pytest`, and `harbor run` for project validation; it still refuses Docker, `pip`, arbitrary `python -m`, shell commands, and generic package installation.
+
+`write_new_file_base64` creates binary repository files with the same create-only root guard as text file creation. `artifact_write_text` and `artifact_write_base64` create sidecar artifacts outside the repository tree for generators, trap checks, or local helper files that must not be committed.
 
 `validation_profile_run` compresses common validation sequences into one guarded call and returns compact command summaries with log ids. `read_command_log` retrieves those redacted logs on demand so large outputs do not have to ride in the first JSON-RPC response.
 
@@ -86,13 +98,17 @@ The MCP server exposes the same Stage 1 surface to local agent clients:
 
 `native_build_run` and `native_device_run` cover native plugin/build workflows without exposing raw `xcodebuild`, `./gradlew`, `xcrun`, or `adb` authority. Agents select typed actions such as `ios_build`, `android_assemble_debug`, `ios_launch_app`, or `android_read_logcat`; contextpatch derives the exact command plan, defaults to dry-run, validates repo-relative artifacts, and requires `confirm: "run native device"` before executing device-state-changing actions.
 
-`git_commit_exact` is a narrowly gated local Git checkpoint tool. It defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` before mutation, stages only those paths, creates at most one local commit, and never fetches or pushes.
+`git_commit_exact` is a narrowly gated local Git checkpoint tool. It defaults to dry-run, requires the provided path list to exactly match the full dirty-path set, requires `confirm: "commit exact paths"` before mutation, stages only those paths, creates at most one local commit, and never fetches or pushes. `git_commit_scoped` covers the related case where unrelated dirty files must be preserved; it requires a clean index and stages only the explicit dirty subset.
 
-`git_remote_check` and `git_push_exact` keep remote publishing separate from local commit authority. `git_remote_check` fetches one explicit remote branch and reports whether `HEAD..remote/branch` is empty without changing source files. `git_push_exact` requires a clean worktree, matching current branch, expected HEAD hash, no remote-ahead divergence after fetch, `confirm: "push exact commit"`, and pushes only `HEAD:refs/heads/<branch>` without force.
+`git_restore_exact` and `delete_untracked_exact` cover generated-noise cleanup without exposing broad reset/checkout/clean behavior. They operate only on explicit requested paths and default to dry-run/confirmation-gated mutation.
+
+`git_remote_list`, `git_remote_check`, and `git_push_exact` keep remote publishing separate from local commit authority. `git_remote_list` parses `git remote -v` without mutation. `git_remote_check` fetches one explicit remote branch and reports whether `HEAD..remote/branch` is empty without changing source files. `git_push_exact` requires a clean worktree, matching current branch, expected HEAD hash, no remote-ahead divergence after fetch, `confirm: "push exact commit"`, and pushes only `HEAD:refs/heads/<branch>` without force.
 
 `git_branch_prepare` handles the narrow branch-prep case for agent workflows: from a clean worktree it fetches one explicit remote base branch, creates or switches to the requested local branch, optionally resets an existing local branch only with `confirm: "reset branch from remote base"`, verifies the remote base is an ancestor, and checks required files. It does not expose broad checkout, rebase, merge, stash, clean, or arbitrary fetch.
 
 `git_merge_readiness` fills the PR/merge planning gap without exposing `git merge` or `merge-tree`: it optionally fetches one explicit remote branch, resolves two validated refs, reports ahead counts, and returns files changed on both sides since the merge base as likely conflict candidates. It does not checkout, merge, reset, stash, or edit source files.
+
+`github_pr_run` and `github_fork_prepare` cover GitHub review workflow gaps without arbitrary `gh` access. PR creation and fork preparation default to dry-run and require exact confirmation before mutating GitHub or remotes.
 
 ## Safety contract
 
@@ -107,7 +123,7 @@ See `docs/safety-contract.md` for the full contract.
 
 ## Current status
 
-Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution, exact Git workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution, binary and sidecar artifact writes, exact/scoped Git workflows, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 
