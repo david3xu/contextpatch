@@ -117,15 +117,18 @@ Rules:
 
 ## GitHub workflow expectation
 
-GitHub automation is review workflow support, not broad platform authority. Tools may inspect authentication state, view PR details, read PR checks, create one pull request, and prepare a fork through explicit typed actions.
+GitHub automation is review workflow support, not broad platform authority. Tools may inspect authentication state, view PR details/comments, read structured PR checks, inspect one workflow run or job log, rerun only failed jobs from one explicit run, create one pull request, and prepare a fork through explicit typed actions.
 
 Rules:
 
 1. Use `gh` with explicit argv and no shell.
 2. Keep read-only PR actions separate from mutating PR creation and fork preparation.
-3. Default PR creation and fork preparation to dry-run and return the exact command plan.
-4. Require exact confirmation before creating a PR or preparing a fork.
-5. Do not expose arbitrary `gh` subcommands, secret reads, workflow dispatch, release publishing, repository deletion, forceful Git operations, or broad issue/project mutation through this surface.
+3. Permit fork/upstream reads only through a validated `OWNER/REPO` selector passed as a separate `--repo` argument.
+4. Redact and bound workflow log output and require an explicit run or job database id; do not expose arbitrary Actions API access.
+5. Limit workflow reruns to `gh run rerun <run_id> --failed`, default to dry-run, and require exact confirmation.
+6. Default PR creation and fork preparation to dry-run and return the exact command plan.
+7. Require exact confirmation before creating a PR or preparing a fork.
+8. Do not expose arbitrary `gh` subcommands, secret reads, workflow dispatch, release publishing, repository deletion, forceful Git operations, or broad issue/project mutation through this surface.
 
 ## Setup profile expectation
 

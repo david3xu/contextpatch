@@ -50,7 +50,7 @@ The expected agent workflow is:
 26. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
 27. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
 28. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
-29. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows instead of asking for arbitrary `gh` access. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
+29. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows and Actions evidence instead of asking for arbitrary `gh` access. Supply `repository: "OWNER/REPO"` when the checkout is a fork but the PR belongs to upstream; use structured check links to identify a run, then `workflow_run_view` or `workflow_job_log` for execution findings. If the log proves a transient failure, review the `workflow_run_rerun_failed` dry-run before confirming the failed-job rerun. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
 30. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
 31. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
 32. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.

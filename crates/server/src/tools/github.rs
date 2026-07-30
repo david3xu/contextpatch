@@ -9,39 +9,123 @@ pub mod github_pr_run {
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use contextpatch_core::process::guarded_command::redact_and_truncate_output;
 use serde_json::{json, Value};
 
 use crate::tools;
-use crate::tools::common::{nonempty_tool_string, optional_bool, optional_u64, required_string};
+use crate::tools::common::{
+    nonempty_tool_string, optional_bool, optional_string, optional_u64, required_string,
+};
 use crate::tools::git::support::{canonical_repo_root, git_stdout_for_tool};
 
 pub(crate) fn call_github_pr_run(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    const CONFIRMATION: &str = "create pull request";
+    const CREATE_CONFIRMATION: &str = "create pull request";
+    const RERUN_CONFIRMATION: &str = "rerun failed workflow jobs";
 
     let action = required_string(arguments, "action")?;
     let root = canonical_repo_root(repo_root, tools::github_pr_run::NAME)?;
+    let repository = optional_github_repository(arguments)?;
     let args: Vec<String> = match action {
-        "auth_status" => vec!["auth".to_string(), "status".to_string()],
+        "auth_status" => {
+            if repository.is_some() {
+                return Err(
+                    "github_pr_run refused: repository is not accepted for auth_status".to_string(),
+                );
+            }
+            vec!["auth".to_string(), "status".to_string()]
+        }
         "pr_view" => {
             let number = optional_u64(arguments, "number")?.ok_or_else(|| {
                 "github_pr_run refused: number is required for pr_view".to_string()
             })?;
-            vec![
+            let mut args = vec![
                 "pr".to_string(),
                 "view".to_string(),
                 number.to_string(),
                 "--json".to_string(),
                 "number,title,state,url,author,headRefName,baseRefName,comments,reviews,statusCheckRollup".to_string(),
-            ]
+            ];
+            append_repository(&mut args, repository.as_deref());
+            args
         }
         "pr_checks" => {
             let number = optional_u64(arguments, "number")?.ok_or_else(|| {
                 "github_pr_run refused: number is required for pr_checks".to_string()
             })?;
-            vec!["pr".to_string(), "checks".to_string(), number.to_string()]
+            let mut args = vec![
+                "pr".to_string(),
+                "checks".to_string(),
+                number.to_string(),
+                "--json".to_string(),
+                "bucket,completedAt,description,event,link,name,startedAt,state,workflow"
+                    .to_string(),
+            ];
+            append_repository(&mut args, repository.as_deref());
+            args
+        }
+        "workflow_run_view" => {
+            let run_id = optional_u64(arguments, "run_id")?.ok_or_else(|| {
+                "github_pr_run refused: run_id is required for workflow_run_view".to_string()
+            })?;
+            let mut args = vec![
+                "run".to_string(),
+                "view".to_string(),
+                run_id.to_string(),
+                "--json".to_string(),
+                "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,jobs,name,number,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName".to_string(),
+            ];
+            append_repository(&mut args, repository.as_deref());
+            args
+        }
+        "workflow_job_log" => {
+            let job_id = optional_u64(arguments, "job_id")?.ok_or_else(|| {
+                "github_pr_run refused: job_id is required for workflow_job_log".to_string()
+            })?;
+            let mut args = vec![
+                "run".to_string(),
+                "view".to_string(),
+                "--job".to_string(),
+                job_id.to_string(),
+                "--log".to_string(),
+            ];
+            append_repository(&mut args, repository.as_deref());
+            args
+        }
+        "workflow_run_rerun_failed" => {
+            let run_id = optional_u64(arguments, "run_id")?.ok_or_else(|| {
+                "github_pr_run refused: run_id is required for workflow_run_rerun_failed"
+                    .to_string()
+            })?;
+            let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+            let mut args = vec![
+                "run".to_string(),
+                "rerun".to_string(),
+                run_id.to_string(),
+                "--failed".to_string(),
+            ];
+            append_repository(&mut args, repository.as_deref());
+            if dry_run {
+                return serde_json::to_string_pretty(&json!({
+                    "tool": tools::github_pr_run::NAME,
+                    "action": "workflow_run_rerun_failed",
+                    "dry_run": true,
+                    "program": "gh",
+                    "args": args,
+                    "cwd": root.display().to_string(),
+                    "required_confirm_for_rerun": RERUN_CONFIRMATION
+                }))
+                .map_err(|error| format!("github_pr_run refused: {error}"));
+            }
+            let confirm = required_string(arguments, "confirm")?;
+            if confirm != RERUN_CONFIRMATION {
+                return Err(format!(
+                    "github_pr_run refused: confirm must be {RERUN_CONFIRMATION:?}"
+                ));
+            }
+            args
         }
         "pr_create" => {
             let base = nonempty_tool_string(
@@ -77,6 +161,7 @@ pub(crate) fn call_github_pr_run(
             if draft {
                 args.push("--draft".to_string());
             }
+            append_repository(&mut args, repository.as_deref());
             if dry_run {
                 return serde_json::to_string_pretty(&json!({
                     "tool": tools::github_pr_run::NAME,
@@ -89,9 +174,9 @@ pub(crate) fn call_github_pr_run(
                 .map_err(|error| format!("github_pr_run refused: {error}"));
             }
             let confirm = required_string(arguments, "confirm")?;
-            if confirm != CONFIRMATION {
+            if confirm != CREATE_CONFIRMATION {
                 return Err(format!(
-                    "github_pr_run refused: confirm must be {CONFIRMATION:?}"
+                    "github_pr_run refused: confirm must be {CREATE_CONFIRMATION:?}"
                 ));
             }
             args
@@ -110,8 +195,8 @@ pub(crate) fn call_github_pr_run(
         .output()
         .map_err(|error| format!("github_pr_run refused: failed to run gh: {error}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let (stdout, stdout_truncated) = bounded_output(&output.stdout, 120_000);
+    let (stderr, stderr_truncated) = bounded_output(&output.stderr, 20_000);
     let exit_code = output.status.code();
     serde_json::to_string_pretty(&json!({
         "tool": tools::github_pr_run::NAME,
@@ -122,9 +207,59 @@ pub(crate) fn call_github_pr_run(
         "exit_code": exit_code,
         "success": output.status.success(),
         "stdout": stdout,
-        "stderr": stderr
+        "stderr": stderr,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated
     }))
     .map_err(|error| format!("github_pr_run refused: {error}"))
+}
+
+fn optional_github_repository(
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<Option<String>, String> {
+    optional_string(arguments, "repository")?
+        .map(validate_github_repository)
+        .transpose()
+}
+
+fn validate_github_repository(raw: &str) -> Result<String, String> {
+    let value = raw.trim();
+    let Some((owner, repository)) = value.split_once('/') else {
+        return Err("github_pr_run refused: repository must use OWNER/REPO format".to_string());
+    };
+    if repository.contains('/')
+        || !valid_github_name(owner, 39, false)
+        || !valid_github_name(repository, 100, true)
+    {
+        return Err(
+            "github_pr_run refused: repository must use OWNER/REPO with only letters, digits, `.`, `_`, or `-`".to_string(),
+        );
+    }
+    Ok(value.to_string())
+}
+
+fn valid_github_name(value: &str, max_len: usize, allow_dot_underscore: bool) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value != "."
+        && value != ".."
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || ch == '-'
+                || (allow_dot_underscore && matches!(ch, '.' | '_'))
+        })
+}
+
+fn append_repository(args: &mut Vec<String>, repository: Option<&str>) {
+    if let Some(repository) = repository {
+        args.push("--repo".to_string());
+        args.push(repository.to_string());
+    }
+}
+
+fn bounded_output(bytes: &[u8], max_chars: usize) -> (String, bool) {
+    let text = String::from_utf8_lossy(bytes);
+    redact_and_truncate_output(&text, max_chars)
 }
 
 pub(crate) fn call_github_fork_prepare(

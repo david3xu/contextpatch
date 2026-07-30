@@ -51,7 +51,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `git_branch_prepare` | Remote-tracking ref + local branch/worktree | Clean worktree, exact remote base fetch, validated branch, optional confirmed reset, required-file gates |
 | `git_merge_readiness` | Optional remote-tracking ref update only | Validated refs, optional single-branch fetch, merge-base/ahead/diff-name analysis, no merge |
 | `git_push_exact` | Remote branch update | Clean worktree, exact HEAD, no remote-ahead divergence, explicit confirmation, no force |
-| `github_pr_run` | GitHub mutation for PR creation only | `gh`-backed auth/check/view plus confirmation-gated PR creation |
+| `github_pr_run` | GitHub mutation for PR creation only | `gh`-backed auth/PR/check/run/job-log evidence plus confirmation-gated PR creation |
 | `github_fork_prepare` | GitHub fork mutation | `gh repo fork` plan by default, explicit confirmation for mutation |
 | `delete_guarded` | Yes | Expected hash/path confirmation |
 
@@ -1142,23 +1142,31 @@ Runs narrow GitHub pull-request workflows through `gh` without exposing arbitrar
 
 Required inputs:
 
-- `action`: one of `auth_status`, `pr_view`, `pr_checks`, or `pr_create`
+- `action`: one of `auth_status`, `pr_view`, `pr_checks`, `workflow_run_view`, `workflow_job_log`, `workflow_run_rerun_failed`, or `pr_create`
 
 Action-specific inputs:
 
 - `pr_view` and `pr_checks`: `number`
+- `workflow_run_view` and `workflow_run_rerun_failed`: `run_id`
+- `workflow_job_log`: `job_id`
 - `pr_create`: `base`, `head`, `title`, `body`
 
 Optional inputs:
 
+- `repository`: validated `OWNER/REPO` target for PR and Actions actions; use it when the local checkout is a fork but the PR or run belongs to upstream
 - `draft`: create a draft PR when `action` is `pr_create`
-- `dry_run`: defaults to true for `pr_create`
-- `confirm`: literal `create pull request` when `pr_create` uses `dry_run: false`
+- `dry_run`: defaults to true for `pr_create` and `workflow_run_rerun_failed`
+- `confirm`: literal `create pull request` for confirmed PR creation or `rerun failed workflow jobs` for a confirmed failed-job rerun
 
 Rules:
 
 - The tool must use the GitHub CLI as `gh` with explicit argv, no shell.
 - Read-only actions may execute directly.
+- `pr_checks` must return structured check names, states, workflows, and links so callers can identify the corresponding Actions run.
+- `workflow_run_view` may return typed run/job metadata; `workflow_job_log` may return only one explicit job's bounded log output.
+- `workflow_run_rerun_failed` may run only `gh run rerun <run_id> --failed`; it must default to dry-run and require exact confirmation before rerunning failed jobs and their dependencies.
+- GitHub command output must be redacted for probable secrets and bounded before returning it to the client.
+- Repository targeting must be passed as a separate `--repo OWNER/REPO` argv pair after strict validation, never as caller-supplied command text.
 - `pr_create` must default to dry-run and return the command plan without mutating GitHub.
 - `pr_create` with `dry_run: false` must require the exact confirmation literal.
 - The tool must not expose arbitrary `gh` subcommands, repository deletion, workflow dispatch, release publishing, secret access, or forceful Git operations.

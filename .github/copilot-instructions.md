@@ -22,6 +22,8 @@ cargo test -p server stage1_mcp_tools_work_together
 cargo test -p server stage2_git_commit_exact_dry_run_and_commit_are_gated
 cargo test -p server stage2_git_branch_prepare
 cargo test -p server stage2_git_merge_readiness
+cargo test -p server stage2_setup_profile_run_plans_capacitor_shell_without_mutating
+cargo test -p server stage2_native_build_run_plans_builds_without_raw_commands
 ```
 
 Useful local smoke commands:
@@ -37,15 +39,15 @@ cargo run -p server --bin contextpatch-server -- --repo-root /path/to/repo
 
 | Package | Owns | Must not own |
 | --- | --- | --- |
-| `core` | Path normalization, repo-root checks, atomic writes, exact replacement, patch/diff semantics, Git status/guard logic, guarded command execution, shared errors | MCP/JSON-RPC protocol, Claude Desktop config, CLI parsing |
+| `core` | Path normalization, repo-root checks, atomic writes, exact replacement, patch/diff semantics, Git guards, no-shell process execution, setup-profile planning, typed native build/device policy, shared errors | MCP/JSON-RPC protocol, Claude Desktop config, CLI parsing, protocol schemas |
 | `cli` | Human-facing command names, help text, exit codes, terminal output | Edit semantics or duplicated safety logic |
-| `server` | MCP stdio protocol adapter, snake_case tool schemas, request/response adaptation | Filesystem mutation semantics already owned by `core` |
+| `server` | MCP stdio protocol adapter, snake_case tool schemas, request/response adaptation | Edit, setup, process, Git, or native command policy already owned by `core` |
 
 Dependency direction is one-way: `cli -> core`, `server -> core`; `core` must stay independent of `cli` and `server`.
 
-The Stage 1 edit tools (`read_range`, `diff_preview`, `replace_exact`, `write_new_file`, `status_guard`) exist across core, CLI, and MCP server. Stage 2A validation/Git workflow tools are MCP-facing: capability/preflight, guarded commands/logs, validation profiles, base64 file creation, hash-guarded existing-file writes, bounded bulk fixture import, fixture manifest verify/refresh, sidecar artifact creation, typed fixture-generator and base-image-check workflows, scoped/exact local commits, exact tracked restore, exact untracked cleanup, remote listing/checking, branch preparation, merge readiness, exact push, PR workflows, and fork preparation.
+The Stage 1 edit tools (`read_range`, `diff_preview`, `replace_exact`, `write_new_file`, `create_directory`, `status_guard`) exist across core, CLI, and MCP server. Stage 2A is primarily MCP-facing and adds bounded inspection, guarded validation/logging, binary and sidecar artifact workflows, fixture integrity/generation, declarative setup, typed native build/device actions, narrow local/remote Git operations, and typed GitHub PR/fork workflows.
 
-The MCP server is line-oriented JSON-RPC over stdio in `crates/server/src/main.rs`. Tool name constants live in `crates/server/src/tools/*`; schemas and dispatch should use those constants. CLI routing lives in `crates/cli/src/args.rs` and `crates/cli/src/commands/*`; edit behavior belongs in `crates/core/src/*`.
+The MCP server is line-oriented JSON-RPC over stdio. `crates/server/src/main.rs` is only the entrypoint; transport/protocol code lives in `server.rs` and `protocol.rs`, while schemas, dispatch, and handlers live under `crates/server/src/tools/`. Tool name constants are defined with their tool modules and must be reused by schemas and dispatch. CLI routing lives in `crates/cli/src/args.rs` and `crates/cli/src/commands/*`; product policy and behavior belong in `crates/core/src/*`.
 
 ## Key conventions
 
@@ -58,11 +60,13 @@ The MCP server is line-oriented JSON-RPC over stdio in `crates/server/src/main.r
 - `read_range` uses 1-based inclusive line numbers and returns numbered lines.
 - `replace_exact` refuses empty old text, zero matches, and multi-matches.
 - `write_new_file` and `write_new_file_base64` are repo-root-confined create-only tools; `write_existing_file_exact_hash` is for whole-file synchronization only when the current SHA-256 is supplied; `bulk_write_new_files_base64` is a bounded multi-file create-only fixture import; `artifact_write_text` and `artifact_write_base64` are create-only sidecar artifact tools outside the repo tree; `diff_preview` previews exact replacement without mutating.
-- `apply_patch`, `insert_at_anchor`, `move_tracked`, and `delete_guarded` are roadmap/boundary tools unless implementation exists; the CLI `apply-patch` command is currently only a not-implemented stub.
+- `apply_patch`, `insert_at_anchor`, `move_tracked`, and `delete_guarded` remain Stage 2 boundary tools, not advertised MCP capabilities. Some core modules are placeholders, and the CLI `apply-patch` command is still a not-implemented stub; do not infer support from names in the source or tool spec.
 - `run_guarded_command` is validation support, not a shell: program plus args only, repo-root-confined cwd, timeout, redaction/truncation, null stdin, and allowlisted command families. It supports validation-oriented `git`, Rust, JS package-manager scripts, repo-relative Python scripts, `pytest`, `harbor run`, the exact `references/check-base-image.sh` check with optional `task` argument, and `rg`; it must not expose shell strings, arbitrary shell scripts, Docker, `pip`, arbitrary `python -m`, or package installation as generic execution.
+- Setup and native workflows are typed adapters: derive command plans in `core::setup`, `core::native_build`, or `core::native_device`; server handlers only parse params, call core, and format MCP responses. Keep package installation out of `run_guarded_command` and raw `xcodebuild`, Gradle, `xcrun`, and `adb` authority out of public tools.
 - `fixture_generator_run` runs repo-relative Python fixture generators with dry-run/confirmation, allowed pre-existing dirty paths, and declared output path/prefix verification. Use it for temporary in-repo generators, then delete those helpers before commit if they are not submission artifacts. Use `fixture_manifest_verify` and `fixture_manifest_refresh` for exact fixture file-set and SHA-256 integrity.
-- Local/remote Git mutation is intentionally narrow: `git_commit_exact` and `git_commit_scoped` are local-only commit tools; cleanup is split into `git_restore_exact` for explicit tracked paths and `delete_untracked_exact` for explicit untracked regular files; remote publishing is split across `git_remote_list`, `git_remote_check`, `git_branch_prepare`, `git_merge_readiness`, and `git_push_exact`.
-- GitHub workflows are intentionally narrow: use `github_pr_run` for auth/view/check/create PR actions and `github_fork_prepare` for dry-run/confirmed fork preparation, not arbitrary `gh` passthrough.
+- Local/remote Git mutation is intentionally narrow: staging, exact/scoped/prefix commits, tracked restore, and exact/prefix-generated cleanup are separate tools with dry-run, clean-index/worktree, path-expansion, and confirmation gates. Remote publishing stays split across remote listing/checking, branch preparation, merge readiness, and exact push; never collapse these into broad Git authority.
+- GitHub workflows are intentionally narrow: use `github_pr_run` for auth, targeted fork/upstream PR reads, structured checks, redacted/bounded Actions run/job evidence, confirmation-gated failed-job reruns, and confirmation-gated PR creation; use `github_fork_prepare` for dry-run/confirmed fork preparation, not arbitrary `gh` passthrough.
+- Every advertised MCP tool must include stable annotations via the central schema helper. Annotations are client permission hints only and never replace internal dry-run, confirmation, path, hash, repository-state, or timeout guards.
 
 ## Testing and docs
 

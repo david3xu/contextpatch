@@ -45,6 +45,22 @@ pub fn resolve_guarded_program(program: &str) -> Option<std::path::PathBuf> {
     resolve_program(program)
 }
 
+pub fn redact_and_truncate_output(text: &str, max_chars: usize) -> (String, bool) {
+    let redacted = text
+        .lines()
+        .map(crate::process::runner::redact_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut chars = redacted.chars();
+    let output: String = chars.by_ref().take(max_chars).collect();
+    let truncated = chars.next().is_some();
+    if truncated {
+        (format!("{output}\n[truncated]"), true)
+    } else {
+        (output, false)
+    }
+}
+
 fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchError> {
     validate_common_command_shape(program, args)?;
 
@@ -112,7 +128,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{run_guarded_command, validate_command};
+    use super::{redact_and_truncate_output, run_guarded_command, validate_command};
     use crate::process::runner::redact_line;
 
     #[test]
@@ -130,6 +146,20 @@ mod tests {
 
         assert!(output.contains("allowlist: git/status"));
         assert!(output.contains("exit_code: 0"));
+    }
+
+    #[test]
+    fn redacts_and_bounds_external_workflow_output() {
+        let (output, truncated) =
+            redact_and_truncate_output("safe\nDATACORE_TOKEN=super-secret-value\ntail", 60);
+        assert!(output.contains("safe"));
+        assert!(output.contains("[redacted potential secret line]"));
+        assert!(!output.contains("super-secret-value"));
+        assert!(!truncated);
+
+        let (output, truncated) = redact_and_truncate_output("éééé", 3);
+        assert_eq!(output, "ééé\n[truncated]");
+        assert!(truncated);
     }
 
     #[test]
