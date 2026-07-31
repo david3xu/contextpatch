@@ -83,11 +83,16 @@ fn call_tool(
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     match name {
-        tools::capability_manifest::NAME => tools::capability::call_capability_manifest(repo_root),
+        tools::capability_manifest::NAME => {
+            tools::capability::call_capability_manifest(repo_root, arguments)
+        }
         tools::preflight_health::NAME => tools::capability::call_preflight_health(repo_root),
         tools::read_range::NAME => tools::files::call_read_range(repo_root, arguments),
         tools::diff_preview::NAME => tools::files::call_diff_preview(repo_root, arguments),
         tools::replace_exact::NAME => tools::files::call_replace_exact(repo_root, arguments),
+        tools::bulk_replace_exact::NAME => {
+            tools::files::call_bulk_replace_exact(repo_root, arguments)
+        }
         tools::read_write_receipts::NAME => {
             tools::files::call_read_write_receipts(repo_root, arguments)
         }
@@ -214,6 +219,7 @@ fn deadline_for(name: &str) -> Option<Duration> {
         | tools::read_command_log::NAME => Some(READ_DEADLINE),
 
         tools::replace_exact::NAME
+        | tools::bulk_replace_exact::NAME
         | tools::write_new_file::NAME
         | tools::write_new_file_base64::NAME
         | tools::write_existing_file_exact_hash::NAME
@@ -250,6 +256,7 @@ fn serializes_repository_mutation(name: &str) -> bool {
     matches!(
         name,
         tools::replace_exact::NAME
+            | tools::bulk_replace_exact::NAME
             | tools::write_new_file::NAME
             | tools::write_new_file_base64::NAME
             | tools::write_existing_file_exact_hash::NAME

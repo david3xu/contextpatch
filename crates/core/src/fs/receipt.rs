@@ -26,6 +26,7 @@ pub const MAX_JOURNAL_BYTES: u64 = 512 * 1024;
 
 const RECORD_BEGIN: &str = "begin";
 const RECORD_SETTLE: &str = "settle";
+const MAX_RECEIPT_ID_BYTES: usize = 80;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,20 +181,34 @@ fn begin_value(receipt: &Receipt) -> Value {
     })
 }
 
-fn rotate_if_oversized(path: &Path) -> Result<(), ContextPatchError> {
-    let oversized = match std::fs::metadata(path) {
-        Ok(metadata) => metadata.len() > MAX_JOURNAL_BYTES,
-        Err(error) if error.kind() == ErrorKind::NotFound => false,
-        Err(error) => {
-            return Err(ContextPatchError::new(format!(
-                "write receipt journal metadata could not be read: {error}"
-            )))
-        }
-    };
-    if !oversized {
-        return Ok(());
-    }
+fn settle_value(
+    id: &str,
+    outcome: Outcome,
+    after_sha256: Option<&str>,
+    after_git_head: Option<&str>,
+    at_ms: u128,
+) -> Value {
+    json!({
+        "record": RECORD_SETTLE,
+        "id": id,
+        "outcome": outcome.as_str(),
+        "after_sha256": after_sha256,
+        "after_git_head": after_git_head,
+        "at_ms": at_ms.to_string(),
+    })
+}
 
+fn journal_bytes(path: &Path) -> Result<u64, ContextPatchError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(ContextPatchError::new(format!(
+            "write receipt journal metadata could not be read: {error}"
+        ))),
+    }
+}
+
+fn rotate(path: &Path) -> Result<(), ContextPatchError> {
     let unsettled = all_from_path(path)?
         .into_iter()
         .filter(Receipt::interrupted)
@@ -214,6 +229,134 @@ fn rotate_if_oversized(path: &Path) -> Result<(), ContextPatchError> {
     })
 }
 
+fn rotate_if_oversized(path: &Path) -> Result<(), ContextPatchError> {
+    let oversized = match journal_bytes(path) {
+        Ok(bytes) => bytes > MAX_JOURNAL_BYTES,
+        Err(error) => {
+            return Err(error);
+        }
+    };
+    if !oversized {
+        return Ok(());
+    }
+
+    rotate(path)
+}
+
+fn serialized_record_bytes(record: &Value) -> Result<u64, ContextPatchError> {
+    let bytes = serde_json::to_vec(record).map_err(|error| {
+        ContextPatchError::new(format!(
+            "write receipt reservation could not be serialized: {error}"
+        ))
+    })?;
+    u64::try_from(bytes.len())
+        .ok()
+        .and_then(|length| length.checked_add(1))
+        .ok_or_else(|| ContextPatchError::new("write receipt reservation size overflow"))
+}
+
+fn file_batch_reservation(tool: &str, paths: &[String]) -> Result<u64, ContextPatchError> {
+    let id = "f".repeat(MAX_RECEIPT_ID_BYTES);
+    let digest = "f".repeat(64);
+    let mut total = 0u64;
+    for path in paths {
+        let receipt = Receipt {
+            id: id.clone(),
+            tool: tool.to_string(),
+            path: Some(path.clone()),
+            before_sha256: Some(digest.clone()),
+            after_sha256: None,
+            before_git_head: None,
+            after_git_head: None,
+            outcome: None,
+            began_at_ms: u128::MAX,
+            settled_at_ms: None,
+        };
+        let begin = serialized_record_bytes(&begin_value(&receipt))?;
+        let settle = serialized_record_bytes(&settle_value(
+            &id,
+            Outcome::Refused,
+            Some(&digest),
+            None,
+            u128::MAX,
+        ))?;
+        total = total
+            .checked_add(begin)
+            .and_then(|bytes| bytes.checked_add(settle))
+            .ok_or_else(|| ContextPatchError::new("write receipt reservation size overflow"))?;
+    }
+    Ok(total)
+}
+
+fn reserve_file_batch(path: &Path, reserved_bytes: u64) -> Result<(), ContextPatchError> {
+    if reserved_bytes > MAX_JOURNAL_BYTES {
+        return Err(ContextPatchError::new(format!(
+            "write receipt batch requires {reserved_bytes} bytes; journal capacity is \
+             {MAX_JOURNAL_BYTES} bytes"
+        )));
+    }
+
+    let current_bytes = journal_bytes(path)?;
+    if current_bytes
+        .checked_add(reserved_bytes)
+        .is_none_or(|total| total > MAX_JOURNAL_BYTES)
+    {
+        rotate(path)?;
+    }
+
+    let retained_bytes = journal_bytes(path)?;
+    if retained_bytes
+        .checked_add(reserved_bytes)
+        .is_none_or(|total| total > MAX_JOURNAL_BYTES)
+    {
+        return Err(ContextPatchError::new(format!(
+            "write receipt journal has {retained_bytes} bytes of interrupted evidence and cannot \
+             reserve {reserved_bytes} bytes for this batch without exceeding \
+             {MAX_JOURNAL_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn append_begin_record(
+    journal: &Path,
+    tool: &str,
+    path: Option<&str>,
+    before_sha256: Option<&str>,
+    before_git_head: Option<&str>,
+) -> Result<String, ContextPatchError> {
+    let began_at_ms = now_ms();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let id = format!("{began_at_ms:x}-{:x}-{sequence:x}", std::process::id());
+    let receipt = Receipt {
+        id: id.clone(),
+        tool: tool.to_string(),
+        path: path.map(str::to_string),
+        before_sha256: before_sha256.map(str::to_string),
+        after_sha256: None,
+        before_git_head: before_git_head.map(str::to_string),
+        after_git_head: None,
+        outcome: None,
+        began_at_ms,
+        settled_at_ms: None,
+    };
+    append(journal, &begin_value(&receipt))?;
+    Ok(id)
+}
+
+fn append_settle_record(
+    journal: &Path,
+    id: &str,
+    outcome: Outcome,
+    after_sha256: Option<&str>,
+    after_git_head: Option<&str>,
+) -> Result<(), ContextPatchError> {
+    append(
+        journal,
+        &settle_value(id, outcome, after_sha256, after_git_head, now_ms()),
+    )
+}
+
 fn begin_record(
     repo_root: &Path,
     tool: &str,
@@ -224,23 +367,7 @@ fn begin_record(
     let journal = journal_path(repo_root)?;
     with_exclusive_lock(repo_root, || {
         rotate_if_oversized(&journal)?;
-        let began_at_ms = now_ms();
-        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let id = format!("{began_at_ms:x}-{:x}-{sequence:x}", std::process::id());
-        let receipt = Receipt {
-            id: id.clone(),
-            tool: tool.to_string(),
-            path: path.map(str::to_string),
-            before_sha256: before_sha256.map(str::to_string),
-            after_sha256: None,
-            before_git_head: before_git_head.map(str::to_string),
-            after_git_head: None,
-            outcome: None,
-            began_at_ms,
-            settled_at_ms: None,
-        };
-        append(&journal, &begin_value(&receipt))?;
-        Ok(id)
+        append_begin_record(&journal, tool, path, before_sha256, before_git_head)
     })
 }
 
@@ -261,6 +388,75 @@ pub fn begin_git(
     begin_record(repo_root, tool, None, None, Some(before_git_head))
 }
 
+/// A bounded file-receipt batch that prevents journal rotation between entries.
+///
+/// The journal lock is held for the batch lifetime. Capacity is reserved before the caller may start
+/// mutating, so a later interruption leaves the already-settled prefix beside the interrupted entry.
+pub struct FileReceiptBatch {
+    journal: PathBuf,
+    _lock: File,
+    tool: String,
+    paths: Vec<String>,
+    next_path: usize,
+}
+
+pub fn begin_file_batch(
+    repo_root: &Path,
+    tool: &str,
+    paths: &[String],
+) -> Result<FileReceiptBatch, ContextPatchError> {
+    if paths.is_empty() {
+        return Err(ContextPatchError::new(
+            "write receipt batch requires at least one path",
+        ));
+    }
+    let reserved_bytes = file_batch_reservation(tool, paths)?;
+    let journal = journal_path(repo_root)?;
+    let lock = lock_file(repo_root)?;
+    lock.lock_exclusive().map_err(|error| {
+        ContextPatchError::new(format!(
+            "write receipt journal could not be locked for a batch: {error}"
+        ))
+    })?;
+    reserve_file_batch(&journal, reserved_bytes)?;
+    Ok(FileReceiptBatch {
+        journal,
+        _lock: lock,
+        tool: tool.to_string(),
+        paths: paths.to_vec(),
+        next_path: 0,
+    })
+}
+
+impl FileReceiptBatch {
+    pub fn begin_file(
+        &mut self,
+        path: &str,
+        before_sha256: Option<&str>,
+    ) -> Result<String, ContextPatchError> {
+        let expected = self.paths.get(self.next_path).ok_or_else(|| {
+            ContextPatchError::new("write receipt batch has no remaining reserved paths")
+        })?;
+        if expected != path {
+            return Err(ContextPatchError::new(format!(
+                "write receipt batch expected path `{expected}`, got `{path}`"
+            )));
+        }
+        let id = append_begin_record(&self.journal, &self.tool, Some(path), before_sha256, None)?;
+        self.next_path += 1;
+        Ok(id)
+    }
+
+    pub fn settle_file(
+        &mut self,
+        id: &str,
+        outcome: Outcome,
+        after_sha256: Option<&str>,
+    ) -> Result<(), ContextPatchError> {
+        append_settle_record(&self.journal, id, outcome, after_sha256, None)
+    }
+}
+
 fn settle_record(
     repo_root: &Path,
     id: &str,
@@ -270,17 +466,7 @@ fn settle_record(
 ) -> Result<(), ContextPatchError> {
     let journal = journal_path(repo_root)?;
     with_exclusive_lock(repo_root, || {
-        append(
-            &journal,
-            &json!({
-                "record": RECORD_SETTLE,
-                "id": id,
-                "outcome": outcome.as_str(),
-                "after_sha256": after_sha256,
-                "after_git_head": after_git_head,
-                "at_ms": now_ms().to_string(),
-            }),
-        )
+        append_settle_record(&journal, id, outcome, after_sha256, after_git_head)
     })
 }
 
@@ -526,6 +712,34 @@ mod tests {
         assert!(unsettled
             .iter()
             .any(|receipt| receipt.path.as_deref() == Some("interrupted.txt")));
+    }
+
+    #[test]
+    fn batch_rotation_preserves_applied_prefix_with_later_interruption() {
+        let root = temp_repo("batch-rotation");
+        let old_id = begin_file(&root, "replace_exact", "old.txt", Some("aaa")).unwrap();
+        settle_file(&root, &old_id, Outcome::Applied, Some("bbb")).unwrap();
+        let journal = journal_path(&root).unwrap();
+        let mut handle = OpenOptions::new().append(true).open(&journal).unwrap();
+        writeln!(handle, "{}", "x".repeat(MAX_JOURNAL_BYTES as usize)).unwrap();
+        drop(handle);
+
+        let paths = vec!["first.txt".to_string(), "second.txt".to_string()];
+        let mut batch = begin_file_batch(&root, "bulk_replace_exact", &paths).unwrap();
+        let first = batch.begin_file("first.txt", Some("111")).unwrap();
+        batch
+            .settle_file(&first, Outcome::Applied, Some("222"))
+            .unwrap();
+        batch.begin_file("second.txt", Some("333")).unwrap();
+        drop(batch);
+
+        let receipts = all(&root).unwrap();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[0].path.as_deref(), Some("first.txt"));
+        assert_eq!(receipts[0].outcome.as_deref(), Some("applied"));
+        assert_eq!(receipts[1].path.as_deref(), Some("second.txt"));
+        assert!(receipts[1].interrupted());
+        assert!(fs::metadata(journal).unwrap().len() <= MAX_JOURNAL_BYTES);
     }
 
     #[test]

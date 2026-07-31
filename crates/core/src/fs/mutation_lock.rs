@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 
 use crate::error::ContextPatchError;
-use crate::fs::hash::sha256_bytes;
+use crate::fs::file_identity::FileIdentity;
 use crate::fs::scratch::ensure_scratch_root;
 
 const LOCK_DIRECTORY: &str = "mutation-locks";
@@ -16,6 +16,7 @@ const REPOSITORY_LOCK: &str = "repository.lock";
 #[derive(Debug)]
 pub struct MutationLockGuard {
     _file: File,
+    _identity: Option<FileIdentity>,
 }
 
 fn lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
@@ -29,7 +30,11 @@ fn lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
     Ok(directory)
 }
 
-fn try_lock(path: &Path, contention_message: &str) -> Result<MutationLockGuard, ContextPatchError> {
+fn try_lock(
+    path: &Path,
+    contention_message: &str,
+    identity: Option<FileIdentity>,
+) -> Result<MutationLockGuard, ContextPatchError> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -43,7 +48,10 @@ fn try_lock(path: &Path, contention_message: &str) -> Result<MutationLockGuard, 
             ))
         })?;
     match FileExt::try_lock_exclusive(&file) {
-        Ok(()) => Ok(MutationLockGuard { _file: file }),
+        Ok(()) => Ok(MutationLockGuard {
+            _file: file,
+            _identity: identity,
+        }),
         Err(error) if error.kind() == ErrorKind::WouldBlock => {
             Err(ContextPatchError::new(contention_message))
         }
@@ -62,6 +70,7 @@ pub fn try_repository_mutation_lock(
         "another ContextPatch mutation is still active for this repository; this operation was \
          not started. Wait for it to finish, then inspect read_write_receipts and status_guard \
          before retrying",
+        None,
     )
 }
 
@@ -69,7 +78,8 @@ pub fn try_file_mutation_lock(
     repo_root: &Path,
     target: &Path,
 ) -> Result<MutationLockGuard, ContextPatchError> {
-    let key = sha256_bytes(target.as_os_str().as_encoded_bytes());
+    let identity = FileIdentity::from_path(target)?;
+    let key = identity.lock_key();
     let path = lock_directory(repo_root)?.join(format!("{key}.lock"));
     try_lock(
         &path,
@@ -77,6 +87,7 @@ pub fn try_file_mutation_lock(
             "another ContextPatch mutation is still active for `{}`; this edit was not started",
             target.display()
         ),
+        Some(identity),
     )
 }
 
@@ -112,10 +123,44 @@ mod tests {
         let root = temp_repo("file");
         let first_path = root.join("first.txt");
         let second_path = root.join("second.txt");
+        fs::write(&first_path, "first").unwrap();
+        fs::write(&second_path, "second").unwrap();
         let first = try_file_mutation_lock(&root, &first_path).unwrap();
         assert!(try_file_mutation_lock(&root, &first_path).is_err());
         assert!(try_file_mutation_lock(&root, &second_path).is_ok());
         drop(first);
         assert!(try_file_mutation_lock(&root, &first_path).is_ok());
+    }
+
+    #[test]
+    fn hard_link_aliases_share_one_file_lock() {
+        let root = temp_repo("hard-link");
+        let original = root.join("original.txt");
+        let alias = root.join("alias.txt");
+        fs::write(&original, "same file").unwrap();
+        fs::hard_link(&original, &alias).unwrap();
+
+        let first = try_file_mutation_lock(&root, &original).unwrap();
+        let error = try_file_mutation_lock(&root, &alias).unwrap_err();
+
+        assert!(error.to_string().contains("still active"));
+        drop(first);
+        assert!(try_file_mutation_lock(&root, &alias).is_ok());
+    }
+
+    #[test]
+    fn case_aliases_share_one_file_lock_when_supported() {
+        let root = temp_repo("case-alias");
+        let mixed_case = root.join("CaseAlias.txt");
+        let lower_case = root.join("casealias.txt");
+        fs::write(&mixed_case, "same file").unwrap();
+        if !lower_case.exists() {
+            return;
+        }
+
+        let _first = try_file_mutation_lock(&root, &mixed_case).unwrap();
+        let error = try_file_mutation_lock(&root, &lower_case).unwrap_err();
+
+        assert!(error.to_string().contains("still active"));
     }
 }

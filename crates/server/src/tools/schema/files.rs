@@ -349,6 +349,48 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::bulk_replace_exact::NAME,
+                    "description": "Validate every exact replacement before the first write, then apply per-file atomic replacements in order. Validation refusals leave all files unchanged; interruption or apply failure can leave a prefix applied, recoverable through per-file receipts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "entries": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": contextpatch_core::replace::exact::MAX_BULK_REPLACE_ENTRIES,
+                                "description": "Ordered replacements. Paths that resolve to the same filesystem file, including hard-link and case aliases, are refused as duplicates.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "path": {
+                                            "type": "string",
+                                            "description": "Repository relative path to an existing UTF-8 text file."
+                                        },
+                                        "old": {
+                                            "type": "string",
+                                            "description": "Text to replace. Must occur exactly once in the file."
+                                        },
+                                        "new": {
+                                            "type": "string",
+                                            "description": "Replacement text."
+                                        },
+                                        "expected_sha256": {
+                                            "type": "string",
+                                            "pattern": "^[0-9a-f]{64}$",
+                                            "description": "Optional lowercase SHA-256 digest checked during validation. Apply also revalidates the exact bytes captured during planning."
+                                        }
+                                    },
+                                    "required": ["path", "old", "new"],
+                                    "additionalProperties": false
+                                }
+                            }
+                        },
+                        "required": ["entries"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::bulk_write_new_files_base64::NAME,
                     "description": "Create many new repository files from base64 entries in one bounded, create-only fixture import.",
                     "inputSchema": {

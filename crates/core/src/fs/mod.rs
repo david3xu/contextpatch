@@ -1,5 +1,6 @@
 pub mod atomic_write;
 pub mod create_directory;
+pub mod file_identity;
 pub mod hash;
 pub mod mutation_lock;
 pub mod path;

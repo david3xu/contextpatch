@@ -68,6 +68,63 @@ pub(crate) fn recorded<T>(
     combine_result(result, auxiliary_errors)
 }
 
+pub(crate) fn begin_file_batch(
+    repo_root: &Path,
+    tool: &str,
+    relative_paths: &[String],
+) -> Result<receipt::FileReceiptBatch, String> {
+    let normalized = relative_paths
+        .iter()
+        .map(|path| normalize_repo_relative_path(tool, path))
+        .collect::<Result<Vec<_>, _>>()?;
+    receipt::begin_file_batch(repo_root, tool, &normalized)
+        .map_err(|error| format!("{tool} refused before mutation: {error}"))
+}
+
+pub(crate) fn recorded_in_batch<T>(
+    batch: &mut receipt::FileReceiptBatch,
+    repo_root: &Path,
+    tool: &str,
+    relative_path: &str,
+    work: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let normalized = normalize_repo_relative_path(tool, relative_path)?;
+    let root = repo_root
+        .canonicalize()
+        .map_err(|error| format!("{tool} refused: failed to resolve repo root: {error}"))?;
+    let target = root.join(&normalized);
+    let before = digest_of(&target).map_err(|error| format!("{tool} refused: {error}"))?;
+    let id = batch
+        .begin_file(&normalized, before.as_deref())
+        .map_err(|error| format!("{tool} refused before mutation: {error}"))?;
+
+    let result = work();
+    let after = digest_of(&target);
+    let outcome = if result.is_ok() {
+        Outcome::Applied
+    } else {
+        match &after {
+            Ok(after) if *after == before => Outcome::Refused,
+            Ok(_) | Err(_) => Outcome::Unknown,
+        }
+    };
+    let settlement = match &after {
+        Ok(after) => batch.settle_file(&id, outcome, after.as_deref()),
+        Err(_) => batch.settle_file(&id, outcome, None),
+    };
+
+    let mut auxiliary_errors = Vec::new();
+    if let Err(error) = after {
+        auxiliary_errors.push(format!(
+            "{tool} could not collect after-state receipt evidence: {error}"
+        ));
+    }
+    if let Err(error) = settlement {
+        auxiliary_errors.push(settlement_error(tool, error));
+    }
+    combine_result(result, auxiliary_errors)
+}
+
 pub(crate) fn recorded_deletions<T>(
     repo_root: &Path,
     tool: &str,

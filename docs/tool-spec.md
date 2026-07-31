@@ -12,8 +12,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `read_write_receipts` | No | Bounded recent receipt query under the repository-specific scratch root |
 | `diff_preview` | No | Proposed edit input |
 | `replace_exact` | Yes | Old text must match exactly once; optional complete-file SHA-256 guard |
-| `apply_patch` | Yes | Unified patch context must apply cleanly |
-| `insert_at_anchor` | Yes | Anchor must match exactly once |
+| `bulk_replace_exact` | Yes | Validates the full batch before writing; per-file atomic apply may leave a prefix after interruption or apply failure |
 | `move_tracked` | Yes | Clean tracked regular source, absent destination, clean index, dry-run and confirmation |
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
@@ -77,9 +76,20 @@ Reports the server's capability contract in machine-readable JSON text.
 
 Required inputs: none.
 
+Optional inputs:
+
+- `names_only`: return sorted names from the registered MCP schemas instead of the full manifest
+- `section`: return one of `build`, `scratch`, `deadlines_seconds`, `mutation_coordination`,
+  `write_receipts`, `file_tools`, `git_workflows`, `github_workflows`, `process_execution`,
+  `setup_profiles`, `native_build`, or `native_device`
+
 Rules:
 
 - Must report file tools and process-execution availability honestly.
+- Projected responses must retain `build.git_sha`; a section response must include both
+  `"section": "<name>"` and a property named for the requested section.
+- Unknown sections must refuse and list the valid choices.
+- The no-argument response must retain the complete legacy manifest shape.
 - Must identify the configured repository root.
 - Must state unsupported operations, including arbitrary shell and destructive Git mutations.
 - Must distinguish the narrow local `git_commit_exact`/`git_commit_scoped` checkpoints and guarded `git_remote_check`/`git_push_exact` workflow from unsupported broad Git/destructive workflows.
@@ -153,8 +163,12 @@ Rules:
 - Settled outcomes are `applied` when the operation returned success, `refused` when it failed and observed state stayed unchanged, and `unknown` when it failed after observed state changed or could not be read. `interrupted` means no settle record exists.
 - Journal reads, appends, and rotation must use cross-process locking.
 - Rotation must preserve interrupted entries.
+- Bounded multi-file mutations must reserve capacity before the first write and prevent rotation
+  between their per-file records, preserving a settled prefix next to a later interrupted entry.
 - An interrupted receipt means the transport did not observe settlement; callers must compare current file or Git state before retrying.
-- Receipt coverage is explicit, not universal. The current implementation records `replace_exact`, `write_existing_file_exact_hash`, `delete_untracked_exact`, `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix`.
+- Receipt coverage is explicit, not universal. The current implementation records `replace_exact`,
+  each `bulk_replace_exact` apply attempt, `write_existing_file_exact_hash`,
+  `delete_untracked_exact`, `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix`.
 - The tool must not mutate repository state.
 
 ### `diff_preview`
@@ -213,38 +227,46 @@ Rules:
 - Write atomically.
 - Return the changed byte range or a concise edit summary.
 
-### `apply_patch`
+### `bulk_replace_exact`
 
-Applies a unified patch with context validation.
+Validates many exact replacements together, then applies them in order with per-file atomic writes.
 
-Required inputs:
-
-- `patch`
-- optional repository root guard
-
-Rules:
-
-- Patch context must apply cleanly.
-- Paths must stay inside the repository root.
-- Partial application must not leave persistent changes.
-- The tool must report changed files.
-
-### `insert_at_anchor`
-
-Inserts content before or after an exact anchor.
+Exists because a single logical change often spans several files. Registering one tool in this
+repository touches six: name, handler, dispatch arm, schema, module export, capability entry. Six
+sequential calls is six chances to lose the answer to a transport interruption, and losing one midway
+leaves a half-wired change that still compiles.
 
 Required inputs:
 
-- `path`
-- `anchor`
-- `position`: `before` or `after`
-- `content`
+- `entries`, a non-empty array of `{ path, old, new }` objects, each optionally carrying
+  `expected_sha256`
 
 Rules:
 
-- Refuse if the anchor is missing.
-- Refuse if the anchor appears more than once.
-- Write atomically.
+- Refuse if `entries` is empty or exceeds 64 entries. The ceiling is deliberately lower than the bulk
+  import limit: a batch of edits is one logical change, and a caller sending hundreds has more likely
+  built the list by mistake than by intent.
+- Refuse if two paths identify the same filesystem file, including case aliases and hard links. The
+  second replacement would otherwise be planned against content the first already changed, so the
+  result would depend on an ordering the caller never specified.
+- Validate every entry, and compute its resulting content, before writing anything. Each entry is subject
+  to the same rules as `replace_exact`, including the exactly-once match requirement and the optional
+  complete-file digest guard.
+- If any entry fails validation, refuse before the first write and leave every target unchanged. The
+  refusal names the offending entry.
+- Before applying each plan, re-read the target under its mutation lock and compare the exact bytes
+  captured during validation. Refuse that entry if the file changed, even when no caller-supplied
+  `expected_sha256` was provided.
+- Each file replacement is atomic, but the batch is not a cross-file transaction and is not rolled
+  back. An interruption or apply-phase failure can leave an applied prefix, and the current entry's
+  outcome can be unknown if receipt settlement or transport fails.
+- Journal every apply attempt separately. After an interrupted or failed apply phase, inspect
+  `read_write_receipts` and current file state before retrying.
+- Reserve receipt-journal capacity for the bounded batch before the first write and suppress rotation
+  between entries, so a later interrupted receipt cannot evict the settled prefix.
+- File locks use filesystem identity, so hard-link and case aliases cannot acquire divergent
+  ContextPatch locks. Advisory locks coordinate ContextPatch writers only; external programs that
+  ignore them can still race the final comparison and rename.
 
 ### `move_tracked`
 
@@ -1317,52 +1339,54 @@ Rules:
 The server currently ships:
 
 1. `replace_exact`
-2. `read_write_receipts`
-3. `read_range`
-4. `write_new_file`
-5. `write_new_file_base64`
-6. `write_existing_file_exact_hash`
-7. `file_info`
-8. `list_directory`
-9. `read_file_bytes`
-10. `artifact_write_text`
-11. `artifact_write_base64`
-12. `artifact_delete_exact`
-13. `bulk_write_new_files_base64`
-14. `create_directory`
-15. `diff_preview`
-16. `status_guard`
-17. `capability_manifest`
-18. `preflight_health`
-19. `run_guarded_command`
-20. `artifact_python_run`
-21. `image_cleanliness_check_run`
-22. `docker_image_inspect`
-23. `fixture_generator_run`
-24. `base_image_check_run`
-25. `fixture_manifest_verify`
-26. `fixture_manifest_refresh`
-27. `read_command_log`
-28. `validation_profile_run`
-29. `git_commit_exact`
-30. `git_stage_exact`
-31. `git_staged_scope_check`
-32. `git_commit_scoped`
-33. `git_commit_prefix`
-34. `git_restore_exact`
-35. `move_tracked`
-36. `delete_guarded`
-37. `delete_untracked_exact`
-38. `delete_generated_prefix`
-39. `git_remote_list`
-40. `git_remote_check`
-41. `git_branch_prepare`
-42. `git_merge_readiness`
-43. `git_push_exact`
-44. `github_pr_run`
-45. `github_fork_prepare`
-46. `setup_profile_run`
-47. `native_build_run`
-48. `native_device_run`
+2. `bulk_replace_exact`
+3. `read_write_receipts`
+4. `read_range`
+5. `write_new_file`
+6. `write_new_file_base64`
+7. `write_existing_file_exact_hash`
+8. `file_info`
+9. `list_directory`
+10. `read_file_bytes`
+11. `artifact_write_text`
+12. `artifact_write_base64`
+13. `artifact_delete_exact`
+14. `bulk_write_new_files_base64`
+15. `create_directory`
+16. `diff_preview`
+17. `status_guard`
+18. `capability_manifest`
+19. `preflight_health`
+20. `run_guarded_command`
+21. `artifact_python_run`
+22. `image_cleanliness_check_run`
+23. `docker_image_inspect`
+24. `fixture_generator_run`
+25. `base_image_check_run`
+26. `fixture_manifest_verify`
+27. `fixture_manifest_refresh`
+28. `read_command_log`
+29. `validation_profile_run`
+30. `git_commit_exact`
+31. `git_stage_exact`
+32. `git_staged_scope_check`
+33. `git_commit_scoped`
+34. `git_commit_prefix`
+35. `git_restore_exact`
+36. `move_tracked`
+37. `delete_guarded`
+38. `delete_untracked_exact`
+39. `delete_generated_prefix`
+40. `git_remote_list`
+41. `git_remote_check`
+42. `git_branch_prepare`
+43. `git_merge_readiness`
+44. `git_push_exact`
+45. `github_pr_run`
+46. `github_fork_prepare`
+47. `setup_profile_run`
+48. `native_build_run`
+49. `native_device_run`
 
-Other documented boundary tools, such as `apply_patch` and `insert_at_anchor`, remain planned until implemented. See `docs/implementation-roadmap.md`.
+The CLI `apply-patch` command remains a not-implemented stub, and `insert_at_anchor` remains a
+non-advertised boundary concept. Neither is an MCP capability. See `docs/implementation-roadmap.md`.

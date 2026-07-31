@@ -96,7 +96,11 @@ fn handle_line(repo_root: &Path, line: &str) -> Option<String> {
                 "serverInfo": {
                     "name": crate::protocol::metadata::PROTOCOL_NAME,
                     "version": contextpatch_core::VERSION
-                }
+                },
+                // Clients surface this to the model before its first tool call. It exists because the
+                // natural inference from a missing tool is that the capability is absent, when the usual
+                // cause is a binary older than the checkout.
+                "instructions": crate::protocol::instructions::CLIENT_INSTRUCTIONS
             }),
         )),
         ("tools/list", Some(id)) => Some(success_response(

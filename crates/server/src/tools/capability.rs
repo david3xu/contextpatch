@@ -15,11 +15,13 @@ use serde_json::{json, Value};
 
 use crate::tools;
 
-pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, String> {
-    let root = repo_root
-        .canonicalize()
-        .map_err(|error| format!("capability_manifest refused: {error}"))?;
-    serde_json::to_string_pretty(&json!({
+/// Build the whole manifest, before any projection.
+///
+/// Split from the tool entry point so the projection in `call_capability_manifest` cannot drift from
+/// the document: there is exactly one place the content is defined, and sections are selected from it
+/// rather than assembled a second time.
+fn full_manifest(root: &Path) -> Value {
+    json!({
         "server": "contextpatch",
         "version": contextpatch_core::VERSION,
         // Provenance, not decoration. `version` is the crate version and does not move between
@@ -38,7 +40,7 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
         "repo_root": root.display().to_string(),
         "scratch": {
             "token": contextpatch_core::fs::scratch::SCRATCH_TOKEN,
-            "root": contextpatch_core::fs::scratch::scratch_root(&root).display().to_string(),
+            "root": contextpatch_core::fs::scratch::scratch_root(root).display().to_string(),
             "note": "Write byproducts here instead of into the repository. The token expands inside \
                      data and output arguments, so `--output-dir={scratch}/run-1` works, and paths \
                      that climb out of it are refused. It cannot be used as the Python script path; \
@@ -78,6 +80,7 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
             "read_write_receipts": true,
             "diff_preview": true,
             "replace_exact": true,
+            "bulk_replace_exact": true,
             "write_new_file": true,
             "write_new_file_base64": true,
             "write_existing_file_exact_hash": true,
@@ -462,8 +465,92 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
                 "repository source files are not mutated"
             ]
         }
-    }))
-    .map_err(|error| format!("capability_manifest refused: {error}"))
+    })
+}
+
+fn projected_build(document: &Value) -> Result<Value, String> {
+    let build = document
+        .get("build")
+        .cloned()
+        .ok_or_else(|| "capability_manifest refused: build metadata is missing".to_string())?;
+    if !build.get("git_sha").is_some_and(Value::is_string) {
+        return Err("capability_manifest refused: build.git_sha is missing".to_string());
+    }
+    Ok(build)
+}
+
+/// Keys a caller may request individually, so orientation does not cost the whole document.
+///
+/// The full manifest runs to hundreds of lines, which made the discovery tool expensive enough to avoid
+/// calling, a perverse outcome for the one tool whose job is orientation. Absent arguments still return
+/// the complete document, so nothing that already depends on it changes.
+pub(crate) const PROJECTABLE_SECTIONS: &[&str] = &[
+    "build",
+    "scratch",
+    "deadlines_seconds",
+    "mutation_coordination",
+    "write_receipts",
+    "file_tools",
+    "git_workflows",
+    "github_workflows",
+    "process_execution",
+    "setup_profiles",
+    "native_build",
+    "native_device",
+];
+
+pub(crate) fn call_capability_manifest(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let root = repo_root
+        .canonicalize()
+        .map_err(|error| format!("capability_manifest refused: {error}"))?;
+    let document = full_manifest(&root);
+
+    let names_only = crate::tools::common::optional_bool(arguments, "names_only")
+        .map_err(|error| format!("capability_manifest refused: {error}"))?
+        .unwrap_or(false);
+    let section = crate::tools::common::optional_string(arguments, "section")
+        .map_err(|error| format!("capability_manifest refused: {error}"))?;
+
+    let projected = match (names_only, section) {
+        (true, _) => {
+            let build = projected_build(&document)?;
+            json!({
+                "server": "contextpatch",
+                "build": build,
+                "tool_names": crate::tools::schema::registered_tool_names()
+            })
+        }
+        (false, Some(section)) => {
+            if !PROJECTABLE_SECTIONS.contains(&section) {
+                return Err(format!(
+                    "capability_manifest refused: unknown section {section:?}; valid choices: {}",
+                    PROJECTABLE_SECTIONS.join(", ")
+                ));
+            }
+            let build = projected_build(&document)?;
+            let selected = document.get(section).cloned().ok_or_else(|| {
+                format!("capability_manifest refused: section {section:?} is unavailable")
+            })?;
+            let mut projection = serde_json::Map::new();
+            projection.insert(
+                "server".to_string(),
+                Value::String("contextpatch".to_string()),
+            );
+            projection.insert("build".to_string(), build);
+            projection.insert("section".to_string(), Value::String(section.to_string()));
+            if section != "build" {
+                projection.insert(section.to_string(), selected);
+            }
+            Value::Object(projection)
+        }
+        (false, None) => document,
+    };
+
+    serde_json::to_string_pretty(&projected)
+        .map_err(|error| format!("capability_manifest refused: {error}"))
 }
 
 pub(crate) fn call_preflight_health(repo_root: &Path) -> Result<String, String> {

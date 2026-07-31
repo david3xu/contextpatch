@@ -13,6 +13,184 @@ fn contextpatch_server() -> &'static str {
 }
 
 #[test]
+fn stage2_bulk_replace_exact_validates_before_writing_and_applies_per_file() {
+    // Validation is batch-wide, but application is deliberately per-file. A validation refusal must
+    // leave every target unchanged; successful writes are individually atomic and journalled.
+    let root = git_repo("stage2_bulk_replace_exact_validates_then_applies");
+    fs::write(root.join("one.txt"), "alpha beta gamma\n").unwrap();
+    fs::write(root.join("two.txt"), "delta delta\n").unwrap();
+    fs::write(root.join("three.txt"), "epsilon\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    // Separate sessions so file state can be inspected between batches: a single run_server call
+    // executes every request before returning, which would let a later success mask an earlier refusal.
+    let ambiguous = run_server(
+        &root,
+        &[
+            // two.txt has "delta" twice, so validation must refuse before one.txt is written.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"beta","new":"BETA"},{"path":"two.txt","old":"delta","new":"DELTA"}]}}}"#,
+        ],
+    );
+    let refusal = response_text(&ambiguous[0]);
+    assert_eq!(ambiguous[0]["result"]["isError"], true);
+    assert!(refusal.contains("matched 2 times"), "{refusal}");
+    assert!(refusal.contains("no file was changed"), "{refusal}");
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha beta gamma\n",
+        "an earlier entry must not survive a later refusal"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("two.txt")).unwrap(),
+        "delta delta\n"
+    );
+
+    let duplicated = run_server(
+        &root,
+        &[
+            // A duplicate path is refused rather than applied twice against shifting content.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"beta","new":"BETA"},{"path":"one.txt","old":"gamma","new":"GAMMA"}]}}}"#,
+        ],
+    );
+    let duplicate = response_text(&duplicated[0]);
+    assert_eq!(duplicated[0]["result"]["isError"], true);
+    assert!(duplicate.contains("duplicate target path"), "{duplicate}");
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha beta gamma\n"
+    );
+
+    let succeeded = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"beta","new":"BETA"},{"path":"three.txt","old":"epsilon","new":"EPSILON"}]}}}"#,
+        ],
+    );
+    let applied: Value = serde_json::from_str(response_text(&succeeded[0])).unwrap();
+    assert_eq!(applied["applied"], 2);
+    assert_eq!(applied["atomicity"], "per_file");
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha BETA gamma\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("three.txt")).unwrap(),
+        "EPSILON\n"
+    );
+
+    // Each write is journalled individually, so an interrupted apply phase stays recoverable.
+    let receipts = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_write_receipts","arguments":{"limit":10}}}"#,
+        ],
+    );
+    let journal: Value = serde_json::from_str(response_text(&receipts[0])).unwrap();
+    let listed = journal["receipts"].as_array().unwrap();
+    assert!(
+        listed
+            .iter()
+            .filter(|entry| entry["tool"] == "bulk_replace_exact")
+            .count()
+            >= 2,
+        "each file in a batch needs its own receipt: {journal}"
+    );
+}
+
+#[test]
+fn stage2_capability_manifest_projects_cheaply_without_losing_the_build_stamp() {
+    // The full manifest runs to hundreds of lines, which made the orientation tool expensive enough to
+    // avoid calling. Both cheap modes must still carry the build stamp, or a cheap read reintroduces the
+    // stale-install false negative the stamp exists to prevent.
+    let root = git_repo("stage2_capability_manifest_projects_cheaply");
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capability_manifest","arguments":{"names_only":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"capability_manifest","arguments":{"section":"build"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"capability_manifest","arguments":{"section":"not_a_section"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"capability_manifest","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{}}"#,
+        ],
+    );
+
+    let names: Value = serde_json::from_str(response_text(&responses[0])).unwrap();
+    let listed = names["tool_names"].as_array().expect("tool_names array");
+    let mut schema_names = responses[4]["result"]["tools"]
+        .as_array()
+        .expect("tools/list array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name").to_string())
+        .collect::<Vec<_>>();
+    schema_names.sort();
+    let projected_names = listed
+        .iter()
+        .map(|name| name.as_str().expect("projected tool name").to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        projected_names, schema_names,
+        "names_only must come from the registered tool schemas"
+    );
+    assert!(
+        names["build"]["git_sha"].is_string(),
+        "names_only keeps the build stamp"
+    );
+
+    let section: Value = serde_json::from_str(response_text(&responses[1])).unwrap();
+    let section_object = section.as_object().expect("section projection object");
+    assert_eq!(
+        section_object.len(),
+        3,
+        "build projection must contain only server, section, and build metadata"
+    );
+    assert_eq!(section["server"], "contextpatch");
+    assert_eq!(section["section"], "build");
+    assert!(section_object["build"]["git_sha"].is_string());
+
+    // An unknown section names the valid set rather than returning a silently empty document.
+    let refusal = response_text(&responses[2]);
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert!(refusal.contains("unknown section"), "{refusal}");
+    assert!(refusal.contains("valid choices: build"), "{refusal}");
+
+    // The no-argument call keeps its full shape so existing callers are unaffected.
+    let full: Value = serde_json::from_str(response_text(&responses[3])).unwrap();
+    assert!(full["file_tools"].is_object());
+    assert!(full["process_execution"].is_object());
+    assert!(full["build"]["git_sha"].is_string());
+}
+
+#[test]
+fn stage1_mcp_initialize_carries_client_instructions() {
+    // The instructions field is what a client surfaces to the model before its first tool call, so its
+    // presence is a contract rather than a nicety. Asserted through the real handshake rather than
+    // against the constant, because the failure mode being guarded is forgetting to wire it up.
+    let root = git_repo("stage1_mcp_initialize_carries_client_instructions");
+    let responses = run_server(
+        &root,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#],
+    );
+
+    let instructions = responses[0]["result"]["instructions"]
+        .as_str()
+        .expect("initialize result must carry instructions");
+
+    assert!(
+        instructions.contains("capability_manifest"),
+        "instructions must point at the discovery tool: {instructions}"
+    );
+    assert!(
+        instructions.contains("build.git_sha"),
+        "instructions must explain how to detect a stale install: {instructions}"
+    );
+    assert!(
+        instructions.contains("read_write_receipts"),
+        "instructions must name the recovery path for an interrupted mutation: {instructions}"
+    );
+}
+
+#[test]
 fn stage1_mcp_tools_work_together() {
     let root = git_repo("stage1_mcp_tools_work_together");
     fs::write(root.join("sample.txt"), "alpha\nbeta\ngamma\n").unwrap();
@@ -39,7 +217,7 @@ fn stage1_mcp_tools_work_together() {
     );
 
     let list = &responses[0]["result"]["tools"];
-    assert_eq!(list.as_array().unwrap().len(), 48, "{list}");
+    assert_eq!(list.as_array().unwrap().len(), 49, "{list}");
     for name in [
         "capability_manifest",
         "preflight_health",
@@ -47,6 +225,7 @@ fn stage1_mcp_tools_work_together() {
         "read_write_receipts",
         "diff_preview",
         "replace_exact",
+        "bulk_replace_exact",
         "status_guard",
         "write_new_file",
         "write_new_file_base64",
@@ -96,6 +275,15 @@ fn stage1_mcp_tools_work_together() {
                 .iter()
                 .any(|tool| tool["name"] == name),
             "tools/list did not include {name}: {list}"
+        );
+    }
+    for unavailable in ["apply_patch", "insert_at_anchor"] {
+        assert!(
+            list.as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["name"] != unavailable),
+            "tools/list advertised unsupported capability {unavailable}: {list}"
         );
     }
     for tool in list.as_array().unwrap() {
@@ -171,6 +359,21 @@ fn stage1_mcp_tools_work_together() {
         .unwrap();
     assert_eq!(
         replace_exact["inputSchema"]["properties"]["expected_sha256"]["pattern"],
+        "^[0-9a-f]{64}$"
+    );
+    let bulk_replace_exact = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "bulk_replace_exact")
+        .unwrap();
+    assert_eq!(
+        bulk_replace_exact["inputSchema"]["properties"]["entries"]["maxItems"],
+        64
+    );
+    assert_eq!(
+        bulk_replace_exact["inputSchema"]["properties"]["entries"]["items"]["properties"]
+            ["expected_sha256"]["pattern"],
         "^[0-9a-f]{64}$"
     );
 

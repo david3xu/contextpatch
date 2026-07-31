@@ -11,6 +11,10 @@ pub mod artifact_write_text {
     pub const NAME: &str = "artifact_write_text";
 }
 
+pub mod bulk_replace_exact {
+    pub const NAME: &str = "bulk_replace_exact";
+}
+
 pub mod bulk_write_new_files_base64 {
     pub const NAME: &str = "bulk_write_new_files_base64";
 }
@@ -762,6 +766,7 @@ pub(crate) fn call_artifact_delete_exact(
         ));
     }
     let target = root.join(&shown);
+    inspect_exact_artifact_file(tool_name, &root, Path::new(&shown))?;
     let _target_lock =
         contextpatch_core::fs::mutation_lock::try_file_mutation_lock(repo_root, &target)
             .map_err(|error| format!("{tool_name} refused: {error}"))?;
@@ -869,6 +874,141 @@ fn inspect_exact_artifact_file(
         ));
     }
     Ok(metadata)
+}
+
+/// Validate many exact replacements before applying them one file at a time.
+///
+/// Registering a single tool in this repository takes six single-file edits: name, handler, dispatch
+/// arm, schema, module export, capability entry. Six round trips is six chances to lose the answer to a
+/// transport wedge, and losing one mid-sequence leaves a half-wired feature that compiles. This makes it
+/// one call.
+///
+/// Every entry is validated before the first write. Application is not a cross-file transaction: each
+/// file is revalidated and atomically replaced under its target lock, and a later failure can leave an
+/// applied prefix. Each attempt is journalled separately for recovery through `read_write_receipts`.
+pub(crate) fn call_bulk_replace_exact(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    struct ParsedEntry {
+        path: String,
+        old: String,
+        new: String,
+        expected_sha256: Option<String>,
+    }
+
+    let tool_name = tools::bulk_replace_exact::NAME;
+    let entries = arguments
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{tool_name} refused: entries is required"))?;
+    if entries.is_empty() {
+        return Err(format!("{tool_name} refused: entries must not be empty"));
+    }
+    if entries.len() > contextpatch_core::replace::exact::MAX_BULK_REPLACE_ENTRIES {
+        return Err(format!(
+            "{tool_name} refused: {} entries exceeds maximum {}",
+            entries.len(),
+            contextpatch_core::replace::exact::MAX_BULK_REPLACE_ENTRIES
+        ));
+    }
+
+    // Parse the complete request before core starts reading targets. This keeps malformed later entries
+    // in the same validation-before-write phase as missing anchors and stale hashes.
+    let mut parsed = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| format!("{tool_name} refused: entry {index} must be an object"))?;
+        let path = required_string(entry, "path")
+            .map_err(|error| format!("{tool_name} refused: entry {index}: {error}"))?;
+        let old = required_string(entry, "old")
+            .map_err(|error| format!("{tool_name} refused: entry {index}: {error}"))?;
+        let new = required_string(entry, "new")
+            .map_err(|error| format!("{tool_name} refused: entry {index}: {error}"))?;
+        let expected_sha256 = optional_string(entry, "expected_sha256")
+            .map_err(|error| format!("{tool_name} refused: entry {index}: {error}"))?;
+        let normalized = normalize_repo_relative_path(tool_name, path).map_err(|error| {
+            let prefix = format!("{tool_name} refused: ");
+            let detail = error.strip_prefix(&prefix).unwrap_or(&error);
+            format!("{tool_name} refused: entry {index}: {detail}")
+        })?;
+        parsed.push(ParsedEntry {
+            path: normalized,
+            old: old.to_string(),
+            new: new.to_string(),
+            expected_sha256: expected_sha256.map(str::to_string),
+        });
+    }
+
+    let core_entries: Vec<contextpatch_core::replace::exact::ReplaceExactEntry<'_>> = parsed
+        .iter()
+        .map(
+            |entry| contextpatch_core::replace::exact::ReplaceExactEntry {
+                path: Path::new(&entry.path),
+                old: &entry.old,
+                new: &entry.new,
+                expected_sha256: entry.expected_sha256.as_deref(),
+            },
+        )
+        .collect();
+    let planned = contextpatch_core::replace::exact::plan_bulk_replace_exact_in_root(
+        repo_root,
+        &core_entries,
+    )
+    .map_err(|error| {
+        format!("{tool_name} refused during validation: {error}; no file was changed")
+    })?;
+
+    let receipt_paths = parsed
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let mut receipt_batch =
+        crate::tools::journal::begin_file_batch(repo_root, tool_name, &receipt_paths).map_err(
+            |error| format!("{error}; receipt capacity was not reserved, so no file was changed"),
+        )?;
+
+    let mut applied = Vec::with_capacity(planned.len());
+    for (index, (entry, plan)) in parsed.iter().zip(&planned).enumerate() {
+        let result = crate::tools::journal::recorded_in_batch(
+            &mut receipt_batch,
+            repo_root,
+            tool_name,
+            &entry.path,
+            || {
+                contextpatch_core::replace::exact::apply_planned_replacement(repo_root, plan)
+                    .map_err(|error| format!("{tool_name} refused for `{}`: {error}", entry.path))
+            },
+        );
+        let summary = match result {
+            Ok(summary) => summary,
+            Err(error) => {
+                return Err(format!(
+                    "{tool_name} apply phase stopped at entry {index} (`{}`) after {} confirmed \
+                     entries: {error}. The batch is not rolled back; an applied prefix may remain \
+                     and the current entry's outcome may be unknown. Inspect read_write_receipts \
+                     and file_info before retrying",
+                    entry.path,
+                    applied.len()
+                ));
+            }
+        };
+        applied.push(json!({
+            "path": entry.path,
+            "start_byte": summary.start_byte,
+            "end_byte": summary.end_byte,
+            "bytes_written": summary.bytes_written
+        }));
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tool_name,
+        "applied": applied.len(),
+        "atomicity": "per_file",
+        "entries": applied
+    }))
+    .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
 fn write_artifact(
