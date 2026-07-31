@@ -42,14 +42,14 @@ Stage 1 must test these refusals:
 
 ## Stage 2: advanced edit operations
 
-| Tool | Reason for Stage 2 |
-| --- | --- |
-| `insert_at_anchor` | Useful convenience built on exact-anchor semantics |
-| `apply_patch` | More complex atomicity and partial-apply behavior |
-| `move_tracked` | Needs careful Git tracked/untracked behavior |
-| `delete_guarded` | Higher-risk destructive primitive requiring hash confirmation |
+| Tool | Reason for Stage 2 | Status |
+| --- | --- | --- |
+| `insert_at_anchor` | Useful convenience built on exact-anchor semantics | Planned |
+| `apply_patch` | More complex atomicity and partial-apply behavior | Planned |
+| `move_tracked` | Needs careful Git tracked/untracked behavior | Implemented in core and MCP |
+| `delete_guarded` | Higher-risk destructive primitive requiring hash confirmation | Implemented in core and MCP |
 
-Stage 2 should not start until Stage 1 has stable tests and docs.
+The tracked-file subset is implemented with dry-run, confirmation, path, Git-state, symlink, and hash guards. `apply_patch` and `insert_at_anchor` remain outside the advertised MCP surface.
 
 ## Stage 2A: Claude Desktop readiness and validation
 
@@ -94,9 +94,11 @@ Claude Desktop can continue real project work only if it can discover capabiliti
 | `github_pr_run` | Inspect targeted PR checks, filtered sticky comments, commit-scoped run history, and bounded run/job evidence; rerun failed jobs behind dry-run/confirmation; or create one PR through a guarded `gh` workflow |
 | `github_fork_prepare` | Prepare a GitHub fork through a dry-run/confirmation-gated `gh repo fork` workflow |
 
-Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, destructive Git operations, merge/merge-tree command exposure, broad automatic commits, generic package-manager execution, generic native-tool execution, arbitrary `gh` passthrough, generic Docker, or recursive cleanup. File inspection is bounded and read-only: metadata, one-directory listings, and byte ranges rather than general filesystem traversal. Git mutation remains split by risk boundary: `git_stage_exact` stages exact dirty paths without committing, `git_staged_scope_check` verifies staged-path policy without mutating the index, `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix` are local only, `git_restore_exact`, `delete_untracked_exact`, and `delete_generated_prefix` require exact paths or explicit prefixes plus confirmation before cleanup, `git_remote_list` is read-only remote inspection, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing. Setup support is split into `setup_profile_run`, which plans external-mutator commands from typed server-owned profiles and executes them only behind dry-run, clean-worktree, changed-path, and confirmation guards. Fixture support is split into declared-output Python generator execution, artifact-root Python scratch execution, exact base-image check execution, narrow image-cleanliness and Docker-inspect checks, sidecar artifact writes, fixture manifest integrity checks, hash-guarded existing-file synchronization, and bounded bulk create-only imports. Native build/device support is split into typed build/test validators and bounded device-smoke actions so agents do not need to know raw command syntax. GitHub support is split into PR and fork workflows with dry-run defaults and exact confirmation for mutations. Sidecar artifact writes are create-only and intentionally outside the repository tree.
+Stage 2A is implemented for the MCP server. It intentionally does not add arbitrary shell command strings, unrestricted deletion, merge/merge-tree command exposure, broad automatic commits, generic package-manager execution, generic native-tool execution, arbitrary `gh` passthrough, generic Docker, or recursive cleanup. File inspection is bounded and read-only: metadata, one-directory listings, and byte ranges rather than general filesystem traversal. Git mutation remains split by risk boundary: `git_stage_exact` stages exact dirty paths without committing, `git_staged_scope_check` verifies staged-path policy without mutating the index, `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix` are local only, `move_tracked` performs one confirmed hash-verified staged rename, `delete_guarded` performs one confirmed hash-anchored unstaged deletion, `git_restore_exact`, `delete_untracked_exact`, and `delete_generated_prefix` require exact paths or explicit prefixes plus confirmation before cleanup, `git_remote_list` is read-only remote inspection, `git_remote_check` is explicit single-branch fetch/report only, `git_branch_prepare` is clean-worktree branch setup from one remote base with explicit reset confirmation for existing branches, `git_merge_readiness` is read-only merge planning with optional single-branch fetch, and `git_push_exact` is exact current-HEAD push only with no force or multi-ref publishing. Setup support is split into `setup_profile_run`, which plans external-mutator commands from typed server-owned profiles and executes them only behind dry-run, clean-worktree, changed-path, and confirmation guards. Fixture support is split into declared-output Python generator execution, artifact-root Python scratch execution, exact base-image check execution, narrow image-cleanliness and Docker-inspect checks, sidecar artifact writes, fixture manifest integrity checks, hash-guarded existing-file synchronization, and bounded bulk create-only imports. Native build/device support is split into typed build/test validators and bounded device-smoke actions so agents do not need to know raw command syntax. GitHub support is split into PR and fork workflows with dry-run defaults and exact confirmation for mutations. Sidecar artifact writes are create-only and intentionally outside the repository tree.
 
 `preflight_health` should cover all executables used by shipped validation profiles, not only core repository tools. In particular, Dynamo/Harbor workflows need preflight visibility for `python3`, `pytest`, `harbor`, and the exact base-image `bash` script path. Missing optional validators should be reported as unavailable rather than treated as server failure, and executable resolution can include host-configured `CONTEXTPATCH_VALIDATION_PATHS`, so clients can choose a configured tool path or an environment-limited fallback without claiming full profile validation.
+
+Guarded commands retain a 120-second default and 600-second general maximum. Exact `harbor run` commands alone may use up to 3600 seconds, and the `dynamo-harbor-task` profile assigns that default to its Harbor steps while keeping its Git and base-image checks lower.
 
 ## Stage 2A-setup: profile-driven setup mutation
 
@@ -178,6 +180,6 @@ The goal is to stop guessing whether latency comes from JSON-RPC handling, proce
 - Unrestricted delete
 - Unrestricted shell execution
 - Broad or automatic Git commits
-- Git fetch/push, resets, checkouts, or stashes
+- Broad Git fetch/push, resets, checkouts, or stashes outside the explicit guarded workflows
 - Generic package-manager or scaffold execution outside declarative setup profiles
 - Generic native build, simulator, emulator, or device command execution outside typed native tools

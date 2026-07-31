@@ -27,6 +27,8 @@ This document is normative. If implementation behavior conflicts with this file,
 17. If fixture-generator execution is exposed, it must be a typed repo-relative script workflow with dry-run, confirmation, pre-existing dirty-path gates, timeout, and post-run changed-path verification.
 18. If bulk fixture import is exposed, it must be create-only, repo-root-confined, file-count and byte-count bounded, and must refuse overwrites and traversal.
 19. If a shell-script validation exception is exposed, it must be fixed to a specific repository script such as `references/check-base-image.sh`, not arbitrary shell authority.
+20. If tracked-file moves are exposed, they must require a clean tracked regular source, absent destination, clean index, dry-run, exact confirmation, and post-move hash verification.
+21. If tracked-file deletion is exposed, it must require a clean tracked regular file, exact current SHA-256, dry-run, exact confirmation, and leave a reviewable unstaged deletion.
 
 ## Required refusal cases
 
@@ -40,6 +42,8 @@ Write tools must refuse the operation when:
 6. The destination already exists for create-only directory creation.
 7. A delete request lacks the expected file hash or equivalent confirmation.
 8. Repository status violates the requested guard policy.
+9. A tracked-file move or deletion encounters a symlink component, non-regular file, untracked source, dirty source, or mismatched content hash.
+10. A tracked-file move has a pre-existing or indexed destination or a non-clean Git index.
 
 Refusals must return a clear reason. They must not pretend success.
 
@@ -57,7 +61,11 @@ If the platform cannot provide the expected atomic behavior, the operation must 
 
 ## Git guard expectation
 
-Git state is a guardrail, not a hidden side effect. Tools may inspect Git state, may run read-only Git validation commands, and may use Git for tracked moves. `git_stage_exact` is index-only: it stages explicit dirty paths after a clean-index gate, defaults to dry-run, requires exact confirmation, and must not commit. `git_staged_scope_check` is read-only: it may inspect the index and report whether staged paths match allowed exact paths/prefixes and required paths, but it must not stage, unstage, commit, fetch, push, reset, checkout, stash, clean, or modify remotes. The allowed commit workflows are `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix`: all default to dry-run, require explicit confirmation before mutation, stage only requested or prefix-expanded paths, create at most one local commit, and never push. `git_commit_exact` requires an exact complete dirty-path set. `git_commit_scoped` permits an explicit subset of dirty paths only when the index is clean, preserving unrelated dirty paths. `git_commit_prefix` expands explicit prefixes to exact dirty paths first, reports that set, and commits only that expanded set. `git_remote_list` may run only read-only remote inspection. `delete_untracked_exact` may remove only explicit untracked regular files after dry-run and confirmation. `delete_generated_prefix` may expand explicit prefixes only to ignored/untracked files and empty directories, must refuse tracked paths, and must not behave like broad `git clean`.
+Git state is a guardrail, not a hidden side effect. Tools may inspect Git state and may run read-only Git validation commands. `git_stage_exact` is index-only: it stages explicit dirty paths after a clean-index gate, defaults to dry-run, requires exact confirmation, and must not commit. `git_staged_scope_check` is read-only: it may inspect the index and report whether staged paths match allowed exact paths/prefixes and required paths, but it must not stage, unstage, commit, fetch, push, reset, checkout, stash, clean, or modify remotes. The allowed commit workflows are `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix`: all default to dry-run, require explicit confirmation before mutation, stage only requested or prefix-expanded paths, create at most one local commit, and never push. `git_commit_exact` requires an exact complete dirty-path set. `git_commit_scoped` permits an explicit subset of dirty paths only when the index is clean, preserving unrelated dirty paths. `git_commit_prefix` expands explicit prefixes to exact dirty paths first, reports that set, and commits only that expanded set. `git_remote_list` may run only read-only remote inspection. `delete_untracked_exact` may remove only explicit untracked regular files after dry-run and confirmation. `delete_generated_prefix` may expand explicit prefixes only to ignored/untracked files and empty directories, must refuse tracked paths, and must not behave like broad `git clean`.
+
+`move_tracked` may move only one clean tracked regular file to one absent untracked path with an existing in-repository parent. It must reject symlink components and pathspec metacharacters, require a clean index, default to dry-run, require `confirm: "move tracked file"` for mutation, use guarded `git mv`, and verify source absence, destination tracking, and SHA-256 preservation.
+
+`delete_guarded` may delete only one clean tracked regular worktree file whose current lowercase SHA-256 matches the caller's expected digest. It must reject symlinks and non-regular files, default to dry-run, require `confirm: "delete tracked file"` for mutation, recheck the digest immediately before removal, preserve the index entry, and verify an unstaged tracked deletion.
 
 Remote Git authority is intentionally split. `git_remote_check` may fetch exactly one explicit remote branch and report local/remote divergence without changing source files. `git_branch_prepare` may fetch exactly one explicit remote base branch, create or switch to one validated local branch from that base, and reset an existing local branch only when the worktree is clean and `confirm: "reset branch from remote base"` is supplied. `git_merge_readiness` may optionally fetch one explicit remote branch, then run read-only merge-base, rev-count, and diff-name queries to identify files changed on both sides of two validated refs. `git_push_exact` may push only the current `HEAD` to the matching named remote branch after verifying a clean worktree, current branch match, expected HEAD hash, no remote-ahead divergence, and explicit `confirm: "push exact commit"`. Tools must not expose broad reset, checkout, merge, merge-tree through generic command execution, rebase, stash, clean, force-push, push tags, push multiple refs, delete refs, or discard user work outside those explicit branch-prep reset guards.
 
@@ -82,7 +90,7 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 1. Accept a program name plus argument array, never a shell command string.
 2. Resolve the working directory inside the configured repository root.
 3. Allow only documented validation-oriented programs and subcommands.
-4. Time out rather than running indefinitely.
+4. Time out rather than running indefinitely. The default is 120 seconds and the general maximum is 600 seconds; only exact `harbor run` commands may use the narrow 3600-second ceiling.
 5. Return command, cwd, allowlist rule, exit code, timeout state, duration, stdout, and stderr.
 6. Drain stdout and stderr concurrently so child processes cannot deadlock on full pipes.
 7. Redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large output.

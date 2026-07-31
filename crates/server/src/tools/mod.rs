@@ -20,9 +20,10 @@ pub use fixtures::{
     base_image_check_run, fixture_generator_run, fixture_manifest_refresh, fixture_manifest_verify,
 };
 pub use git::{
-    delete_generated_prefix, delete_untracked_exact, git_branch_prepare, git_commit_exact,
-    git_commit_prefix, git_commit_scoped, git_merge_readiness, git_push_exact, git_remote_check,
-    git_remote_list, git_restore_exact, git_stage_exact, git_staged_scope_check,
+    delete_generated_prefix, delete_guarded, delete_untracked_exact, git_branch_prepare,
+    git_commit_exact, git_commit_prefix, git_commit_scoped, git_merge_readiness, git_push_exact,
+    git_remote_check, git_remote_list, git_restore_exact, git_stage_exact, git_staged_scope_check,
+    move_tracked,
 };
 pub use github::{github_fork_prepare, github_pr_run};
 pub use native::{native_build_run, native_device_run};

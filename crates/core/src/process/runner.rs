@@ -186,10 +186,17 @@ pub(crate) fn resolve_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf, Co
 }
 
 pub(crate) fn checked_timeout(timeout_secs: Option<u64>) -> Result<Duration, ContextPatchError> {
+    checked_timeout_with_max(timeout_secs, MAX_TIMEOUT_SECS)
+}
+
+pub(crate) fn checked_timeout_with_max(
+    timeout_secs: Option<u64>,
+    max_timeout_secs: u64,
+) -> Result<Duration, ContextPatchError> {
     let timeout_secs = timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
-    if timeout_secs == 0 || timeout_secs > MAX_TIMEOUT_SECS {
+    if timeout_secs == 0 || timeout_secs > max_timeout_secs {
         return Err(ContextPatchError::new(format!(
-            "timeout_secs must be between 1 and {MAX_TIMEOUT_SECS}"
+            "timeout_secs must be between 1 and {max_timeout_secs}"
         )));
     }
     Ok(Duration::from_secs(timeout_secs))

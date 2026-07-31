@@ -146,6 +146,8 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `git_commit_scoped`
 - `git_commit_prefix`
 - `git_restore_exact`
+- `move_tracked`
+- `delete_guarded`
 - `delete_untracked_exact`
 - `delete_generated_prefix`
 - `git_remote_list`
@@ -158,7 +160,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 
 Each advertised tool includes MCP annotations intended to let Claude Desktop offer persistent "always allow" approval instead of only "allow once." If Claude still only shows one-time approval, restart Claude Desktop after rebuilding the server and confirm the configuration points at the new binary.
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all forty-three tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all forty-six tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -177,6 +179,9 @@ The current server exposes the implemented safe primitives:
 - `write_new_file`
 - `write_new_file_base64`
 - `write_existing_file_exact_hash`
+- `file_info`
+- `list_directory`
+- `read_file_bytes`
 - `artifact_write_text`
 - `artifact_write_base64`
 - `bulk_write_new_files_base64`
@@ -184,6 +189,9 @@ The current server exposes the implemented safe primitives:
 - `capability_manifest`
 - `preflight_health`
 - `run_guarded_command`
+- `artifact_python_run`
+- `image_cleanliness_check_run`
+- `docker_image_inspect`
 - `fixture_generator_run`
 - `base_image_check_run`
 - `fixture_manifest_verify`
@@ -194,9 +202,13 @@ The current server exposes the implemented safe primitives:
 - `native_build_run`
 - `native_device_run`
 - `git_commit_exact`
+- `git_stage_exact`
+- `git_staged_scope_check`
 - `git_commit_scoped`
 - `git_commit_prefix`
 - `git_restore_exact`
+- `move_tracked`
+- `delete_guarded`
 - `delete_untracked_exact`
 - `delete_generated_prefix`
 - `git_remote_list`
@@ -207,9 +219,9 @@ The current server exposes the implemented safe primitives:
 - `github_pr_run`
 - `github_fork_prepare`
 
-Other documented boundary tools remain roadmap items until implemented.
+Other documented boundary tools, including `apply_patch` and `insert_at_anchor`, remain roadmap items until implemented.
 
-`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary. Project validation can also run repo-relative Python scripts (`python3 scripts/name.py`), `pytest`, `harbor run`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` scripts through `base_image_check_run`; `pip`, Docker, arbitrary `python -m`, arbitrary shell scripts, and shell command strings remain refused.
+`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. It defaults to 120 seconds and remains capped at 600 seconds except for exact `harbor run` commands, which may use up to 3600 seconds. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary. Project validation can also run repo-relative Python scripts (`python3 scripts/name.py`), `pytest`, `harbor run`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` scripts through `base_image_check_run`; `pip`, Docker, arbitrary `python -m`, arbitrary shell scripts, and shell command strings remain refused.
 
 Use `fixture_generator_run` for Dynamo-style fixture creation when the generator should live temporarily inside the repo. The tool runs a repo-relative `.py` script with `python3`, defaults to dry-run, requires `confirm: "run fixture generator"` for execution, allows only declared pre-existing dirty paths, and refuses if the generator leaves changes outside `expected_output_paths` or `expected_output_prefixes`. Afterward, delete the temporary generator with `delete_untracked_exact` before committing if it should not be submitted.
 
@@ -244,6 +256,10 @@ Use `git_commit_prefix` when many dirty fixture or generated files live under kn
 Commit messages should not include Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for that attribution for the specific commit. Treat authored code and commit messages as project-owned work by the configured repository user.
 
 Use `git_restore_exact` to remove generated tracked dirty paths before an exact commit without exposing broad reset, checkout, clean, or stash behavior. It defaults to dry-run, requires `confirm: "restore exact paths"` for mutation, restores only explicit currently-dirty tracked paths from `HEAD`, and reports any remaining dirty paths.
+
+Use `move_tracked` to rename one clean tracked regular file without broad `git mv` access. It defaults to dry-run, requires an absent untracked destination with an existing in-repository parent and a clean index, requires `confirm: "move tracked file"` for mutation, and verifies the destination remains tracked with the same SHA-256.
+
+Use `delete_guarded` to remove one obsolete tracked regular file. Supply its current lowercase SHA-256, review the dry-run, then use `confirm: "delete tracked file"`; the tool refuses dirty, untracked, symlink, and hash-mismatched targets and leaves the deletion unstaged for review.
 
 Use `delete_generated_prefix` for ignored/untracked generated output and empty directories under known prefixes when explicit file deletion would be too brittle. Review the dry-run `would_delete_files` and `would_delete_empty_or_ignored_dirs` lists first. Execution requires `confirm: "delete generated paths"` and refuses tracked paths instead of behaving like `git clean`.
 

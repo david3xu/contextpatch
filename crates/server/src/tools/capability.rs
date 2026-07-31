@@ -50,6 +50,8 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
             "git_stage_exact": true,
             "git_staged_scope_check": true,
             "git_restore_exact": true,
+            "move_tracked": true,
+            "delete_guarded": true,
             "delete_untracked_exact": true,
             "delete_generated_prefix": true,
             "git_remote_list": true,
@@ -72,6 +74,8 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
             "stage_exact_paths_without_commit": true,
             "staged_scope_check": true,
             "restore_exact_paths": true,
+            "move_clean_tracked_file": true,
+            "delete_clean_tracked_file_exact_hash": true,
             "delete_untracked_exact_paths": true,
             "delete_generated_prefix_paths": true,
             "remote_list": true,
@@ -90,6 +94,8 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
                 "defaults to dry_run",
                 "requires confirm literal for mutation",
                 "restores only explicit dirty paths from HEAD",
+                "tracked moves require a clean source and index, absent destination, dry-run, and exact confirmation",
+                "tracked deletion requires a clean regular file, exact current SHA-256, dry-run, and exact confirmation",
                 "generated cleanup expands explicit prefixes to ignored/untracked files and empty dirs",
                 "stages only explicit paths",
                 "creates at most one local commit",
@@ -134,6 +140,9 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
         "process_execution": {
             "available": true,
             "mode": "allowlisted_no_shell",
+            "default_timeout_secs": 120,
+            "default_max_timeout_secs": 600,
+            "harbor_run_max_timeout_secs": 3600,
             "programs": {
                 "git": ["status", "diff", "log", "show", "rev-parse", "ls-tree"],
                 "cargo": ["check", "test", "build", "clippy"],
@@ -423,6 +432,7 @@ pub(crate) fn call_preflight_health(repo_root: &Path) -> Result<String, String> 
             "mode": "allowlisted_no_shell",
             "default_timeout_secs": 120,
             "max_timeout_secs": 600,
+            "harbor_run_max_timeout_secs": 3600,
             "configured_validation_paths_env": "CONTEXTPATCH_VALIDATION_PATHS"
         },
         "tools": {

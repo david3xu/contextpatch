@@ -13,7 +13,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `replace_exact` | Yes | Old text must match exactly once |
 | `apply_patch` | Yes | Unified patch context must apply cleanly |
 | `insert_at_anchor` | Yes | Anchor must match exactly once |
-| `move_tracked` | Yes | Source exists, destination absent, Git state visible |
+| `move_tracked` | Yes | Clean tracked regular source, absent destination, clean index, dry-run and confirmation |
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
 | `write_new_file_base64` | Yes | Destination must not exist; base64 decoded bytes with optional expected size |
@@ -53,7 +53,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `git_push_exact` | Remote branch update | Clean worktree, exact HEAD, no remote-ahead divergence, explicit confirmation, no force |
 | `github_pr_run` | GitHub mutation for PR creation only | `gh`-backed auth/PR/check/run/job-log evidence plus confirmation-gated PR creation |
 | `github_fork_prepare` | GitHub fork mutation | `gh repo fork` plan by default, explicit confirmation for mutation |
-| `delete_guarded` | Yes | Expected hash/path confirmation |
+| `delete_guarded` | Yes | Clean tracked regular file, exact current SHA-256, dry-run and confirmation |
 
 ## Naming
 
@@ -219,12 +219,19 @@ Required inputs:
 - `from`
 - `to`
 
+Optional inputs:
+
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `move tracked file` when `dry_run` is `false`
+
 Rules:
 
-- Refuse if source is missing.
-- Refuse if destination exists.
-- Prefer `git mv` when the source is tracked.
-- Do not overwrite destination paths.
+- Require normalized repository-relative paths under the configured Git worktree root.
+- Require the source to be a clean tracked regular file with no symlink path components.
+- Require an absent, untracked destination whose parent already exists inside the repository and has no symlink path components.
+- Require a clean Git index so the staged rename cannot mix with pre-existing staged work.
+- Refuse mutation without the exact confirmation literal.
+- Use `git mv`, then verify the source is absent, the destination is tracked, and its SHA-256 matches the source.
 
 ### `status_guard`
 
@@ -480,7 +487,7 @@ Required inputs:
 Optional inputs:
 
 - `cwd`: working directory relative to the configured repository root
-- `timeout_secs`: timeout in seconds, from 1 to 600
+- `timeout_secs`: timeout in seconds, from 1 to 3600 for exact `harbor run`; all other commands remain limited to 600
 
 Rules:
 
@@ -498,6 +505,7 @@ Rules:
   - `harbor`: `run`
   - `bash`: exactly `references/check-base-image.sh` or `references/check-base-image.sh task`
   - `rg`: search invocation
+- The default timeout is 120 seconds. Exact `harbor run` commands may use up to 3600 seconds; every other allowlisted command remains capped at 600 seconds.
 - Arguments that directly reference paths outside the repository root must be refused.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
@@ -709,6 +717,7 @@ Rules:
 
 - Profiles must be explicit server-owned command lists, not user-supplied shell snippets.
 - Each command must pass the same `run_guarded_command` allowlist, cwd, timeout, and redaction rules.
+- The `dynamo-harbor-task` profile assigns 3600-second defaults to its exact `harbor run` steps while retaining lower defaults for Git and base-image checks. A caller-supplied profile-wide override remains limited to 600 seconds.
 - The first response should be compact: per-command status, duration, timeout state, and log id.
 - Full command output should be retrieved with `read_command_log` only when needed.
 - Profiles may use executable resolution from `CONTEXTPATCH_VALIDATION_PATHS` through the guarded runner; callers cannot pass environment overrides per request.
@@ -1220,19 +1229,27 @@ Rules:
 
 ### `delete_guarded`
 
-Deletes a file only with explicit confirmation.
+Deletes one clean tracked regular file only when its current SHA-256 matches exactly.
 
 Required inputs:
 
 - `path`
-- expected file hash or equivalent exact confirmation
+- `expected_sha256`: lowercase 64-character SHA-256 of the current content
+
+Optional inputs:
+
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `delete tracked file` when `dry_run` is `false`
 
 Rules:
 
-- Refuse directories.
-- Refuse missing confirmation.
-- Refuse hash mismatch.
-- Report the deleted path.
+- Require a normalized repository-relative path under the configured Git worktree root.
+- Refuse missing, untracked, dirty, non-regular, or symlink targets and symlink path components.
+- Refuse malformed or mismatched SHA-256 values.
+- Refuse mutation without the exact confirmation literal.
+- Recheck the hash immediately before removal.
+- Remove only the worktree file, preserve the index entry, and verify the result is an unstaged tracked deletion.
+- Report the deleted path and verified SHA-256.
 
 ## Current MCP implementation subset
 
@@ -1270,17 +1287,19 @@ The server currently ships:
 30. `git_commit_scoped`
 31. `git_commit_prefix`
 32. `git_restore_exact`
-33. `delete_untracked_exact`
-34. `delete_generated_prefix`
-35. `git_remote_list`
-36. `git_remote_check`
-37. `git_branch_prepare`
-38. `git_merge_readiness`
-39. `git_push_exact`
-40. `github_pr_run`
-41. `github_fork_prepare`
-42. `setup_profile_run`
-43. `native_build_run`
-44. `native_device_run`
+33. `move_tracked`
+34. `delete_guarded`
+35. `delete_untracked_exact`
+36. `delete_generated_prefix`
+37. `git_remote_list`
+38. `git_remote_check`
+39. `git_branch_prepare`
+40. `git_merge_readiness`
+41. `git_push_exact`
+42. `github_pr_run`
+43. `github_fork_prepare`
+44. `setup_profile_run`
+45. `native_build_run`
+46. `native_device_run`
 
-Other documented boundary tools, such as `apply_patch` and `delete_guarded`, remain planned until implemented. See `docs/implementation-roadmap.md`.
+Other documented boundary tools, such as `apply_patch` and `insert_at_anchor`, remain planned until implemented. See `docs/implementation-roadmap.md`.

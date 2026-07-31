@@ -5,6 +5,62 @@ use crate::tools;
 pub(crate) fn definitions() -> Vec<Value> {
     vec![
         json!({
+                    "name": tools::move_tracked::NAME,
+                    "description": "Dry-run or move one clean tracked regular file to an absent repository path with Git index and hash-preservation guards.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "from": {
+                                "type": "string",
+                                "description": "Existing clean tracked regular file path relative to the repository root."
+                            },
+                            "to": {
+                                "type": "string",
+                                "description": "Absent destination file path with an existing in-repository parent."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without moving. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `move tracked file` when dry_run is false."
+                            }
+                        },
+                        "required": ["from", "to"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::delete_guarded::NAME,
+                    "description": "Dry-run or delete one clean tracked regular file only when its current SHA-256 matches exactly, leaving an unstaged Git deletion.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Existing clean tracked regular file path relative to the repository root."
+                            },
+                            "expected_sha256": {
+                                "type": "string",
+                                "description": "Lowercase SHA-256 hex digest of the current file content."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and preview without deleting. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `delete tracked file` when dry_run is false."
+                            }
+                        },
+                        "required": ["path", "expected_sha256"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::git_commit_exact::NAME,
                     "description": "Dry-run or create one local Git commit from an exact full dirty-path set. Never pushes.",
                     "inputSchema": {

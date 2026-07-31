@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+sha2 = "0.10"
 
 [lib]
 name = "contextpatch_core"

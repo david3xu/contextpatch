@@ -1,3 +1,7 @@
+pub mod delete_guarded {
+    pub const NAME: &str = "delete_guarded";
+}
+
 pub mod delete_untracked_exact {
     pub const NAME: &str = "delete_untracked_exact";
 }
@@ -48,4 +52,8 @@ pub mod git_stage_exact {
 
 pub mod git_staged_scope_check {
     pub const NAME: &str = "git_staged_scope_check";
+}
+
+pub mod move_tracked {
+    pub const NAME: &str = "move_tracked";
 }

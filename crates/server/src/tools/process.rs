@@ -302,6 +302,7 @@ pub(crate) fn call_validation_profile_run(
     for (index, command) in commands.iter().enumerate() {
         ran += 1;
         let timeout_secs = timeout_override.or(command.timeout_secs);
+        let effective_timeout_secs = timeout_secs.unwrap_or(120);
         let output = run_guarded_command(
             repo_root,
             command.cwd.map(Path::new),
@@ -345,7 +346,7 @@ pub(crate) fn call_validation_profile_run(
             }
         }
         lines.push(format!(
-            "{}. {} | exit_code: {exit_code} | timed_out: {timed_out} | duration_ms: {duration_ms} | log_id: {log_id}",
+            "{}. {} | timeout_secs: {effective_timeout_secs} | exit_code: {exit_code} | timed_out: {timed_out} | duration_ms: {duration_ms} | log_id: {log_id}",
             index + 1,
             command.display()
         ));
@@ -480,25 +481,25 @@ fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, String> {
                 program: "harbor",
                 args: vec!["run", "-p", "task", "--agent", "oracle"],
                 cwd: None,
-                timeout_secs: Some(600),
+                timeout_secs: Some(3600),
             },
             ProfileCommand {
                 program: "harbor",
                 args: vec!["run", "-p", "task", "--agent", "nop"],
                 cwd: None,
-                timeout_secs: Some(600),
+                timeout_secs: Some(3600),
             },
             ProfileCommand {
                 program: "harbor",
                 args: vec!["run", "-p", "task", "--agent", "oracle"],
                 cwd: None,
-                timeout_secs: Some(600),
+                timeout_secs: Some(3600),
             },
             ProfileCommand {
                 program: "harbor",
                 args: vec!["run", "-p", "task", "--agent", "nop"],
                 cwd: None,
-                timeout_secs: Some(600),
+                timeout_secs: Some(3600),
             },
         ]),
         _ => Err(format!(

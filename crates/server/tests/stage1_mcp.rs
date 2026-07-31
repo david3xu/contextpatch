@@ -75,6 +75,8 @@ fn stage1_mcp_tools_work_together() {
         "git_stage_exact",
         "git_staged_scope_check",
         "git_restore_exact",
+        "move_tracked",
+        "delete_guarded",
         "delete_untracked_exact",
         "delete_generated_prefix",
         "git_remote_list",
@@ -127,6 +129,26 @@ fn stage1_mcp_tools_work_together() {
             .unwrap();
         assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
     }
+    let guarded_command = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "run_guarded_command")
+        .unwrap();
+    assert_eq!(
+        guarded_command["inputSchema"]["properties"]["timeout_secs"]["maximum"],
+        3600
+    );
+    let validation_profile = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "validation_profile_run")
+        .unwrap();
+    assert_eq!(
+        validation_profile["inputSchema"]["properties"]["timeout_secs"]["maximum"],
+        600
+    );
 
     assert_text(&responses[1], "clean: no Git changes under sample.txt");
     assert_text(&responses[2], "2. beta\n3. gamma\n");
@@ -662,6 +684,73 @@ fn stage2_git_restore_exact_restores_only_requested_tracked_dirty_paths() {
 }
 
 #[test]
+fn stage2_move_and_delete_tracked_files_are_dry_run_hash_and_confirmation_guarded() {
+    let root =
+        git_repo("stage2_move_and_delete_tracked_files_are_dry_run_hash_and_confirmation_guarded");
+    fs::create_dir(root.join("archive")).unwrap();
+    fs::write(root.join("move.txt"), "move me\n").unwrap();
+    fs::write(root.join("obsolete.txt"), "delete me\n").unwrap();
+    fs::write(root.join("dirty.txt"), "base\n").unwrap();
+    git(&root, &["add", "move.txt", "obsolete.txt", "dirty.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("dirty.txt"), "changed\n").unwrap();
+    fs::write(root.join("untracked.txt"), "untracked\n").unwrap();
+
+    let delete_sha = sha256_hex_for_test(b"delete me\n");
+    let untracked_sha = sha256_hex_for_test(b"untracked\n");
+    let delete_mismatch = "0".repeat(64);
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"move_tracked","arguments":{"from":"move.txt","to":"archive/moved.txt"}}}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"move_tracked","arguments":{"from":"move.txt","to":"archive/moved.txt","dry_run":false}}}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"move_tracked","arguments":{"from":"move.txt","to":"archive/moved.txt","dry_run":false,"confirm":"move tracked file"}}}"#.to_string(),
+        format!(
+            r#"{{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{{"name":"delete_guarded","arguments":{{"path":"obsolete.txt","expected_sha256":"{delete_mismatch}"}}}}}}"#
+        ),
+        format!(
+            r#"{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"delete_guarded","arguments":{{"path":"obsolete.txt","expected_sha256":"{delete_sha}","dry_run":false}}}}}}"#
+        ),
+        format!(
+            r#"{{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{{"name":"delete_guarded","arguments":{{"path":"obsolete.txt","expected_sha256":"{delete_sha}","dry_run":false,"confirm":"delete tracked file"}}}}}}"#
+        ),
+        r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"move_tracked","arguments":{"from":"dirty.txt","to":"archive/dirty.txt"}}}"#.to_string(),
+        format!(
+            r#"{{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{{"name":"delete_guarded","arguments":{{"path":"untracked.txt","expected_sha256":"{untracked_sha}"}}}}}}"#
+        ),
+    ];
+    let request_refs = requests.iter().map(String::as_str).collect::<Vec<_>>();
+    let responses = run_server(&root, &request_refs);
+
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "\"moved\": false");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "requires confirm");
+    assert_text(&responses[2], "\"moved\": true");
+    assert!(!root.join("move.txt").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("archive/moved.txt")).unwrap(),
+        "move me\n"
+    );
+
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "hash mismatch");
+    assert_eq!(responses[4]["result"]["isError"], true);
+    assert_text(&responses[4], "requires confirm");
+    assert_text(&responses[5], "\"deleted\": true");
+    assert!(!root.join("obsolete.txt").exists());
+    assert_eq!(responses[6]["result"]["isError"], true);
+    assert_text(&responses[6], "must be clean");
+    assert_eq!(responses[7]["result"]["isError"], true);
+    assert_text(&responses[7], "not tracked");
+    assert!(root.join("untracked.txt").exists());
+
+    let status = git_stdout(&root, &["status", "--short"]);
+    assert!(status.contains("move.txt -> archive/moved.txt"));
+    assert!(status.contains(" D obsolete.txt"));
+    assert!(status.contains(" M dirty.txt"));
+    assert!(status.contains("?? untracked.txt"));
+}
+
+#[test]
 fn stage2_delete_generated_prefix_dry_run_matches_only_generated_paths() {
     let root = git_repo("stage2_delete_generated_prefix_dry_run_matches_only_generated_paths");
     fs::create_dir_all(root.join("task/tests/__pycache__")).unwrap();
@@ -972,7 +1061,11 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"fixture_manifest_verify\"");
     assert_text(&responses[0], "\"fixture_manifest_refresh\"");
     assert_text(&responses[0], "\"dynamo-harbor-task\"");
+    assert_text(&responses[0], "\"move_tracked\": true");
+    assert_text(&responses[0], "\"delete_guarded\": true");
+    assert_text(&responses[0], "\"harbor_run_max_timeout_secs\": 3600");
     assert_text(&responses[0], "\"action\": \"ios_build\"");
+    assert_text(&responses[1], "\"harbor_run_max_timeout_secs\": 3600");
     assert_text(&responses[0], "\"action\": \"android_read_logcat\"");
     assert_text(&responses[1], "\"guarded_process_execution\"");
     assert_text(&responses[1], "\"validation_tools\"");
@@ -1501,7 +1594,10 @@ fn stage2_dynamo_harbor_profile_reports_structured_rewards() {
             ("PATH", test_path),
         ],
         &[
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validation_profile_run","arguments":{"profile":"dynamo-harbor-task","timeout_secs":30}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validation_profile_run","arguments":{"profile":"dynamo-harbor-task"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"harbor","args":["run"],"timeout_secs":3600}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["status"],"timeout_secs":601}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"harbor","args":["run"],"timeout_secs":3601}}}"#,
         ],
     );
 
@@ -1515,6 +1611,20 @@ fn stage2_dynamo_harbor_profile_reports_structured_rewards() {
     assert_text(&responses[0], "\"oracle_deterministic\":true");
     assert_text(&responses[0], "\"nop_deterministic\":true");
     assert_text(&responses[0], "\"passed\":true");
+    assert_text(
+        &responses[0],
+        "bash \"references/check-base-image.sh\" task | timeout_secs: 600",
+    );
+    assert_text(
+        &responses[0],
+        "harbor run -p task --agent oracle | timeout_secs: 3600",
+    );
+    assert_text(&responses[1], "allowlist: harbor/run");
+    assert_text(&responses[1], "exit_code: 0");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "between 1 and 600");
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "between 1 and 3600");
 }
 
 #[test]

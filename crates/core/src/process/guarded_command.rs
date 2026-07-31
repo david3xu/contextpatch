@@ -2,9 +2,12 @@ use std::path::Path;
 
 use crate::error::ContextPatchError;
 use crate::process::runner::{
-    checked_timeout, display_command, resolve_cwd, resolve_program, run_no_shell_command,
+    checked_timeout_with_max, display_command, resolve_cwd, resolve_program, run_no_shell_command,
     validate_common_command_shape,
 };
+
+const DEFAULT_MAX_TIMEOUT_SECS: u64 = 600;
+const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
 
 pub fn run_guarded_command(
     repo_root: &Path,
@@ -20,9 +23,9 @@ pub fn run_guarded_command(
         ))
     })?;
     let cwd = resolve_cwd(&root, cwd)?;
-    let timeout = checked_timeout(timeout_secs)?;
 
     validate_command(program, args)?;
+    let timeout = checked_command_timeout(program, args, timeout_secs)?;
     let output = run_no_shell_command(&cwd, program, args, timeout, "guarded command")?;
 
     Ok(format!(
@@ -36,6 +39,19 @@ pub fn run_guarded_command(
         output.stdout,
         output.stderr
     ))
+}
+
+fn checked_command_timeout(
+    program: &str,
+    args: &[String],
+    timeout_secs: Option<u64>,
+) -> Result<std::time::Duration, ContextPatchError> {
+    let max_timeout_secs = if program == "harbor" && args.first().is_some_and(|arg| arg == "run") {
+        HARBOR_RUN_MAX_TIMEOUT_SECS
+    } else {
+        DEFAULT_MAX_TIMEOUT_SECS
+    };
+    checked_timeout_with_max(timeout_secs, max_timeout_secs)
 }
 
 pub fn resolve_guarded_program(program: &str) -> Option<std::path::PathBuf> {
@@ -128,7 +144,9 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{redact_and_truncate_output, run_guarded_command, validate_command};
+    use super::{
+        checked_command_timeout, redact_and_truncate_output, run_guarded_command, validate_command,
+    };
     use crate::process::runner::redact_line;
 
     #[test]
@@ -170,6 +188,22 @@ mod tests {
             run_guarded_command(&root, None, "git", &["reset".to_string()], Some(30)).unwrap_err();
 
         assert!(error.to_string().contains("not allowlisted"));
+    }
+
+    #[test]
+    fn extends_timeout_only_for_harbor_run() {
+        let harbor_args = ["run".to_string()];
+        assert!(checked_command_timeout("harbor", &harbor_args, Some(3600)).is_ok());
+        assert!(checked_command_timeout("harbor", &harbor_args, Some(3601))
+            .unwrap_err()
+            .to_string()
+            .contains("between 1 and 3600"));
+
+        let git_args = ["status".to_string()];
+        assert!(checked_command_timeout("git", &git_args, Some(601))
+            .unwrap_err()
+            .to_string()
+            .contains("between 1 and 600"));
     }
 
     #[test]

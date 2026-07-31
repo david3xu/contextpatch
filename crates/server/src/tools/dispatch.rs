@@ -98,6 +98,10 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
         tools::git_restore_exact::NAME => {
             tools::git::handlers::call_git_restore_exact(repo_root, &arguments)
         }
+        tools::move_tracked::NAME => tools::git::handlers::call_move_tracked(repo_root, &arguments),
+        tools::delete_guarded::NAME => {
+            tools::git::handlers::call_delete_guarded(repo_root, &arguments)
+        }
         tools::delete_untracked_exact::NAME => {
             tools::git::handlers::call_delete_untracked_exact(repo_root, &arguments)
         }

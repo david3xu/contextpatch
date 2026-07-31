@@ -28,8 +28,8 @@ pub(crate) fn definitions() -> Vec<Value> {
                             "timeout_secs": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 600,
-                                "description": "Optional timeout in seconds. Defaults to 120, maximum 600."
+                                "maximum": 3600,
+                                "description": "Optional timeout in seconds. Defaults to 120. Exact harbor run commands may use up to 3600; all other commands remain capped at 600."
                             }
                         },
                         "required": ["program", "args"],
@@ -176,7 +176,7 @@ pub(crate) fn definitions() -> Vec<Value> {
                                 "type": "integer",
                                 "minimum": 1,
                                 "maximum": 600,
-                                "description": "Optional per-command timeout. Defaults to each profile command timeout."
+                                "description": "Optional per-command timeout override up to 600. Defaults to each profile command timeout; Dynamo Harbor commands default to 3600."
                             },
                             "stop_on_failure": {
                                 "type": "boolean",
