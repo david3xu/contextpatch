@@ -6,13 +6,13 @@ pub(crate) fn definitions() -> Vec<Value> {
     vec![
         json!({
                     "name": tools::github_pr_run::NAME,
-                    "description": "Run narrow GitHub review workflows through gh: auth status, PR view/checks, Actions run/job evidence, or confirmation-gated PR creation.",
+                    "description": "Run narrow GitHub review workflows through gh: auth status, PR view/checks/comments, commit-scoped Actions run discovery, run/job evidence, guarded reruns, or confirmation-gated PR creation.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["auth_status", "pr_view", "pr_checks", "workflow_run_view", "workflow_job_log", "workflow_run_rerun_failed", "pr_create"],
+                                "enum": ["auth_status", "pr_view", "pr_comments", "pr_checks", "workflow_runs_for_commit", "workflow_run_view", "workflow_job_log", "workflow_run_rerun_failed", "pr_create"],
                                 "description": "GitHub workflow action."
                             },
                             "number": {
@@ -34,6 +34,23 @@ pub(crate) fn definitions() -> Vec<Value> {
                                 "type": "integer",
                                 "minimum": 1,
                                 "description": "Workflow job database ID for workflow_job_log."
+                            },
+                            "head_sha": {
+                                "type": "string",
+                                "pattern": "^[A-Fa-f0-9]{40}$",
+                                "description": "Full commit SHA for workflow_runs_for_commit."
+                            },
+                            "comment_contains": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256,
+                                "description": "Optional case-insensitive marker used to filter pr_comments locally, such as `pass@2` or `Rerun Recommended`."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 100,
+                                "description": "Maximum results for pr_comments (default 20, maximum 100) or workflow_runs_for_commit (default 20, maximum 50)."
                             },
                             "base": {
                                 "type": "string",

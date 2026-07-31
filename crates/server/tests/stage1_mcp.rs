@@ -960,7 +960,9 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"tool\": \"native_device_run\"");
     assert_text(&responses[0], "\"github_workflows\"");
     assert_text(&responses[0], "\"pr_create\"");
+    assert_text(&responses[0], "\"pr_comments\"");
     assert_text(&responses[0], "\"workflow_job_log\"");
+    assert_text(&responses[0], "\"workflow_runs_for_commit\"");
     assert_text(&responses[0], "\"repository_targeting\"");
     assert_text(&responses[0], "\"github_fork_prepare\"");
     assert_text(&responses[0], "\"fixture_generator_run\"");
@@ -1025,9 +1027,12 @@ fn stage2_github_workflows_target_upstream_and_read_execution_evidence() {
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"workflow_run_rerun_failed","run_id":12345,"repository":"upstream/project"}}}"#,
             r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"workflow_run_rerun_failed","run_id":12345,"repository":"upstream/project","dry_run":false,"confirm":"wrong"}}}"#,
             r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"workflow_run_rerun_failed","run_id":12345,"repository":"upstream/project","dry_run":false,"confirm":"rerun failed workflow jobs"}}}"#,
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"workflow_runs_for_commit","head_sha":"0123456789abcdef0123456789abcdef01234567","limit":10,"repository":"upstream/project"}}}"#,
+            r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"workflow_runs_for_commit","head_sha":"efacda3","repository":"upstream/project"}}}"#,
         ],
     );
 
+    assert_text(&responses[0], "headRefOid");
     assert_text(&responses[0], "comments,reviews,statusCheckRollup");
     assert_text(&responses[0], "--repo\\nupstream/project");
     assert_text(
@@ -1053,6 +1058,59 @@ fn stage2_github_workflows_target_upstream_and_read_execution_evidence() {
     assert_text(&responses[7], "confirm must be");
     assert_text(&responses[8], "rerun\\n12345\\n--failed");
     assert_text(&responses[8], "[redacted potential secret line]");
+    assert_text(
+        &responses[9],
+        "list\\n--commit\\n0123456789abcdef0123456789abcdef01234567",
+    );
+    assert_text(&responses[9], "--limit\\n10");
+    assert_text(&responses[9], "--repo\\nupstream/project");
+    assert_eq!(responses[10]["result"]["isError"], true);
+    assert_text(&responses[10], "full 40-character hexadecimal commit SHA");
+}
+
+#[test]
+fn stage2_github_workflows_filter_sticky_pr_comments() {
+    let root = git_repo("stage2_github_workflows_filter_sticky_comments");
+    let bin = temp_root("stage2_github_workflows_filter_sticky_comments_bin");
+    fs::write(
+        bin.join("gh"),
+        r#"#!/bin/sh
+cat <<'EOF'
+{"comments":[{"author":{"login":"bot"},"body":"pass@5 old difficulty finding","createdAt":"2026-07-01T00:00:00Z","url":"https://example.test/old"},{"author":{"login":"other"},"body":"unrelated note","createdAt":"2026-07-30T00:00:00Z","url":"https://example.test/unrelated"},{"author":{"login":"bot"},"body":"pass@2 infrastructure error; Rerun Recommended: YES","createdAt":"2026-07-31T00:00:00Z","url":"https://example.test/new"}]}
+EOF
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(bin.join("gh")).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(bin.join("gh"), permissions).unwrap();
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let test_path = format!("{}:{original_path}", bin.display());
+    let responses = run_server_with_env(
+        &root,
+        &[("PATH", test_path)],
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"pr_comments","number":22,"repository":"upstream/project","comment_contains":"pass@","limit":1}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"pr_comments","number":22,"comment_contains":"  "}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"pr_comments","number":22,"limit":101}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\\\"matched_count\\\": 2");
+    assert_text(&responses[0], "\\\"returned_count\\\": 1");
+    assert_text(&responses[0], "pass@2 infrastructure error");
+    assert!(!response_text(&responses[0]).contains("pass@5 old"));
+    assert!(!response_text(&responses[0]).contains("unrelated note"));
+    assert_text(&responses[0], "--repo");
+    assert_text(&responses[0], "upstream/project");
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "comment_contains must contain 1 to 256");
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(
+        &responses[2],
+        "limit for pr_comments must be between 1 and 100",
+    );
 }
 
 #[test]

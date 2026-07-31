@@ -113,13 +113,15 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
         "github_workflows": {
             "available": true,
             "tools": [tools::github_pr_run::NAME, tools::github_fork_prepare::NAME],
-            "actions": ["auth_status", "pr_view", "pr_checks", "workflow_run_view", "workflow_job_log", "workflow_run_rerun_failed", "pr_create"],
+            "actions": ["auth_status", "pr_view", "pr_comments", "pr_checks", "workflow_runs_for_commit", "workflow_run_view", "workflow_job_log", "workflow_run_rerun_failed", "pr_create"],
             "repository_targeting": "PR and Actions actions accept a validated OWNER/REPO selector for fork/upstream workflows.",
             "fork_actions": ["dry_run fork plan", "confirmed gh repo fork"],
             "guards": [
                 "uses gh with explicit argv only",
                 "repository selectors use validated OWNER/REPO syntax",
                 "PR checks return structured names, states, workflows, and links",
+                "PR comments can be filtered locally by a bounded marker and returned newest-first",
+                "workflow run discovery requires a full commit SHA and bounded result limit",
                 "workflow run metadata and bounded job logs are read-only evidence",
                 "failed-job workflow reruns default to dry_run and require an exact confirmation literal",
                 "pr_create defaults to dry_run",

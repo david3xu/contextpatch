@@ -117,7 +117,7 @@ Rules:
 
 ## GitHub workflow expectation
 
-GitHub automation is review workflow support, not broad platform authority. Tools may inspect authentication state, view PR details/comments, read structured PR checks, inspect one workflow run or job log, rerun only failed jobs from one explicit run, create one pull request, and prepare a fork through explicit typed actions.
+GitHub automation is review workflow support, not broad platform authority. Tools may inspect authentication state, view PR details, retrieve bounded locally filtered comments, read structured PR checks, discover bounded runs for one exact commit, inspect one workflow run or job log, rerun only failed jobs from one explicit run, create one pull request, and prepare a fork through explicit typed actions.
 
 Rules:
 
@@ -125,10 +125,12 @@ Rules:
 2. Keep read-only PR actions separate from mutating PR creation and fork preparation.
 3. Permit fork/upstream reads only through a validated `OWNER/REPO` selector passed as a separate `--repo` argument.
 4. Redact and bound workflow log output and require an explicit run or job database id; do not expose arbitrary Actions API access.
-5. Limit workflow reruns to `gh run rerun <run_id> --failed`, default to dry-run, and require exact confirmation.
-6. Default PR creation and fork preparation to dry-run and return the exact command plan.
-7. Require exact confirmation before creating a PR or preparing a fork.
-8. Do not expose arbitrary `gh` subcommands, secret reads, workflow dispatch, release publishing, repository deletion, forceful Git operations, or broad issue/project mutation through this surface.
+5. Require a full commit SHA and bounded limit for run discovery; do not infer history from a branch name.
+6. Permit comment filtering only as bounded local body matching; do not accept caller-provided `jq`, GraphQL, REST paths, or query expressions.
+7. Limit workflow reruns to `gh run rerun <run_id> --failed`, default to dry-run, and require exact confirmation.
+8. Default PR creation and fork preparation to dry-run and return the exact command plan.
+9. Require exact confirmation before creating a PR or preparing a fork.
+10. Do not expose arbitrary `gh` subcommands, secret reads, workflow dispatch, release publishing, repository deletion, forceful Git operations, or broad issue/project mutation through this surface.
 
 ## Setup profile expectation
 

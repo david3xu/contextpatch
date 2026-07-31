@@ -126,7 +126,7 @@ Every advertised MCP tool includes stable tool annotations so clients can offer 
 
 `git_merge_readiness` fills the PR/merge planning gap without exposing `git merge` or `merge-tree`: it optionally fetches one explicit remote branch, resolves two validated refs, reports ahead counts, and returns files changed on both sides since the merge base as likely conflict candidates. It does not checkout, merge, reset, stash, or edit source files.
 
-`github_pr_run` and `github_fork_prepare` cover GitHub review workflow gaps without arbitrary `gh` access. PR/check/run reads can target a validated `OWNER/REPO`, so a fork checkout can inspect upstream PR comments and Actions evidence; check results are structured and individual workflow runs or redacted, bounded job logs can be read by database id. Failed jobs and their dependencies can be rerun through one explicit run id with dry-run and confirmation gates. PR creation and fork preparation also default to dry-run and require exact confirmation before mutating GitHub or remotes.
+`github_pr_run` and `github_fork_prepare` cover GitHub review workflow gaps without arbitrary `gh` access. PR/check/run reads can target a validated `OWNER/REPO`, so a fork checkout can inspect upstream evidence. PR details expose the exact head SHA; bounded Actions runs can then be discovered for that commit, sticky findings can be retrieved through a local comment-body filter, and individual workflow runs or redacted, bounded job logs can be read by database id. Failed jobs and their dependencies can be rerun through one explicit run id with dry-run and confirmation gates. PR creation and fork preparation also default to dry-run and require exact confirmation before mutating GitHub or remotes.
 
 ## Safety contract
 

@@ -46,7 +46,23 @@ pub(crate) fn call_github_pr_run(
                 "view".to_string(),
                 number.to_string(),
                 "--json".to_string(),
-                "number,title,state,url,author,headRefName,baseRefName,comments,reviews,statusCheckRollup".to_string(),
+                "number,title,state,url,author,headRefName,headRefOid,baseRefName,comments,reviews,statusCheckRollup".to_string(),
+            ];
+            append_repository(&mut args, repository.as_deref());
+            args
+        }
+        "pr_comments" => {
+            let number = optional_u64(arguments, "number")?.ok_or_else(|| {
+                "github_pr_run refused: number is required for pr_comments".to_string()
+            })?;
+            optional_comment_contains(arguments)?;
+            result_limit(arguments, "pr_comments", 20, 100)?;
+            let mut args = vec![
+                "pr".to_string(),
+                "view".to_string(),
+                number.to_string(),
+                "--json".to_string(),
+                "comments".to_string(),
             ];
             append_repository(&mut args, repository.as_deref());
             args
@@ -62,6 +78,22 @@ pub(crate) fn call_github_pr_run(
                 "--json".to_string(),
                 "bucket,completedAt,description,event,link,name,startedAt,state,workflow"
                     .to_string(),
+            ];
+            append_repository(&mut args, repository.as_deref());
+            args
+        }
+        "workflow_runs_for_commit" => {
+            let head_sha = required_github_head_sha(arguments)?;
+            let limit = result_limit(arguments, "workflow_runs_for_commit", 20, 50)?;
+            let mut args = vec![
+                "run".to_string(),
+                "list".to_string(),
+                "--commit".to_string(),
+                head_sha,
+                "--limit".to_string(),
+                limit.to_string(),
+                "--json".to_string(),
+                "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,name,number,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName".to_string(),
             ];
             append_repository(&mut args, repository.as_deref());
             args
@@ -195,7 +227,13 @@ pub(crate) fn call_github_pr_run(
         .output()
         .map_err(|error| format!("github_pr_run refused: failed to run gh: {error}"))?;
 
-    let (stdout, stdout_truncated) = bounded_output(&output.stdout, 120_000);
+    let raw_stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout_source = if action == "pr_comments" && output.status.success() {
+        filter_pr_comments(&raw_stdout, arguments)?
+    } else {
+        raw_stdout.into_owned()
+    };
+    let (stdout, stdout_truncated) = redact_and_truncate_output(&stdout_source, 120_000);
     let (stderr, stderr_truncated) = bounded_output(&output.stderr, 20_000);
     let exit_code = output.status.code();
     serde_json::to_string_pretty(&json!({
@@ -212,6 +250,101 @@ pub(crate) fn call_github_pr_run(
         "stderr_truncated": stderr_truncated
     }))
     .map_err(|error| format!("github_pr_run refused: {error}"))
+}
+
+fn required_github_head_sha(arguments: &serde_json::Map<String, Value>) -> Result<String, String> {
+    let value = nonempty_tool_string(
+        tools::github_pr_run::NAME,
+        "head_sha",
+        required_string(arguments, "head_sha")?,
+    )?;
+    if value.len() != 40 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(
+            "github_pr_run refused: head_sha must be a full 40-character hexadecimal commit SHA"
+                .to_string(),
+        );
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn optional_comment_contains(
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<Option<String>, String> {
+    let Some(value) = optional_string(arguments, "comment_contains")? else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() || value.contains('\0') || value.chars().count() > 256 {
+        return Err(
+            "github_pr_run refused: comment_contains must contain 1 to 256 characters and no NUL"
+                .to_string(),
+        );
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn result_limit(
+    arguments: &serde_json::Map<String, Value>,
+    action: &str,
+    default: u64,
+    maximum: u64,
+) -> Result<usize, String> {
+    let limit = optional_u64(arguments, "limit")?.unwrap_or(default);
+    if limit == 0 || limit > maximum {
+        return Err(format!(
+            "github_pr_run refused: limit for {action} must be between 1 and {maximum}"
+        ));
+    }
+    usize::try_from(limit)
+        .map_err(|_| format!("github_pr_run refused: limit for {action} is out of range"))
+}
+
+fn filter_pr_comments(
+    raw: &str,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let parsed: Value = serde_json::from_str(raw)
+        .map_err(|error| format!("github_pr_run refused: invalid gh comments JSON: {error}"))?;
+    let comments = parsed
+        .get("comments")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "github_pr_run refused: gh comments response did not contain a comments array"
+                .to_string()
+        })?;
+    let contains = optional_comment_contains(arguments)?;
+    let normalized_contains = contains.as_ref().map(|value| value.to_lowercase());
+    let mut matching = comments
+        .iter()
+        .filter(|comment| {
+            normalized_contains.as_ref().is_none_or(|needle| {
+                comment
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.to_lowercase().contains(needle))
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    matching.sort_by(|left, right| comment_created_at(right).cmp(comment_created_at(left)));
+    let matched_count = matching.len();
+    matching.truncate(result_limit(arguments, "pr_comments", 20, 100)?);
+
+    serde_json::to_string_pretty(&json!({
+        "comment_contains": contains,
+        "matched_count": matched_count,
+        "returned_count": matching.len(),
+        "order": "newest_first",
+        "comments": matching
+    }))
+    .map_err(|error| format!("github_pr_run refused: {error}"))
+}
+
+fn comment_created_at(comment: &Value) -> &str {
+    comment
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 fn optional_github_repository(

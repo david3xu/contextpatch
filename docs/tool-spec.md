@@ -1142,11 +1142,12 @@ Runs narrow GitHub pull-request workflows through `gh` without exposing arbitrar
 
 Required inputs:
 
-- `action`: one of `auth_status`, `pr_view`, `pr_checks`, `workflow_run_view`, `workflow_job_log`, `workflow_run_rerun_failed`, or `pr_create`
+- `action`: one of `auth_status`, `pr_view`, `pr_comments`, `pr_checks`, `workflow_runs_for_commit`, `workflow_run_view`, `workflow_job_log`, `workflow_run_rerun_failed`, or `pr_create`
 
 Action-specific inputs:
 
-- `pr_view` and `pr_checks`: `number`
+- `pr_view`, `pr_comments`, and `pr_checks`: `number`
+- `workflow_runs_for_commit`: full 40-character `head_sha`
 - `workflow_run_view` and `workflow_run_rerun_failed`: `run_id`
 - `workflow_job_log`: `job_id`
 - `pr_create`: `base`, `head`, `title`, `body`
@@ -1154,6 +1155,8 @@ Action-specific inputs:
 Optional inputs:
 
 - `repository`: validated `OWNER/REPO` target for PR and Actions actions; use it when the local checkout is a fork but the PR or run belongs to upstream
+- `comment_contains`: optional case-insensitive 1-256 character local filter for `pr_comments`
+- `limit`: result bound for `pr_comments` (default 20, maximum 100) or `workflow_runs_for_commit` (default 20, maximum 50)
 - `draft`: create a draft PR when `action` is `pr_create`
 - `dry_run`: defaults to true for `pr_create` and `workflow_run_rerun_failed`
 - `confirm`: literal `create pull request` for confirmed PR creation or `rerun failed workflow jobs` for a confirmed failed-job rerun
@@ -1163,6 +1166,8 @@ Rules:
 - The tool must use the GitHub CLI as `gh` with explicit argv, no shell.
 - Read-only actions may execute directly.
 - `pr_checks` must return structured check names, states, workflows, and links so callers can identify the corresponding Actions run.
+- `pr_view` must include the exact head commit SHA. `workflow_runs_for_commit` must require that full SHA and return only a bounded structured run list, so callers can distinguish current evidence from stale runs.
+- `pr_comments` must filter locally rather than accepting caller-provided `jq` or API paths, return matching comments newest-first, and bound the result count.
 - `workflow_run_view` may return typed run/job metadata; `workflow_job_log` may return only one explicit job's bounded log output.
 - `workflow_run_rerun_failed` may run only `gh run rerun <run_id> --failed`; it must default to dry-run and require exact confirmation before rerunning failed jobs and their dependencies.
 - GitHub command output must be redacted for probable secrets and bounded before returning it to the client.
