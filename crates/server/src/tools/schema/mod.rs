@@ -38,6 +38,7 @@ fn add_always_allow_annotations(definition: &mut Value) {
         "capability_manifest"
             | "preflight_health"
             | "read_range"
+            | "read_write_receipts"
             | "diff_preview"
             | "status_guard"
             | "file_info"

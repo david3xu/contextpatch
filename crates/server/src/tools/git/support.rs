@@ -378,6 +378,34 @@ pub(crate) fn git_stdout_for_tool(
         .map_err(|error| format!("{tool_name} refused: git output was not UTF-8: {error}"))
 }
 
+pub(crate) const UNBORN_GIT_HEAD: &str = "unborn";
+
+pub(crate) fn git_head_for_tool(tool_name: &str, root: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .env("GIT_PAGER", "cat")
+        .env("NO_COLOR", "1")
+        .output()
+        .map_err(|error| format!("{tool_name} refused: failed to run git: {error}"))?;
+    if output.status.success() {
+        return String::from_utf8(output.stdout)
+            .map(|head| head.trim().to_string())
+            .map_err(|error| format!("{tool_name} refused: git output was not UTF-8: {error}"));
+    }
+
+    let revision_count = git_stdout_for_tool(tool_name, root, &["rev-list", "--all", "--count"])?;
+    if revision_count.trim() == "0" {
+        Ok(UNBORN_GIT_HEAD.to_string())
+    } else {
+        Err(format!(
+            "{tool_name} refused: git rev-parse --verify HEAD failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 pub(crate) fn git_success_for_tool(
     tool_name: &str,
     root: &Path,

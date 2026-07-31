@@ -127,6 +127,129 @@ fn stage1_cli_refusals_are_visible() {
     );
 }
 
+#[test]
+fn configure_claude_desktop_allows_every_contextpatch_tool() {
+    let root = temp_root("configure_claude_desktop_allows_every_contextpatch_tool");
+    let config = root.join("claude_desktop_config.json");
+    let original = r#"{
+  "mcpServers": {
+    "contextpatch-one": {
+      "command": "/opt/contextpatch-server",
+      "args": ["--repo-root", "/repo/one"],
+      "toolPolicy": {"replace_exact": "ask"}
+    },
+    "contextpatch-two": {
+      "command": "contextpatch-server",
+      "args": ["--repo-root", "/repo/two"]
+    },
+    "contextpatch-windows": {
+      "command": "C:\\Program Files\\ContextPatch\\contextpatch-server.exe",
+      "args": ["--repo-root", "C:\\repo\\three"]
+    },
+    "unrelated": {
+      "command": "/opt/other-server",
+      "toolPolicy": {"*": "blocked"}
+    }
+  },
+  "theme": "dark"
+}"#;
+    fs::write(&config, original).unwrap();
+
+    let output = run_ok_without_default_config_env(
+        &root,
+        &[
+            "configure-claude-desktop",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+    );
+    assert!(output.stdout.contains("allowed all tools for 3"));
+    assert!(output.stdout.contains("restart Claude Desktop"));
+
+    let updated: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert_eq!(
+        updated["mcpServers"]["contextpatch-one"]["toolPolicy"],
+        serde_json::json!({"*": "allow"})
+    );
+    assert_eq!(
+        updated["mcpServers"]["contextpatch-two"]["toolPolicy"],
+        serde_json::json!({"*": "allow"})
+    );
+    assert_eq!(
+        updated["mcpServers"]["contextpatch-windows"]["toolPolicy"],
+        serde_json::json!({"*": "allow"})
+    );
+    assert_eq!(
+        updated["mcpServers"]["unrelated"]["toolPolicy"],
+        serde_json::json!({"*": "blocked"})
+    );
+    assert_eq!(updated["theme"], "dark");
+
+    let backups = fs::read_dir(&root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("claude_desktop_config.json.contextpatch-backup-")
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(fs::read(&backups[0]).unwrap(), original.as_bytes());
+
+    let second = run_ok(
+        &root,
+        &[
+            "configure-claude-desktop",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+    );
+    assert!(second.stdout.contains("already allowed"));
+    let backups_after_second_run = fs::read_dir(&root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("claude_desktop_config.json.contextpatch-backup-")
+        })
+        .count();
+    assert_eq!(backups_after_second_run, 1);
+}
+
+#[test]
+fn configure_claude_desktop_refuses_invalid_config_without_changing_it() {
+    let root = temp_root("configure_claude_desktop_refuses_invalid_config_without_changing_it");
+    let config = root.join("claude_desktop_config.json");
+    fs::write(&config, b"{not json}\n").unwrap();
+
+    let output = run_err(
+        &root,
+        &[
+            "configure-claude-desktop",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+    );
+    assert!(output.stderr.contains("not valid JSON"));
+    assert_eq!(fs::read(&config).unwrap(), b"{not json}\n");
+    let backups = fs::read_dir(&root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("claude_desktop_config.json.contextpatch-backup-")
+        })
+        .count();
+    assert_eq!(backups, 0);
+}
+
 struct OutputText {
     stdout: String,
     stderr: String,
@@ -148,6 +271,24 @@ fn run_err(root: &Path, args: &[&str]) -> OutputText {
     assert!(
         !output.status.success(),
         "expected refusal for {args:?}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output_text(output)
+}
+
+fn run_ok_without_default_config_env(root: &Path, args: &[&str]) -> OutputText {
+    let output = Command::new(contextpatch())
+        .current_dir(root)
+        .env_remove("HOME")
+        .env_remove("APPDATA")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "expected success for {args:?}\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

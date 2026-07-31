@@ -71,55 +71,69 @@ pub(crate) fn call_git_commit_exact(
         .map_err(|error| format!("git_commit_exact refused: {error}"));
     }
 
-    git_success(&root, git_args("add", &normalized_paths))?;
-    let staged_paths = git_cached_paths(&root)?;
-    if staged_paths != expected_paths {
-        return Err(format!(
-            "git_commit_exact refused after staging: staged paths differ from requested exact set\nrequested:\n{}\nstaged:\n{}",
-            format_set(&expected_paths),
-            format_set(&staged_paths)
-        ));
-    }
-    let dirty_paths_after_stage = git_status_paths(&root)?;
-    if dirty_paths_after_stage != expected_paths {
-        return Err(format!(
-            "git_commit_exact refused after staging: dirty paths changed before commit\nrequested:\n{}\ncurrent_dirty_paths:\n{}",
-            format_set(&expected_paths),
-            format_set(&dirty_paths_after_stage)
-        ));
-    }
+    let before_git_head = git_head_for_tool(tools::git_commit_exact::NAME, &root)?;
+    let receipt_id =
+        crate::tools::journal::begin_git(&root, tools::git_commit_exact::NAME, &before_git_head)?;
+    let result = (|| {
+        git_success(&root, git_args("add", &normalized_paths))?;
+        let staged_paths = git_cached_paths(&root)?;
+        if staged_paths != expected_paths {
+            return Err(format!(
+                "git_commit_exact refused after staging: staged paths differ from requested exact set\nrequested:\n{}\nstaged:\n{}",
+                format_set(&expected_paths),
+                format_set(&staged_paths)
+            ));
+        }
+        let dirty_paths_after_stage = git_status_paths(&root)?;
+        if dirty_paths_after_stage != expected_paths {
+            return Err(format!(
+                "git_commit_exact refused after staging: dirty paths changed before commit\nrequested:\n{}\ncurrent_dirty_paths:\n{}",
+                format_set(&expected_paths),
+                format_set(&dirty_paths_after_stage)
+            ));
+        }
 
-    let mut commit_args = vec![
-        "commit".to_string(),
-        "--quiet".to_string(),
-        "-m".to_string(),
-        subject.clone(),
-    ];
-    if !body.is_empty() {
-        commit_args.push("-m".to_string());
-        commit_args.push(body);
-    }
-    git_success(&root, commit_args).map_err(|error| {
-        format!(
-            "{error}\nindex may contain staged exact paths because git commit failed after staging"
-        )
-    })?;
+        let mut commit_args = vec![
+            "commit".to_string(),
+            "--quiet".to_string(),
+            "-m".to_string(),
+            subject.clone(),
+        ];
+        if !body.is_empty() {
+            commit_args.push("-m".to_string());
+            commit_args.push(body);
+        }
+        git_success(&root, commit_args).map_err(|error| {
+            format!(
+                "{error}\nindex may contain staged exact paths because git commit failed after staging"
+            )
+        })?;
 
-    let commit = git_stdout(&root, &["rev-parse", "HEAD"])?;
-    let short_commit = git_stdout(&root, &["rev-parse", "--short", "HEAD"])?;
-    let status = git_stdout(&root, &["status", "--short"])?;
+        let commit = git_stdout(&root, &["rev-parse", "HEAD"])?;
+        let short_commit = git_stdout(&root, &["rev-parse", "--short", "HEAD"])?;
+        let status = git_stdout(&root, &["status", "--short"])?;
 
-    serde_json::to_string_pretty(&json!({
-        "tool": tools::git_commit_exact::NAME,
-        "dry_run": false,
-        "committed": true,
-        "commit": commit.trim(),
-        "short_commit": short_commit.trim(),
-        "paths": normalized_paths,
-        "push": false,
-        "status_short": status
-    }))
-    .map_err(|error| format!("git_commit_exact refused: {error}"))
+        serde_json::to_string_pretty(&json!({
+            "tool": tools::git_commit_exact::NAME,
+            "dry_run": false,
+            "committed": true,
+            "commit": commit.trim(),
+            "short_commit": short_commit.trim(),
+            "paths": normalized_paths,
+            "push": false,
+            "status_short": status
+        }))
+        .map_err(|error| format!("git_commit_exact refused: {error}"))
+    })();
+    let after_git_head = git_head_for_tool(tools::git_commit_exact::NAME, &root);
+    crate::tools::journal::settle_git(
+        &root,
+        tools::git_commit_exact::NAME,
+        &receipt_id,
+        &before_git_head,
+        after_git_head,
+        result,
+    )
 }
 
 pub(crate) fn call_git_commit_scoped(
@@ -198,72 +212,88 @@ pub(crate) fn call_git_commit_scoped(
         .map_err(|error| format!("git_commit_scoped refused: {error}"));
     }
 
-    git_success_for_tool(
-        tools::git_commit_scoped::NAME,
+    let before_git_head = git_head_for_tool(tools::git_commit_scoped::NAME, &root)?;
+    let receipt_id =
+        crate::tools::journal::begin_git(&root, tools::git_commit_scoped::NAME, &before_git_head)?;
+    let result = (|| {
+        git_success_for_tool(
+            tools::git_commit_scoped::NAME,
+            &root,
+            git_args("add", &normalized_paths),
+        )?;
+        let staged_paths = git_cached_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
+        if staged_paths != requested_paths {
+            return Err(format!(
+                "git_commit_scoped refused after staging: staged paths differ from requested scoped set\nrequested:\n{}\nstaged:\n{}",
+                format_set(&requested_paths),
+                format_set(&staged_paths)
+            ));
+        }
+
+        let mut commit_args = vec![
+            "commit".to_string(),
+            "--quiet".to_string(),
+            "-m".to_string(),
+            subject.clone(),
+        ];
+        if !body.is_empty() {
+            commit_args.push("-m".to_string());
+            commit_args.push(body);
+        }
+        git_success_for_tool(tools::git_commit_scoped::NAME, &root, commit_args).map_err(
+            |error| {
+                format!(
+                    "{error}\nindex may contain staged scoped paths because git commit failed after staging"
+                )
+            },
+        )?;
+
+        let dirty_after = git_status_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
+        let requested_still_dirty = requested_paths
+            .intersection(&dirty_after)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !requested_still_dirty.is_empty() {
+            return Err(format!(
+                "git_commit_scoped refused after commit: requested paths are still dirty\n{}",
+                format_set(&requested_still_dirty)
+            ));
+        }
+
+        let commit = git_stdout_for_tool(
+            tools::git_commit_scoped::NAME,
+            &root,
+            &["rev-parse", "HEAD"],
+        )?;
+        let short_commit = git_stdout_for_tool(
+            tools::git_commit_scoped::NAME,
+            &root,
+            &["rev-parse", "--short", "HEAD"],
+        )?;
+        let status = git_status_short(&root)?;
+
+        serde_json::to_string_pretty(&json!({
+            "tool": tools::git_commit_scoped::NAME,
+            "dry_run": false,
+            "committed": true,
+            "commit": commit.trim(),
+            "short_commit": short_commit.trim(),
+            "paths": normalized_paths,
+            "push": false,
+            "remaining_dirty_paths": dirty_after,
+            "status_short": status
+        }))
+        .map_err(|error| format!("git_commit_scoped refused: {error}"))
+    })();
+    let after_git_head = git_head_for_tool(tools::git_commit_scoped::NAME, &root);
+    crate::tools::journal::settle_git(
         &root,
-        git_args("add", &normalized_paths),
-    )?;
-    let staged_paths = git_cached_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
-    if staged_paths != requested_paths {
-        return Err(format!(
-            "git_commit_scoped refused after staging: staged paths differ from requested scoped set\nrequested:\n{}\nstaged:\n{}",
-            format_set(&requested_paths),
-            format_set(&staged_paths)
-        ));
-    }
-
-    let mut commit_args = vec![
-        "commit".to_string(),
-        "--quiet".to_string(),
-        "-m".to_string(),
-        subject.clone(),
-    ];
-    if !body.is_empty() {
-        commit_args.push("-m".to_string());
-        commit_args.push(body);
-    }
-    git_success_for_tool(tools::git_commit_scoped::NAME, &root, commit_args).map_err(|error| {
-        format!(
-            "{error}\nindex may contain staged scoped paths because git commit failed after staging"
-        )
-    })?;
-
-    let dirty_after = git_status_paths_for_tool(tools::git_commit_scoped::NAME, &root)?;
-    let requested_still_dirty = requested_paths
-        .intersection(&dirty_after)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if !requested_still_dirty.is_empty() {
-        return Err(format!(
-            "git_commit_scoped refused after commit: requested paths are still dirty\n{}",
-            format_set(&requested_still_dirty)
-        ));
-    }
-
-    let commit = git_stdout_for_tool(
         tools::git_commit_scoped::NAME,
-        &root,
-        &["rev-parse", "HEAD"],
-    )?;
-    let short_commit = git_stdout_for_tool(
-        tools::git_commit_scoped::NAME,
-        &root,
-        &["rev-parse", "--short", "HEAD"],
-    )?;
-    let status = git_status_short(&root)?;
-
-    serde_json::to_string_pretty(&json!({
-        "tool": tools::git_commit_scoped::NAME,
-        "dry_run": false,
-        "committed": true,
-        "commit": commit.trim(),
-        "short_commit": short_commit.trim(),
-        "paths": normalized_paths,
-        "push": false,
-        "remaining_dirty_paths": dirty_after,
-        "status_short": status
-    }))
-    .map_err(|error| format!("git_commit_scoped refused: {error}"))
+        &receipt_id,
+        &before_git_head,
+        after_git_head,
+        result,
+    )
 }
 
 pub(crate) fn call_git_commit_prefix(
@@ -350,73 +380,89 @@ pub(crate) fn call_git_commit_prefix(
         .map_err(|error| format!("git_commit_prefix refused: {error}"));
     }
 
-    git_success_for_tool(
-        tools::git_commit_prefix::NAME,
+    let before_git_head = git_head_for_tool(tools::git_commit_prefix::NAME, &root)?;
+    let receipt_id =
+        crate::tools::journal::begin_git(&root, tools::git_commit_prefix::NAME, &before_git_head)?;
+    let result = (|| {
+        git_success_for_tool(
+            tools::git_commit_prefix::NAME,
+            &root,
+            git_args("add", &normalized_paths),
+        )?;
+        let staged_paths = git_cached_paths_for_tool(tools::git_commit_prefix::NAME, &root)?;
+        if staged_paths != requested_paths {
+            return Err(format!(
+                "git_commit_prefix refused after staging: staged paths differ from expanded prefix set\nexpanded:\n{}\nstaged:\n{}",
+                format_set(&requested_paths),
+                format_set(&staged_paths)
+            ));
+        }
+
+        let mut commit_args = vec![
+            "commit".to_string(),
+            "--quiet".to_string(),
+            "-m".to_string(),
+            subject.clone(),
+        ];
+        if !body.is_empty() {
+            commit_args.push("-m".to_string());
+            commit_args.push(body);
+        }
+        git_success_for_tool(tools::git_commit_prefix::NAME, &root, commit_args).map_err(
+            |error| {
+                format!(
+                    "{error}\nindex may contain staged prefix-expanded paths because git commit failed after staging"
+                )
+            },
+        )?;
+
+        let dirty_after = git_status_paths_for_tool(tools::git_commit_prefix::NAME, &root)?;
+        let requested_still_dirty = requested_paths
+            .intersection(&dirty_after)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !requested_still_dirty.is_empty() {
+            return Err(format!(
+                "git_commit_prefix refused after commit: expanded paths are still dirty\n{}",
+                format_set(&requested_still_dirty)
+            ));
+        }
+
+        let commit = git_stdout_for_tool(
+            tools::git_commit_prefix::NAME,
+            &root,
+            &["rev-parse", "HEAD"],
+        )?;
+        let short_commit = git_stdout_for_tool(
+            tools::git_commit_prefix::NAME,
+            &root,
+            &["rev-parse", "--short", "HEAD"],
+        )?;
+        let status = git_status_short(&root)?;
+
+        serde_json::to_string_pretty(&json!({
+            "tool": tools::git_commit_prefix::NAME,
+            "dry_run": false,
+            "committed": true,
+            "commit": commit.trim(),
+            "short_commit": short_commit.trim(),
+            "prefixes": normalized_prefixes,
+            "paths": normalized_paths,
+            "push": false,
+            "remaining_dirty_paths": dirty_after,
+            "status_short": status
+        }))
+        .map_err(|error| format!("git_commit_prefix refused: {error}"))
+    })();
+    let after_git_head = git_head_for_tool(tools::git_commit_prefix::NAME, &root);
+    crate::tools::journal::settle_git(
         &root,
-        git_args("add", &normalized_paths),
-    )?;
-    let staged_paths = git_cached_paths_for_tool(tools::git_commit_prefix::NAME, &root)?;
-    if staged_paths != requested_paths {
-        return Err(format!(
-            "git_commit_prefix refused after staging: staged paths differ from expanded prefix set\nexpanded:\n{}\nstaged:\n{}",
-            format_set(&requested_paths),
-            format_set(&staged_paths)
-        ));
-    }
-
-    let mut commit_args = vec![
-        "commit".to_string(),
-        "--quiet".to_string(),
-        "-m".to_string(),
-        subject.clone(),
-    ];
-    if !body.is_empty() {
-        commit_args.push("-m".to_string());
-        commit_args.push(body);
-    }
-    git_success_for_tool(tools::git_commit_prefix::NAME, &root, commit_args).map_err(|error| {
-        format!(
-            "{error}\nindex may contain staged prefix-expanded paths because git commit failed after staging"
-        )
-    })?;
-
-    let dirty_after = git_status_paths_for_tool(tools::git_commit_prefix::NAME, &root)?;
-    let requested_still_dirty = requested_paths
-        .intersection(&dirty_after)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if !requested_still_dirty.is_empty() {
-        return Err(format!(
-            "git_commit_prefix refused after commit: expanded paths are still dirty\n{}",
-            format_set(&requested_still_dirty)
-        ));
-    }
-
-    let commit = git_stdout_for_tool(
         tools::git_commit_prefix::NAME,
-        &root,
-        &["rev-parse", "HEAD"],
-    )?;
-    let short_commit = git_stdout_for_tool(
-        tools::git_commit_prefix::NAME,
-        &root,
-        &["rev-parse", "--short", "HEAD"],
-    )?;
-    let status = git_status_short(&root)?;
-
-    serde_json::to_string_pretty(&json!({
-        "tool": tools::git_commit_prefix::NAME,
-        "dry_run": false,
-        "committed": true,
-        "commit": commit.trim(),
-        "short_commit": short_commit.trim(),
-        "prefixes": normalized_prefixes,
-        "paths": normalized_paths,
-        "push": false,
-        "remaining_dirty_paths": dirty_after,
-        "status_short": status
-    }))
-    .map_err(|error| format!("git_commit_prefix refused: {error}"))
+        &receipt_id,
+        &before_git_head,
+        after_git_head,
+        result,
+    )
 }
 
 pub(crate) fn call_git_stage_exact(

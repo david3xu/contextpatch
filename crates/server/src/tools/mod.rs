@@ -5,6 +5,7 @@ pub mod files;
 pub mod fixtures;
 pub mod git;
 pub mod github;
+pub mod journal;
 pub mod native;
 pub mod process;
 pub mod schema;
@@ -13,8 +14,9 @@ pub mod setup;
 pub use capability::{capability_manifest, preflight_health};
 pub use files::{
     artifact_write_base64, artifact_write_text, bulk_write_new_files_base64, create_directory,
-    diff_preview, file_info, list_directory, read_file_bytes, read_range, replace_exact,
-    status_guard, write_existing_file_exact_hash, write_new_file, write_new_file_base64,
+    diff_preview, file_info, list_directory, read_file_bytes, read_range, read_write_receipts,
+    replace_exact, status_guard, write_existing_file_exact_hash, write_new_file,
+    write_new_file_base64,
 };
 pub use fixtures::{
     base_image_check_run, fixture_generator_run, fixture_manifest_refresh, fixture_manifest_verify,

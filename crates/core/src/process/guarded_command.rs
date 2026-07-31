@@ -26,11 +26,12 @@ pub fn run_guarded_command(
 
     validate_command(program, args)?;
     let timeout = checked_command_timeout(program, args, timeout_secs)?;
-    let output = run_no_shell_command(&cwd, program, args, timeout, "guarded command")?;
+    let expanded_args = crate::fs::scratch::expand_scratch_tokens(&root, args)?;
+    let output = run_no_shell_command(&cwd, program, &expanded_args, timeout, "guarded command")?;
 
     Ok(format!(
         "command: {}\ncwd: {}\nallowlist: {}\nexit_code: {}\ntimed_out: {}\nduration_ms: {}\nstdout:\n{}\nstderr:\n{}",
-        display_command(program, args),
+        display_command(program, &expanded_args),
         output.cwd.display(),
         allowlist_label(program, args),
         output.exit_code,
@@ -79,6 +80,16 @@ pub fn redact_and_truncate_output(text: &str, max_chars: usize) -> (String, bool
 
 fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchError> {
     validate_common_command_shape(program, args)?;
+    if matches!(program, "python" | "python3")
+        && args
+            .first()
+            .is_some_and(|script| script.contains(crate::fs::scratch::SCRATCH_TOKEN))
+    {
+        return Err(ContextPatchError::new(
+            "guarded command refused: Python code must be repository-relative; use \
+             artifact_python_run for a script stored outside the repository",
+        ));
+    }
 
     let subcommand = args.first().map(String::as_str);
     let allowed = match program {
@@ -105,8 +116,9 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
 
     if !allowed {
         return Err(ContextPatchError::new(format!(
-            "guarded command refused: `{}` is not allowlisted",
-            display_command(program, args)
+            "guarded command refused: `{}` is not allowlisted ({})",
+            display_command(program, args),
+            crate::process::guidance::refusal_suffix(program, args)
         )));
     }
 
@@ -204,6 +216,52 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("between 1 and 600"));
+    }
+
+    #[test]
+    fn expands_scratch_only_after_the_original_command_is_allowlisted() {
+        let root = git_root("expands_scratch_only_after_the_original_command_is_allowlisted");
+        fs::write(
+            root.join("write_scratch.py"),
+            "import pathlib, sys\npathlib.Path(sys.argv[1]).write_text('outside repo\\n')\n",
+        )
+        .unwrap();
+
+        let output = run_guarded_command(
+            &root,
+            None,
+            "python3",
+            &[
+                "write_scratch.py".to_string(),
+                "{scratch}/result.txt".to_string(),
+            ],
+            Some(30),
+        )
+        .unwrap();
+
+        let scratch = crate::fs::scratch::scratch_root(&root);
+        assert_eq!(
+            fs::read_to_string(scratch.join("result.txt")).unwrap(),
+            "outside repo\n"
+        );
+        assert!(output.contains(&scratch.display().to_string()));
+        assert!(!root.join("result.txt").exists());
+    }
+
+    #[test]
+    fn scratch_may_be_an_output_but_not_the_python_script() {
+        validate_command(
+            "python3",
+            &[
+                "write_scratch.py".to_string(),
+                "{scratch}/result.txt".to_string(),
+            ],
+        )
+        .unwrap();
+
+        let error =
+            validate_command("python3", &["{scratch}/outside-script.py".to_string()]).unwrap_err();
+        assert!(error.to_string().contains("artifact_python_run"));
     }
 
     #[test]

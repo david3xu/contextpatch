@@ -9,5 +9,6 @@ pub enum Command {
     WriteNewFile,
     CreateDirectory,
     ApplyPatch,
+    ConfigureClaudeDesktop,
     Serve,
 }

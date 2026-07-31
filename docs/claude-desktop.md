@@ -2,7 +2,7 @@
 
 `contextpatch` is intended to run as a local context server for desktop agent clients.
 
-## Planned behavior
+## Behavior
 
 The server should expose safe edit and validation tools rather than generic filesystem writes or broad shell access. Claude Desktop or another client can request bounded reads, preview diffs, apply guarded edits, discover capabilities, run preflight health checks, and run allowlisted validation commands.
 
@@ -14,7 +14,7 @@ The server should not expose broad filesystem write tools. In particular, the de
 - unrestricted delete
 - recursive directory writes
 - shell execution
-- Git reset/checkout/stash/fetch/push
+- broad Git reset/checkout/stash/fetch/push
 - Git merge or merge-tree as generic commands
 - broad or automatic Git commits
 - generic package-manager or scaffold execution
@@ -28,44 +28,68 @@ The expected agent workflow is:
 4. Use `create_directory` for create-only directory creation, then `write_new_file` or `write_new_file_base64` for create-only repository file creation inside that directory.
 5. Use `file_info`, `list_directory`, and `read_file_bytes` for digests, line counts, directory metadata, symlink visibility, or binary spot checks instead of writing ad hoc repo-local scripts.
 6. Use `capability_manifest` and `preflight_health` to determine whether this server can support the current workflow.
-7. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, `harbor run`, the exact `references/check-base-image.sh` or `references/check-base-image.sh task` checks, or `rg` drift searches.
-8. Use `git_stage_exact` when files must be staged/tracked before the work is ready to commit.
-9. Use `git_staged_scope_check` to audit that staged files are limited to allowed exact paths/prefixes, such as `.gitignore` plus `task/`, before reporting staged-scope readiness.
-10. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
-11. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
-12. Use `git_commit_prefix` when the desired commit is a large generated or fixture tree under known prefixes; inspect the dry-run expanded path list before confirming.
-13. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
-14. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
-15. Use `artifact_python_run` for Python scratch analysis from the sidecar artifact root instead of creating temporary scripts inside the repository.
-16. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
-17. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
-18. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
-19. Use `image_cleanliness_check_run` for the narrow Docker image check that searches the built image for a forbidden file name such as `solve.sh`; keep dry-run unless Docker execution is explicitly needed.
-20. Use `docker_image_inspect` for the narrow read-only Docker image metadata workflow; do not ask for arbitrary Docker commands.
-21. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
-22. Use `delete_generated_prefix` for ignored/untracked generated files and empty directories under known prefixes, such as `__pycache__`, after reviewing the dry-run path list.
-23. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
-24. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
-25. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
-26. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
-27. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
-28. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
-29. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows and Actions evidence instead of asking for arbitrary `gh` access. Supply `repository: "OWNER/REPO"` when the checkout is a fork but the PR belongs to upstream. Use `pr_view` for the exact head SHA, `workflow_runs_for_commit` to separate current from stale runs, `pr_comments` with a short marker for sticky findings, and then `workflow_run_view` or `workflow_job_log` for execution evidence. If the evidence proves a transient failure, review the `workflow_run_rerun_failed` dry-run before confirming the failed-job rerun. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
-30. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
-31. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
-32. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
-32. Use `write_existing_file_exact_hash` for whole-file synchronization only when the current file SHA-256 is known and reviewed.
-33. Use `fixture_manifest_verify` and `fixture_manifest_refresh` to enforce exact fixture file sets and SHA-256 digests instead of asking for ad hoc hashing scripts.
+7. Compare the capability manifest's build SHA with the checkout before concluding that a source capability is unavailable.
+8. Use `{scratch}` inside guarded command arguments for durable byproducts that must stay outside the repository.
+9. Use `read_write_receipts` after an interrupted or timed-out receipt-enabled mutation, then compare the recorded digest or Git HEAD with current state before retrying.
+10. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, `harbor run`, the exact `references/check-base-image.sh` or `references/check-base-image.sh task` checks, or `rg` drift searches.
+11. Use `git_stage_exact` when files must be staged/tracked before the work is ready to commit.
+12. Use `git_staged_scope_check` to audit that staged files are limited to allowed exact paths/prefixes, such as `.gitignore` plus `task/`, before reporting staged-scope readiness.
+13. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
+14. Use `git_commit_scoped` when the desired commit paths are explicit but unrelated dirty files should be preserved for later work. It requires a clean index before staging the requested paths.
+15. Use `git_commit_prefix` when the desired commit is a large generated or fixture tree under known prefixes; inspect the dry-run expanded path list before confirming.
+16. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
+17. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
+18. Use `artifact_python_run` for Python scratch analysis from the sidecar artifact root instead of creating temporary scripts inside the repository.
+19. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
+20. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
+21. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
+22. Use `image_cleanliness_check_run` for the narrow Docker image check that searches the built image for a forbidden file name such as `solve.sh`; keep dry-run unless Docker execution is explicitly needed.
+23. Use `docker_image_inspect` for the narrow read-only Docker image metadata workflow; do not ask for arbitrary Docker commands.
+24. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
+25. Use `delete_generated_prefix` for ignored/untracked generated files and empty directories under known prefixes, such as `__pycache__`, after reviewing the dry-run path list.
+26. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
+27. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
+28. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
+29. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
+30. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+31. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+32. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows and Actions evidence instead of asking for arbitrary `gh` access. Supply `repository: "OWNER/REPO"` when the checkout is a fork but the PR belongs to upstream. Use `pr_view` for the exact head SHA, `workflow_runs_for_commit` to separate current from stale runs, `pr_comments` with a short marker for sticky findings, and then `workflow_run_view` or `workflow_job_log` for execution evidence. If the evidence proves a transient failure, review the `workflow_run_rerun_failed` dry-run before confirming the failed-job rerun. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
+33. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
+34. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
+35. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
+36. Use `write_existing_file_exact_hash` for whole-file synchronization only when the current file SHA-256 is known and reviewed.
+37. Use `fixture_manifest_verify` and `fixture_manifest_refresh` to enforce exact fixture file sets and SHA-256 digests instead of asking for ad hoc hashing scripts.
 
-## Build and configure Claude Desktop
+## Allow all ContextPatch tools without prompts
 
-Build the release server:
+Build both release binaries:
 
 ```bash
+cargo build --release -p cli --bin contextpatch
 cargo build --release -p server --bin contextpatch-server
 ```
 
-Then point Claude Desktop at the compiled binary. Use absolute paths because Claude Desktop does not inherit your shell's current directory:
+Then configure every Claude Desktop MCP entry whose command basename is `contextpatch-server`:
+
+```bash
+./target/release/contextpatch configure-claude-desktop
+```
+
+The command replaces each matching entry's complete `toolPolicy` with:
+
+```json
+{
+  "*": "allow"
+}
+```
+
+Replacing the full policy removes older exact-tool rules that could override the wildcard. The command preserves unrelated Claude Desktop settings and MCP servers, recognizes both `contextpatch-server` and `contextpatch-server.exe` command paths, creates a timestamped `claude_desktop_config.json.contextpatch-backup-<epoch_millis>` file from the exact original bytes, preserves file permissions, and writes atomically. An adjacent advisory lock coordinates concurrent ContextPatch configurators, and a final byte-for-byte check refuses rather than overwriting an external concurrent edit. The command is idempotent and does not ask for another confirmation because its purpose is to remove recurring client approval prompts.
+
+Use `--dry-run` to list matching entries without writing, or `--config /path/to/claude_desktop_config.json` to target a non-default configuration. Restart Claude Desktop after applying the policy. Wildcard client approval does not bypass ContextPatch's repository, path, hash, Git-state, dry-run, confirmation, or timeout guards.
+
+## Build and configure Claude Desktop
+
+If the MCP server entry does not exist yet, point Claude Desktop at the release server. Use absolute paths because Claude Desktop does not inherit your shell's current directory:
 
 ```json
 {
@@ -75,7 +99,10 @@ Then point Claude Desktop at the compiled binary. Use absolute paths because Cla
       "args": [
         "--repo-root",
         "/absolute/path/to/repo"
-      ]
+      ],
+      "toolPolicy": {
+        "*": "allow"
+      }
     }
   }
 }
@@ -112,6 +139,7 @@ The workspace package is named `server`; the installed binary remains `contextpa
 After restarting Claude Desktop, ask it to list available `contextpatch` tools. It should see:
 
 - `read_range`
+- `read_write_receipts`
 - `diff_preview`
 - `replace_exact`
 - `status_guard`
@@ -158,9 +186,9 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `github_pr_run`
 - `github_fork_prepare`
 
-Each advertised tool includes MCP annotations intended to let Claude Desktop offer persistent "always allow" approval instead of only "allow once." If Claude still only shows one-time approval, restart Claude Desktop after rebuilding the server and confirm the configuration points at the new binary.
+Each advertised tool includes MCP annotations, but annotations do not suppress Claude Desktop approval prompts. The wildcard `toolPolicy` installed by `configure-claude-desktop` does.
 
-If Claude Desktop lists fewer tools than this, the server-side build is not the issue: the rebuilt release binary advertises all forty-six tools. Treat a partial list as a Claude Desktop session/configuration problem. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+The rebuilt release binary advertises all forty-seven tools. If Claude Desktop lists fewer, compare `capability_manifest.build.git_sha` with the checkout. A mismatch means the configured binary is stale; a match usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -173,6 +201,7 @@ Then list contextpatch tools again. If the list is still partial, the chat is li
 The current server exposes the implemented safe primitives:
 
 - `read_range`
+- `read_write_receipts`
 - `diff_preview`
 - `replace_exact`
 - `status_guard`
@@ -220,6 +249,14 @@ The current server exposes the implemented safe primitives:
 - `github_fork_prepare`
 
 Other documented boundary tools, including `apply_patch` and `insert_at_anchor`, remain roadmap items until implemented.
+
+`capability_manifest` reports the build Git SHA, dirty state, UTC build timestamp, and Cargo profile so the active binary can be identified without inference. It also reports the stable repository-specific scratch root, cooperative mutation coordination, receipt outcomes, and direct reply deadlines. Reads return within 30 seconds, direct writes within 60 seconds, and Git/GitHub operations within 120 seconds or return an unknown-outcome refusal with recovery guidance; operation-specific process timeouts remain separate. At most 16 deadline workers may remain active, after which new bounded calls are refused before starting.
+
+Use `{scratch}` inside guarded command data/output arguments, such as `--output-dir={scratch}/run-1`, for byproducts that must persist outside the repository. ContextPatch expands only that token to its stable scratch root and refuses traversal outside it. The token cannot select a Python script; use `artifact_python_run` for scratch-hosted Python code.
+
+`read_write_receipts` returns up to 25 recent attempts by default or 100 when requested. Use `interrupted_only: true` after a lost reply. `applied` means the operation returned success, `refused` means it failed with unchanged observed state, `unknown` means it failed after state changed or became unreadable, and `interrupted` means no settlement exists. Current receipt coverage includes `replace_exact`, `write_existing_file_exact_hash`, `delete_untracked_exact`, and the three local commit tools. For an interrupted or unknown file operation, compare the receipt digest with `file_info`; for an interrupted or unknown commit, compare the recorded Git HEAD with `git rev-parse HEAD`.
+
+ContextPatch serializes its MCP mutations for one repository with a cooperative cross-process lock; exact replacement and exact-hash writes also lock the target while rechecking it. A competing ContextPatch mutation is refused before starting. External editors and tools that ignore the advisory lock can still race, so use `expected_sha256` where available and inspect current state after an unknown result.
 
 `run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. It defaults to 120 seconds and remains capped at 600 seconds except for exact `harbor run` commands, which may use up to 3600 seconds. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary. Project validation can also run repo-relative Python scripts (`python3 scripts/name.py`), `pytest`, `harbor run`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` scripts through `base_image_check_run`; `pip`, Docker, arbitrary `python -m`, arbitrary shell scripts, and shell command strings remain refused.
 

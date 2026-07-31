@@ -3,10 +3,10 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
+use crate::fs::hash::sha256_file;
 use crate::git::guarded_path::{
     canonical_repo_root, ensure_index_clean, ensure_not_tracked, ensure_path_clean, ensure_tracked,
     move_with_git, path_is_tracked, resolve_absent_file, resolve_existing_regular_file,
-    sha256_file,
 };
 
 pub const CONFIRMATION: &str = "move tracked file";

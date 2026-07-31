@@ -29,6 +29,11 @@ This document is normative. If implementation behavior conflicts with this file,
 19. If a shell-script validation exception is exposed, it must be fixed to a specific repository script such as `references/check-base-image.sh`, not arbitrary shell authority.
 20. If tracked-file moves are exposed, they must require a clean tracked regular source, absent destination, clean index, dry-run, exact confirmation, and post-move hash verification.
 21. If tracked-file deletion is exposed, it must require a clean tracked regular file, exact current SHA-256, dry-run, exact confirmation, and leave a reviewable unstaged deletion.
+22. Exact replacement should accept an optional complete-file SHA-256 so shared-worktree callers can reject stale reads in addition to validating the text anchor.
+23. Direct MCP reads, writes, and Git operations must have bounded reply deadlines. Expiry must report an unknown outcome and recovery steps, not claim failure or roll back a worker that may still be running.
+24. Receipt-enabled mutations must persist a begin record before mutation and a settle record with resulting state afterward so an interrupted transport can be reconciled.
+25. ContextPatch mutations for one repository must be cooperatively serialized across server processes; file compare-and-write operations must hold a target lock across verification and atomic replacement.
+26. Detached deadline workers must have a fixed ceiling. Saturation must refuse a new operation before it starts.
 
 ## Required refusal cases
 
@@ -44,6 +49,7 @@ Write tools must refuse the operation when:
 8. Repository status violates the requested guard policy.
 9. A tracked-file move or deletion encounters a symlink component, non-regular file, untracked source, dirty source, or mismatched content hash.
 10. A tracked-file move has a pre-existing or indexed destination or a non-clean Git index.
+11. A supplied complete-file `expected_sha256` is malformed or no longer matches the current file.
 
 Refusals must return a clear reason. They must not pretend success.
 
@@ -58,6 +64,16 @@ Persistent file writes should use this pattern:
 5. Flush and rename the temporary file over an existing target, or publish a create-only target with an atomic no-overwrite operation.
 
 If the platform cannot provide the expected atomic behavior, the operation must report that limitation.
+
+## Reply deadlines and mutation receipts
+
+Direct MCP operations have bounded reply waits: 30 seconds for reads, 60 seconds for direct writes, and 120 seconds for Git and GitHub operations. Process, profile, setup, and native tools retain their operation-specific execution timeouts. A reply deadline does not cancel the worker because interrupting a filesystem or Git operation mid-flight could make the result less safe. The refusal must therefore say that the outcome is unknown and name a state-recovery tool. No more than 16 deadline workers may be active; saturation refuses the next call before its operation starts.
+
+`read_write_receipts` provides durable recovery evidence outside the repository under the stable scratch root. Receipt-enabled mutations append a begin record before mutation and a settle record after collecting the resulting file digest or Git HEAD. Reads, appends, and journal rotation must be cross-process locked, and rotation must preserve entries that never settled.
+
+Settled receipt outcomes are `applied` when the operation returned success, `refused` when it failed and observed state stayed unchanged, and `unknown` when it failed after state changed or could not be read. `interrupted` is reserved for attempts with no settlement record. Receipt coverage must not be overstated. The current server journals exact replacements, exact-hash whole-file overwrites, exact untracked-file deletions, and exact/scoped/prefix local commits. Other operations still require their normal state checks after an interrupted reply.
+
+ContextPatch MCP mutations for a repository use an advisory repository lock, and exact replacement/hash writes also lock their target across verification and atomic write. Lock contention refuses before mutation starts. These locks coordinate ContextPatch processes only; external programs that ignore them can still race, so caller-supplied SHA guards and post-operation state checks remain meaningful.
 
 ## Git guard expectation
 
@@ -99,6 +115,7 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 10. Store only redacted command logs, address them by opaque ids, and read them back through `read_command_log` rather than exposing arbitrary paths.
 11. Resolve executable names from the host `PATH` plus server-configured validation path entries such as `CONTEXTPATCH_VALIDATION_PATHS`, while still refusing caller-supplied executable paths or per-request environment overrides.
 12. Add latency instrumentation with monotonic durations and response sizes so performance work is evidence-based, while never recording secrets, environment values, or unredacted command output in timing metadata.
+13. Permit the exact `{scratch}` token inside arguments as the only general outside-repository byproduct path. Expand it to the stable repository-specific scratch root and refuse lexical traversal outside that root.
 
 `artifact_python_run` is an artifact-root scratch runner, not a shell. It may run only a Python script that already exists under the fixed artifact root, with bounded argv and repo-root-confined cwd, so analysis scripts do not have to be created inside the repository. It must not accept caller-supplied executable paths, shell snippets, or per-request environment overrides.
 

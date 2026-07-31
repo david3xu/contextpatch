@@ -43,6 +43,7 @@ fn stage1_mcp_tools_work_together() {
         "capability_manifest",
         "preflight_health",
         "read_range",
+        "read_write_receipts",
         "diff_preview",
         "replace_exact",
         "status_guard",
@@ -110,6 +111,7 @@ fn stage1_mcp_tools_work_together() {
         "capability_manifest",
         "preflight_health",
         "read_range",
+        "read_write_receipts",
         "diff_preview",
         "status_guard",
         "file_info",
@@ -149,6 +151,26 @@ fn stage1_mcp_tools_work_together() {
         validation_profile["inputSchema"]["properties"]["timeout_secs"]["maximum"],
         600
     );
+    let receipts = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "read_write_receipts")
+        .unwrap();
+    assert_eq!(
+        receipts["inputSchema"]["properties"]["limit"]["maximum"],
+        100
+    );
+    let replace_exact = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "replace_exact")
+        .unwrap();
+    assert_eq!(
+        replace_exact["inputSchema"]["properties"]["expected_sha256"]["pattern"],
+        "^[0-9a-f]{64}$"
+    );
 
     assert_text(&responses[1], "clean: no Git changes under sample.txt");
     assert_text(&responses[2], "2. beta\n3. gamma\n");
@@ -177,6 +199,51 @@ fn stage1_mcp_tools_work_together() {
     assert_eq!(responses[11]["result"]["isError"], true);
     assert_text(&responses[11], "status_guard refused");
     assert_text(&responses[11], "sample.txt");
+}
+
+#[test]
+fn replace_exact_hash_guard_and_file_receipts_are_end_to_end() {
+    let root = git_repo("replace_exact_hash_guard_and_file_receipts_are_end_to_end");
+    fs::write(root.join("sample.txt"), "alpha beta gamma\n").unwrap();
+    git(&root, &["add", "sample.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let current_sha256 = sha256_hex_for_test(b"alpha beta gamma\n");
+    let stale_sha256 = sha256_hex_for_test(b"stale content\n");
+    let stale_request = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"replace_exact","arguments":{{"path":"sample.txt","old":"beta","new":"delta","expected_sha256":"{stale_sha256}"}}}}}}"#
+    );
+    let guarded_request = format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"replace_exact","arguments":{{"path":"sample.txt","old":"beta","new":"delta","expected_sha256":"{current_sha256}"}}}}}}"#
+    );
+    let responses = run_server(
+        &root,
+        &[
+            &stale_request,
+            &guarded_request,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_write_receipts","arguments":{"limit":10}}}"#,
+        ],
+    );
+
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_text(&responses[0], "SHA-256 mismatch");
+    assert_text(&responses[1], "replaced bytes");
+    assert_eq!(
+        fs::read_to_string(root.join("sample.txt")).unwrap(),
+        "alpha delta gamma\n"
+    );
+
+    let receipts: Value = serde_json::from_str(response_text(&responses[2])).unwrap();
+    assert_eq!(receipts["returned"], 2);
+    assert_eq!(receipts["receipts"][0]["tool"], "replace_exact");
+    assert_eq!(receipts["receipts"][0]["outcome"], "applied");
+    assert_eq!(receipts["receipts"][0]["before_sha256"], current_sha256);
+    assert_eq!(
+        receipts["receipts"][0]["after_sha256"],
+        sha256_hex_for_test(b"alpha delta gamma\n")
+    );
+    assert_eq!(receipts["receipts"][1]["outcome"], "refused");
+    assert_eq!(receipts["receipts"][1]["before_sha256"], current_sha256);
 }
 
 #[test]
@@ -488,6 +555,7 @@ fn stage2_git_commit_exact_dry_run_and_commit_are_gated() {
     fs::write(root.join("sample.txt"), "before\n").unwrap();
     git(&root, &["add", "sample.txt"]);
     git(&root, &["commit", "--quiet", "-m", "initial"]);
+    let initial_head = git_stdout(&root, &["rev-parse", "HEAD"]).trim().to_string();
     fs::write(root.join("sample.txt"), "after\n").unwrap();
     fs::write(root.join("created.txt"), "new\n").unwrap();
 
@@ -497,6 +565,7 @@ fn stage2_git_commit_exact_dry_run_and_commit_are_gated() {
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["sample.txt","created.txt"],"subject":"test: commit exact paths"}}}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["sample.txt","created.txt"],"subject":"test: commit exact paths","dry_run":false}}}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["sample.txt","created.txt"],"subject":"test: commit exact paths","body":"Co-authored-by: Contextpatch <contextpatch@example.invalid>","dry_run":false,"confirm":"commit exact paths"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_write_receipts","arguments":{"limit":10}}}"#,
         ],
     );
 
@@ -506,6 +575,12 @@ fn stage2_git_commit_exact_dry_run_and_commit_are_gated() {
     assert_text(&responses[1], "requires confirm");
     assert_text(&responses[2], "\"committed\": true");
     assert_text(&responses[2], "\"push\": false");
+    let committed_head = git_stdout(&root, &["rev-parse", "HEAD"]).trim().to_string();
+    let receipts: Value = serde_json::from_str(response_text(&responses[3])).unwrap();
+    assert_eq!(receipts["receipts"][0]["tool"], "git_commit_exact");
+    assert_eq!(receipts["receipts"][0]["outcome"], "applied");
+    assert_eq!(receipts["receipts"][0]["before_git_head"], initial_head);
+    assert_eq!(receipts["receipts"][0]["after_git_head"], committed_head);
 
     let log = Command::new("git")
         .arg("-C")
@@ -524,6 +599,28 @@ fn stage2_git_commit_exact_dry_run_and_commit_are_gated() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8(status.stdout).unwrap(), "");
+}
+
+#[test]
+fn stage2_git_commit_exact_receipt_handles_an_unborn_head() {
+    let root = git_repo("stage2_git_commit_exact_receipt_handles_an_unborn_head");
+    fs::write(root.join("first.txt"), "first\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["first.txt"],"subject":"test: first commit","dry_run":false,"confirm":"commit exact paths"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_write_receipts","arguments":{"limit":10}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"committed\": true");
+    let committed_head = git_stdout(&root, &["rev-parse", "HEAD"]).trim().to_string();
+    let receipts: Value = serde_json::from_str(response_text(&responses[1])).unwrap();
+    assert_eq!(receipts["receipts"][0]["tool"], "git_commit_exact");
+    assert_eq!(receipts["receipts"][0]["outcome"], "applied");
+    assert_eq!(receipts["receipts"][0]["before_git_head"], "unborn");
+    assert_eq!(receipts["receipts"][0]["after_git_head"], committed_head);
 }
 
 #[test]

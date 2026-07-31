@@ -31,6 +31,28 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::read_write_receipts::NAME,
+                    "description": "Report recent mutation attempts and whether each one settled. Call this after a tool call is interrupted or times out to find out whether the write landed.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "interrupted_only": {
+                                "type": "boolean",
+                                "description": "Return only attempts that began and never settled, which is what a caller wants after a timeout. Defaults to false."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 100,
+                                "description": "Maximum number of attempts to return, newest first. Defaults to 25."
+                            }
+                        },
+                        "required": [],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::diff_preview::NAME,
                     "description": "Return a unified diff for an exact replacement without writing.",
                     "inputSchema": {
@@ -71,6 +93,11 @@ pub(crate) fn definitions() -> Vec<Value> {
                             "new": {
                                 "type": "string",
                                 "description": "Replacement text."
+                            },
+                            "expected_sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$",
+                                "description": "Optional lowercase SHA-256 digest of the complete current file. Use this to refuse if another agent changed the file after it was read."
                             }
                         },
                         "required": ["path", "old", "new"],

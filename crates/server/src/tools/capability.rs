@@ -22,9 +22,57 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
     serde_json::to_string_pretty(&json!({
         "server": "contextpatch",
         "version": contextpatch_core::VERSION,
+        // Provenance, not decoration. `version` is the crate version and does not move between
+        // rebuilds, so a client that finds a tool absent cannot tell whether the capability does not
+        // exist or whether this binary predates it. The natural inference is the wrong one, and the
+        // failure is silent and confident. These fields make staleness detectable in one call.
+        "build": {
+            "git_sha": contextpatch_core::BUILD_GIT_SHA,
+            "git_dirty": contextpatch_core::BUILD_GIT_DIRTY,
+            "built_at": contextpatch_core::BUILD_TIMESTAMP,
+            "profile": contextpatch_core::BUILD_PROFILE,
+            "note": "Compare git_sha against the checked out commit. If they differ, this server \
+                     predates the source tree, and a rebuild plus reinstall may provide capabilities \
+                     that appear absent here."
+        },
         "repo_root": root.display().to_string(),
+        "scratch": {
+            "token": contextpatch_core::fs::scratch::SCRATCH_TOKEN,
+            "root": contextpatch_core::fs::scratch::scratch_root(&root).display().to_string(),
+            "note": "Write byproducts here instead of into the repository. The token expands inside \
+                     data and output arguments, so `--output-dir={scratch}/run-1` works, and paths \
+                     that climb out of it are refused. It cannot be used as the Python script path; \
+                     use artifact_python_run for scratch-hosted code."
+        },
+        "deadlines_seconds": {
+            "read": contextpatch_core::process::deadline::READ_DEADLINE.as_secs(),
+            "write": contextpatch_core::process::deadline::WRITE_DEADLINE.as_secs(),
+            "git": contextpatch_core::process::deadline::GIT_DEADLINE.as_secs(),
+            "github": contextpatch_core::process::deadline::GIT_DEADLINE.as_secs(),
+            "max_active_workers": contextpatch_core::process::deadline::MAX_ACTIVE_WORKERS,
+            "note": "A call that exceeds its deadline returns a refusal naming the operation and how \
+                     to establish current state, rather than withholding a reply. The work is not \
+                     cancelled, so the outcome is reported as unknown rather than as failed. Once \
+                     the worker cap is reached, new bounded calls are refused before they start."
+        },
+        "mutation_coordination": {
+            "mode": "cooperative_contextpatch_locking",
+            "repository_serialized": true,
+            "sha_guarded_file_edits": true,
+            "note": "ContextPatch mutations for one repository are serialized across server \
+                     processes, and exact replacement/hash writes also lock their target while \
+                     checking it. External programs that ignore these advisory locks remain outside \
+                     this guarantee."
+        },
+        "write_receipts": {
+            "outcomes": ["applied", "refused", "unknown", "interrupted"],
+            "note": "Applied means the operation returned success; refused means it failed with \
+                     unchanged observed state; unknown means it failed after state changed or could \
+                     not be read; interrupted means no settlement record exists."
+        },
         "file_tools": {
             "read_range": true,
+            "read_write_receipts": true,
             "diff_preview": true,
             "replace_exact": true,
             "write_new_file": true,

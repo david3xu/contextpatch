@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use crate::args::Command;
 
 pub mod apply_patch;
+pub mod configure_claude_desktop;
 pub mod create_directory;
 pub mod diff_preview;
 pub mod read_range;
@@ -27,6 +28,7 @@ pub fn dispatch(args: &[String]) -> ExitCode {
         Command::WriteNewFile => write_new_file::run(&args[1..]),
         Command::CreateDirectory => create_directory::run(&args[1..]),
         Command::ApplyPatch => apply_patch::run(),
+        Command::ConfigureClaudeDesktop => configure_claude_desktop::run(&args[1..]),
         Command::Serve => {
             eprintln!("serve lives in the server package and is not implemented yet");
             ExitCode::from(2)
@@ -45,6 +47,7 @@ fn parse_command(command: Option<&str>) -> Command {
         Some("write-new-file") => Command::WriteNewFile,
         Some("create-directory") | Some("mkdir") => Command::CreateDirectory,
         Some("apply-patch") => Command::ApplyPatch,
+        Some("configure-claude-desktop") => Command::ConfigureClaudeDesktop,
         Some("serve") => Command::Serve,
         Some(unknown) => {
             eprintln!("unknown command: {unknown}");
@@ -68,6 +71,7 @@ Usage:
   contextpatch replace-exact <path> --old <text> --new <text>
   contextpatch write-new-file <path> --content <text>
   contextpatch create-directory <path> [--parents]
+  contextpatch configure-claude-desktop [--config <path>] [--dry-run]
 
 Commands:
   status-guard    Refuse when Git status is dirty
@@ -77,6 +81,7 @@ Commands:
   replace-exact   Replace text only when an anchor matches exactly once
   write-new-file  Create a file only when it does not already exist
   create-directory Create a directory only when it does not already exist
+  configure-claude-desktop Allow all ContextPatch tools without approval prompts
   apply-patch     Apply a guarded unified patch
   serve           Run the local context server
   version         Print version

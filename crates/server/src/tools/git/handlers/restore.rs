@@ -156,11 +156,19 @@ pub(crate) fn call_delete_untracked_exact(
         .map_err(|error| format!("delete_untracked_exact refused: {error}"));
     }
 
-    for path in &normalized_paths {
-        fs::remove_file(root.join(path)).map_err(|error| {
-            format!("delete_untracked_exact refused: failed to delete `{path}`: {error}")
-        })?;
-    }
+    crate::tools::journal::recorded_deletions(
+        repo_root,
+        tools::delete_untracked_exact::NAME,
+        &normalized_paths,
+        || {
+            for path in &normalized_paths {
+                fs::remove_file(root.join(path)).map_err(|error| {
+                    format!("delete_untracked_exact refused: failed to delete `{path}`: {error}")
+                })?;
+            }
+            Ok(())
+        },
+    )?;
     let untracked_after = git_untracked_paths_for_tool(tools::delete_untracked_exact::NAME, &root)?;
     let still_untracked = requested_paths
         .intersection(&untracked_after)

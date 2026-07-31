@@ -9,8 +9,9 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `capability_manifest` | No | Reports exact supported capabilities and unsupported boundaries |
 | `preflight_health` | No | Repository/tool readiness summary |
 | `read_range` | No | Bounded path and line range |
+| `read_write_receipts` | No | Bounded recent receipt query under the repository-specific scratch root |
 | `diff_preview` | No | Proposed edit input |
-| `replace_exact` | Yes | Old text must match exactly once |
+| `replace_exact` | Yes | Old text must match exactly once; optional complete-file SHA-256 guard |
 | `apply_patch` | Yes | Unified patch context must apply cleanly |
 | `insert_at_anchor` | Yes | Anchor must match exactly once |
 | `move_tracked` | Yes | Clean tracked regular source, absent destination, clean index, dry-run and confirmation |
@@ -61,9 +62,11 @@ The public tool names use snake_case because they are protocol-facing. The CLI u
 
 ## Tool annotations
 
-Every server-advertised MCP tool must include an `annotations` object in `tools/list` so clients can offer a durable "always allow" decision after the first approval. The server sets `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: false` for all tools, with `readOnlyHint: true` on read-only tools.
+Every server-advertised MCP tool must include an `annotations` object in `tools/list` so clients can interpret tool intent. The server sets `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: false` for all tools, with `readOnlyHint: true` on read-only tools.
 
 These annotations are a client-permission hint only. They must not remove internal contextpatch safety gates: mutation-capable tools still default to dry-run where designed, still require exact confirmation strings for execution where designed, and still enforce repository-root, hash, path, clean-index/worktree, timeout, and refusal policies.
+
+Claude Desktop approval prompts are controlled separately by its MCP server configuration. `contextpatch configure-claude-desktop` replaces each detected ContextPatch server's policy with `{"*":"allow"}` so all present and future ContextPatch tools are available without repeated approval prompts. It recognizes native and `.exe` server command paths, locks the adjacent config update cooperatively, backs up the exact bytes it read, and rechecks those bytes immediately before atomic replacement. The wildcard client policy changes only client approval UX; it does not bypass any server-side guard.
 
 ## Tool contracts
 
@@ -83,6 +86,11 @@ Rules:
 - Must report `git_merge_readiness` honestly when available and distinguish it from generic merge authority.
 - Must report setup profiles honestly when available and distinguish declarative profile planning from generic package-manager or shell authority.
 - Must include compact examples for typed setup, native build, and native device actions so clients can choose correct params without raw command knowledge.
+- Must report build Git SHA, dirty state, build timestamp, and profile so clients can detect a stale installed binary.
+- Must report the stable repository-specific scratch root and `{scratch}` argument token.
+- Must report direct read, write, Git, and GitHub reply deadlines, the active-worker ceiling, and state that expiry leaves the operation outcome unknown.
+- Must report cooperative repository mutation locking honestly and distinguish it from universal exclusion of external writers.
+- Must report the receipt outcome vocabulary and its recovery meaning.
 - Must not mutate repository state.
 
 ### `preflight_health`
@@ -126,6 +134,27 @@ Rules:
 - The tool must return line numbers with the content.
 - The tool must not read unbounded files by default.
 
+### `read_write_receipts`
+
+Returns recent durable mutation receipts, newest first.
+
+Optional inputs:
+
+- `interrupted_only`: defaults to `false`; when true, returns only attempts with a persisted begin record and no settle record
+- `limit`: defaults to `25`, maximum `100`
+
+Rules:
+
+- The journal must live under the stable repository-specific scratch root, outside the repository.
+- Each receipt must identify the tool and include the available path, before/after SHA-256 values, before/after Git HEAD values, outcome, and timestamps.
+- A mutation must persist its begin record before running and its settle record after collecting resulting state.
+- Settled outcomes are `applied` when the operation returned success, `refused` when it failed and observed state stayed unchanged, and `unknown` when it failed after observed state changed or could not be read. `interrupted` means no settle record exists.
+- Journal reads, appends, and rotation must use cross-process locking.
+- Rotation must preserve interrupted entries.
+- An interrupted receipt means the transport did not observe settlement; callers must compare current file or Git state before retrying.
+- Receipt coverage is explicit, not universal. The current implementation records `replace_exact`, `write_existing_file_exact_hash`, `delete_untracked_exact`, `git_commit_exact`, `git_commit_scoped`, and `git_commit_prefix`.
+- The tool must not mutate repository state.
+
 ### `diff_preview`
 
 Returns a unified diff for a proposed edit without writing.
@@ -135,6 +164,10 @@ Required inputs:
 - `path`
 - `old`
 - `new`
+
+Optional inputs:
+
+- `expected_sha256`: lowercase SHA-256 of the complete current file
 
 CLI shape:
 
@@ -174,6 +207,7 @@ Rules:
 - Refuse if `old` is empty.
 - Refuse if `old` appears zero times.
 - Refuse if `old` appears more than once.
+- When `expected_sha256` is provided, validate it and refuse before mutation if the current complete-file digest differs.
 - Write atomically.
 - Return the changed byte range or a concise edit summary.
 
@@ -506,7 +540,9 @@ Rules:
   - `bash`: exactly `references/check-base-image.sh` or `references/check-base-image.sh task`
   - `rg`: search invocation
 - The default timeout is 120 seconds. Exact `harbor run` commands may use up to 3600 seconds; every other allowlisted command remains capped at 600 seconds.
-- Arguments that directly reference paths outside the repository root must be refused.
+- Arguments that directly reference paths outside the repository root must be refused, except for the server-owned `{scratch}` token.
+- `{scratch}` may appear inside data/output arguments and expands to the stable repository-specific scratch root; traversal outside that root must be refused.
+- `{scratch}` must not select a `python`/`python3` script. Repository scripts stay repository-relative, and scratch-hosted Python code uses `artifact_python_run`.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
 - Program resolution may include server-host configuration through `CONTEXTPATCH_VALIDATION_PATHS` in addition to the process `PATH`; callers still supply only executable names, never paths or environment variables.
@@ -1256,50 +1292,51 @@ Rules:
 The server currently ships:
 
 1. `replace_exact`
-2. `read_range`
-3. `write_new_file`
-4. `write_new_file_base64`
-5. `write_existing_file_exact_hash`
-6. `file_info`
-7. `list_directory`
-8. `read_file_bytes`
-9. `artifact_write_text`
-10. `artifact_write_base64`
-11. `bulk_write_new_files_base64`
-12. `create_directory`
-13. `diff_preview`
-14. `status_guard`
-15. `capability_manifest`
-16. `preflight_health`
-17. `run_guarded_command`
-18. `artifact_python_run`
-19. `image_cleanliness_check_run`
-20. `docker_image_inspect`
-21. `fixture_generator_run`
-22. `base_image_check_run`
-23. `fixture_manifest_verify`
-24. `fixture_manifest_refresh`
-25. `read_command_log`
-26. `validation_profile_run`
-27. `git_commit_exact`
-28. `git_stage_exact`
-29. `git_staged_scope_check`
-30. `git_commit_scoped`
-31. `git_commit_prefix`
-32. `git_restore_exact`
-33. `move_tracked`
-34. `delete_guarded`
-35. `delete_untracked_exact`
-36. `delete_generated_prefix`
-37. `git_remote_list`
-38. `git_remote_check`
-39. `git_branch_prepare`
-40. `git_merge_readiness`
-41. `git_push_exact`
-42. `github_pr_run`
-43. `github_fork_prepare`
-44. `setup_profile_run`
-45. `native_build_run`
-46. `native_device_run`
+2. `read_write_receipts`
+3. `read_range`
+4. `write_new_file`
+5. `write_new_file_base64`
+6. `write_existing_file_exact_hash`
+7. `file_info`
+8. `list_directory`
+9. `read_file_bytes`
+10. `artifact_write_text`
+11. `artifact_write_base64`
+12. `bulk_write_new_files_base64`
+13. `create_directory`
+14. `diff_preview`
+15. `status_guard`
+16. `capability_manifest`
+17. `preflight_health`
+18. `run_guarded_command`
+19. `artifact_python_run`
+20. `image_cleanliness_check_run`
+21. `docker_image_inspect`
+22. `fixture_generator_run`
+23. `base_image_check_run`
+24. `fixture_manifest_verify`
+25. `fixture_manifest_refresh`
+26. `read_command_log`
+27. `validation_profile_run`
+28. `git_commit_exact`
+29. `git_stage_exact`
+30. `git_staged_scope_check`
+31. `git_commit_scoped`
+32. `git_commit_prefix`
+33. `git_restore_exact`
+34. `move_tracked`
+35. `delete_guarded`
+36. `delete_untracked_exact`
+37. `delete_generated_prefix`
+38. `git_remote_list`
+39. `git_remote_check`
+40. `git_branch_prepare`
+41. `git_merge_readiness`
+42. `git_push_exact`
+43. `github_pr_run`
+44. `github_fork_prepare`
+45. `setup_profile_run`
+46. `native_build_run`
+47. `native_device_run`
 
 Other documented boundary tools, such as `apply_patch` and `insert_at_anchor`, remain planned until implemented. See `docs/implementation-roadmap.md`.

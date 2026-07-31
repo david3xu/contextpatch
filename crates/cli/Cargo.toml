@@ -15,3 +15,5 @@ path = "src/main.rs"
 
 [dependencies]
 core.workspace = true
+fs2 = "0.4"
+serde_json = "1"

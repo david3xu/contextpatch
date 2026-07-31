@@ -3,9 +3,10 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
+use crate::fs::hash::{sha256_file, validate_sha256};
 use crate::git::guarded_path::{
     canonical_repo_root, ensure_path_clean, ensure_tracked, path_has_unstaged_deletion,
-    path_is_tracked, resolve_existing_regular_file, sha256_file, validate_sha256,
+    path_is_tracked, resolve_existing_regular_file,
 };
 
 pub const CONFIRMATION: &str = "delete tracked file";
@@ -102,7 +103,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{delete_guarded, CONFIRMATION};
-    use crate::git::guarded_path::sha256_file;
+    use crate::fs::hash::sha256_file;
 
     #[test]
     fn previews_then_deletes_clean_tracked_file_as_unstaged_change() {

@@ -18,6 +18,10 @@ pub mod file_info {
     pub const NAME: &str = "file_info";
 }
 
+pub mod read_write_receipts {
+    pub const NAME: &str = "read_write_receipts";
+}
+
 pub mod list_directory {
     pub const NAME: &str = "list_directory";
 }
@@ -58,14 +62,13 @@ use std::collections::{hash_map::DefaultHasher, BTreeSet};
 use std::fs::{self, FileType};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use contextpatch_core::fs::create_directory::create_directory_in_root;
 use contextpatch_core::fs::read_range::read_range_in_root;
 use contextpatch_core::fs::write_new_file::{write_new_file_bytes_in_root, write_new_file_in_root};
 use contextpatch_core::git::status::{status_summary, status_summary_for_path};
 use contextpatch_core::patch::diff::preview_exact_replacement_in_root;
-use contextpatch_core::replace::exact::replace_exact_in_root;
+use contextpatch_core::replace::exact::replace_exact_in_root_with_sha256;
 use serde_json::{json, Value};
 
 use crate::tools;
@@ -82,6 +85,47 @@ pub(crate) fn call_read_range(
 
     read_range_in_root(repo_root, Path::new(path), start_line, end_line)
         .map_err(|error| format!("read_range refused: {error}"))
+}
+
+pub(crate) fn call_read_write_receipts(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    use contextpatch_core::fs::receipt::{self, DEFAULT_RECENT_LIMIT};
+
+    let interrupted_only = optional_bool(arguments, "interrupted_only")?.unwrap_or(false);
+    let limit = optional_u64(arguments, "limit")?
+        .map(|value| {
+            usize::try_from(value)
+                .map_err(|_| "read_write_receipts refused: limit is too large".to_string())
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_RECENT_LIMIT);
+
+    let receipts = if interrupted_only {
+        receipt::unsettled(repo_root, limit)
+    } else {
+        receipt::recent(repo_root, limit)
+    }
+    .map_err(|error| format!("read_write_receipts refused: {error}"))?;
+
+    let interrupted = receipts.iter().filter(|entry| entry.interrupted()).count();
+    let entries: Vec<Value> = receipts.iter().map(|entry| entry.to_json()).collect();
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::read_write_receipts::NAME,
+        "journal": receipt::journal_path(repo_root)
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        "interrupted_only": interrupted_only,
+        "returned": entries.len(),
+        "interrupted": interrupted,
+        // The recovery step is stated rather than implied, because the whole reason this tool exists
+        // is that the caller has just lost an answer and needs to know what to do next.
+        "recovery": "for an interrupted file entry, compare before_sha256 with the current digest from file_info; for an interrupted Git entry, compare before_git_head with the current HEAD from run_guarded_command git rev-parse HEAD",
+        "receipts": entries
+    }))
+    .map_err(|error| format!("read_write_receipts refused: {error}"))
 }
 
 pub(crate) fn call_diff_preview(
@@ -103,9 +147,13 @@ pub(crate) fn call_replace_exact(
     let path = required_string(arguments, "path")?;
     let old = required_string(arguments, "old")?;
     let new = required_string(arguments, "new")?;
+    let expected_sha256 = optional_string(arguments, "expected_sha256")?;
 
-    let summary = replace_exact_in_root(repo_root, Path::new(path), old, new)
-        .map_err(|error| format!("replace_exact refused: {error}"))?;
+    let summary =
+        crate::tools::journal::recorded(repo_root, tools::replace_exact::NAME, path, || {
+            replace_exact_in_root_with_sha256(repo_root, Path::new(path), old, new, expected_sha256)
+                .map_err(|error| format!("replace_exact refused: {error}"))
+        })?;
 
     Ok(format!(
         "replaced bytes {}..{} in {} ({} bytes written)",
@@ -465,31 +513,48 @@ pub(crate) fn call_write_existing_file_exact_hash(
         .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"));
     }
 
-    let temporary = target.with_extension(format!(
-        "contextpatch-tmp-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?
-            .as_nanos()
-    ));
-    fs::write(&temporary, new_bytes).map_err(|error| {
-        format!("write_existing_file_exact_hash refused: failed to write temporary file: {error}")
-    })?;
-    fs::rename(&temporary, &target).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        format!("write_existing_file_exact_hash refused: failed to replace `{normalized}`: {error}")
-    })?;
+    crate::tools::journal::recorded(
+        repo_root,
+        tools::write_existing_file_exact_hash::NAME,
+        &normalized,
+        || {
+            let _mutation_lock =
+                contextpatch_core::fs::mutation_lock::try_file_mutation_lock(&root, &target)
+                    .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
+            let current = fs::read(&target).map_err(|error| {
+                format!(
+                    "write_existing_file_exact_hash refused: failed to re-read `{normalized}` \
+                     under the mutation lock: {error}"
+                )
+            })?;
+            let current_sha256 = sha256_hex(&current);
+            if current_sha256 != expected_sha256 {
+                return Err(format!(
+                    "write_existing_file_exact_hash refused: `{normalized}` changed before the \
+                     mutation; current_sha256={current_sha256}, expected_sha256={expected_sha256}"
+                ));
+            }
+            contextpatch_core::fs::atomic_write::write_atomic(&target, new_bytes).map_err(
+                |error| {
+                    format!(
+                        "write_existing_file_exact_hash refused: failed to replace \
+                         `{normalized}`: {error}"
+                    )
+                },
+            )?;
 
-    serde_json::to_string_pretty(&json!({
-        "tool": tools::write_existing_file_exact_hash::NAME,
-        "dry_run": false,
-        "wrote": true,
-        "path": normalized,
-        "previous_sha256": current_sha256,
-        "sha256": new_sha256,
-        "bytes_written": new_bytes.len()
-    }))
-    .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))
+            serde_json::to_string_pretty(&json!({
+                "tool": tools::write_existing_file_exact_hash::NAME,
+                "dry_run": false,
+                "wrote": true,
+                "path": normalized,
+                "previous_sha256": current_sha256,
+                "sha256": new_sha256,
+                "bytes_written": new_bytes.len()
+            }))
+            .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))
+        },
+    )
 }
 
 pub(crate) fn call_artifact_write_text(

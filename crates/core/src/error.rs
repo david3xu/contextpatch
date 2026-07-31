@@ -11,6 +11,16 @@ impl ContextPatchError {
             message: message.into(),
         }
     }
+
+    /// An error caused by input the caller can correct, as opposed to an environment failure.
+    ///
+    /// Behaviourally identical to `new`. It exists because nearly every error this crate raises is a
+    /// refusal of bad input, and naming that at the construction site makes the guard's intent legible
+    /// without a comment. `new` remains for the cases that are genuinely not about input, so the
+    /// distinction stays meaningful rather than becoming a synonym everyone ignores.
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self::new(message)
+    }
 }
 
 impl fmt::Display for ContextPatchError {

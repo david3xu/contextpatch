@@ -55,6 +55,7 @@ contextpatch diff-preview <path> --old <text> --new <text>
 contextpatch replace-exact <path> --old <text> --new <text>
 contextpatch write-new-file <path> --content <text>
 contextpatch status-guard [path]
+contextpatch configure-claude-desktop [--dry-run]
 ```
 
 The MCP server exposes the safe tool surface to local agent clients:
@@ -62,6 +63,7 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `capability_manifest`
 - `preflight_health`
 - `read_range`
+- `read_write_receipts`
 - `diff_preview`
 - `replace_exact`
 - `write_new_file`
@@ -106,9 +108,15 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `github_pr_run`
 - `github_fork_prepare`
 
-Every advertised MCP tool includes stable tool annotations so clients can offer persistent "always allow" approval after the first permission decision. These annotations do not bypass server-side guardrails: mutation-capable tools still keep their dry-run defaults, exact confirmation strings, path checks, clean-index/worktree gates, and refusal behavior.
+To make every current and future ContextPatch tool available in Claude Desktop without per-call approval prompts, run `contextpatch configure-claude-desktop`. It replaces the `toolPolicy` of every configured `contextpatch-server` entry with `{"*":"allow"}`, preserves unrelated settings, creates a timestamped backup from the exact original bytes, and writes the configuration atomically under an adjacent cooperative lock with a final stale-read check. Client auto-approval is only a usability setting: mutation-capable tools still keep their dry-run defaults, exact confirmation strings, path checks, clean-index/worktree gates, and refusal behavior.
+
+Every advertised MCP tool also includes stable annotations for clients that use permission hints. Annotations alone do not suppress Claude Desktop approval prompts; the wildcard `toolPolicy` does.
 
 `run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata. The default timeout is 120 seconds and the general maximum remains 600 seconds; only exact `harbor run` commands may request up to 3600 seconds. It supports repo-relative Python scripts, `pytest`, `harbor run`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` base-image checks for project validation; it still refuses Docker, `pip`, arbitrary `python -m`, arbitrary shell scripts, and generic package installation.
+
+Operational support is discoverable through `capability_manifest`: it reports build provenance, a stable repository-specific scratch root, and reply deadlines of 30 seconds for reads, 60 seconds for direct writes, and 120 seconds for Git and GitHub operations. At most 16 deadline workers may remain active; later calls are refused before starting. Guarded command data/output arguments may use `{scratch}` for byproducts outside the repository, but Python script selection stays repository-relative; use `artifact_python_run` for scratch-hosted code. ContextPatch mutations for one repository are cooperatively serialized across server processes, while SHA-guarded file edits also hold a per-target lock across verification and write. External programs that ignore those advisory locks remain outside the guarantee.
+
+When a bounded mutation reply is interrupted, `read_write_receipts` reports durable before/after file digests or Git HEAD values for receipt-enabled exact replacements, exact-hash overwrites, untracked-file deletions, and local commit workflows. Outcomes distinguish `applied`, `refused`, `unknown` (state changed or became unreadable after an error), and `interrupted` (no settlement record). `replace_exact` also accepts an optional complete-file `expected_sha256` so shared-worktree callers can refuse a stale edit before mutation.
 
 `file_info`, `list_directory`, and `read_file_bytes` provide bounded inspection for file digests, line counts, directory entries, symlink status, and binary byte ranges without relying on ad hoc scripts. `write_new_file_base64` creates binary repository files with the same create-only root guard as text file creation. `write_existing_file_exact_hash` covers whole-file synchronization only when the caller supplies the current lowercase SHA-256 digest and explicit confirmation. `bulk_write_new_files_base64` imports many create-only fixture files in one bounded call. `fixture_manifest_verify` and `fixture_manifest_refresh` enforce exact fixture file sets and SHA-256 digests against a manifest. `artifact_write_text` and `artifact_write_base64` create sidecar artifacts outside the repository tree for generators, trap checks, or local helper files that must not be committed. `artifact_python_run` executes a Python script from that sidecar artifact root with no shell and repo-root-confined cwd, so scratch analysis does not have to create temporary files in the repository. `fixture_generator_run` handles the common Dynamo pattern of temporarily staging a repo-relative Python generator, running it with declared output paths/prefixes, verifying it did not touch undeclared files, and then letting the caller delete the temporary generator before commit.
 
@@ -145,7 +153,7 @@ See [docs/safety-contract.md](docs/safety-contract.md) for the full contract.
 
 ## Current status
 
-Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery, preflight health, allowlisted guarded command execution with a Harbor-only 3600-second ceiling, bounded file/directory/binary inspection, binary/sidecar/bulk fixture writes, artifact-root Python scratch execution, hash-guarded existing-file synchronization, fixture manifest verification/refresh, typed fixture generator/base-image/image-cleanliness/Docker-inspect workflows, exact/stage/scoped/prefix Git workflows, guarded tracked-file moves and deletions, generated-prefix cleanup, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery and build provenance, preflight health, bounded reply deadlines, durable mutation receipts, stable scratch paths, allowlisted guarded command execution with a Harbor-only 3600-second ceiling, bounded file/directory/binary inspection, binary/sidecar/bulk fixture writes, artifact-root Python scratch execution, hash-guarded existing-file synchronization, fixture manifest verification/refresh, typed fixture generator/base-image/image-cleanliness/Docker-inspect workflows, exact/stage/scoped/prefix Git workflows, guarded tracked-file moves and deletions, generated-prefix cleanup, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. The CLI can install wildcard Claude Desktop tool approval without weakening those runtime guards. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 
