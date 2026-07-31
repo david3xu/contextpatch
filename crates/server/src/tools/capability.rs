@@ -49,11 +49,14 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
             "write": contextpatch_core::process::deadline::WRITE_DEADLINE.as_secs(),
             "git": contextpatch_core::process::deadline::GIT_DEADLINE.as_secs(),
             "github": contextpatch_core::process::deadline::GIT_DEADLINE.as_secs(),
+            "git_subprocess_timeout": contextpatch_core::process::GIT_SUBPROCESS_TIMEOUT.as_secs(),
             "max_active_workers": contextpatch_core::process::deadline::MAX_ACTIVE_WORKERS,
             "note": "A call that exceeds its deadline returns a refusal naming the operation and how \
                      to establish current state, rather than withholding a reply. The work is not \
-                     cancelled, so the outcome is reported as unknown rather than as failed. Once \
-                     the worker cap is reached, new bounded calls are refused before they start."
+                     cancelled, so the outcome is reported as unknown rather than as failed. Direct \
+                     Git subprocesses have a shorter hard timeout and are terminated before the \
+                     reply deadline; Unix process groups also terminate descendants. Once the \
+                     worker cap is reached, new bounded calls are refused before they start."
         },
         "mutation_coordination": {
             "mode": "cooperative_contextpatch_locking",
@@ -83,6 +86,7 @@ pub(crate) fn call_capability_manifest(repo_root: &Path) -> Result<String, Strin
             "read_file_bytes": true,
             "artifact_write_text": true,
             "artifact_write_base64": true,
+            "artifact_delete_exact": true,
             "create_directory": true,
             "status_guard": true,
             "read_command_log": true,

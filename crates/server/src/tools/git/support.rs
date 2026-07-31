@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::tools;
+use contextpatch_core::process::runner::{run_bounded_command, BoundedProcessOutput};
+use contextpatch_core::process::GIT_SUBPROCESS_TIMEOUT;
 pub(crate) fn validate_commit_subject(subject: &str) -> Result<String, String> {
     let trimmed = subject.trim();
     if trimmed.is_empty() {
@@ -324,34 +325,12 @@ pub(crate) fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
 
 pub(crate) fn git_success(root: &Path, args: Vec<String>) -> Result<(), String> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = git_output(root, &arg_refs)?;
-    if !output.status.success() {
-        return Err(format!(
-            "git_commit_exact refused: git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
+    let _ = git_output(root, &arg_refs)?;
     Ok(())
 }
 
-pub(crate) fn git_output(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| format!("git_commit_exact refused: failed to run git: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git_commit_exact refused: git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(output)
+pub(crate) fn git_output(root: &Path, args: &[&str]) -> Result<BoundedProcessOutput, String> {
+    git_output_for_tool(tools::git_commit_exact::NAME, root, args)
 }
 
 pub(crate) fn canonical_repo_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
@@ -381,15 +360,8 @@ pub(crate) fn git_stdout_for_tool(
 pub(crate) const UNBORN_GIT_HEAD: &str = "unborn";
 
 pub(crate) fn git_head_for_tool(tool_name: &str, root: &Path) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--verify", "HEAD"])
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| format!("{tool_name} refused: failed to run git: {error}"))?;
-    if output.status.success() {
+    let output = run_git_for_tool(tool_name, root, &["rev-parse", "--verify", "HEAD"])?;
+    if output.success() {
         return String::from_utf8(output.stdout)
             .map(|head| head.trim().to_string())
             .map_err(|error| format!("{tool_name} refused: git output was not UTF-8: {error}"));
@@ -420,16 +392,9 @@ pub(crate) fn git_output_for_tool(
     tool_name: &str,
     root: &Path,
     args: &[&str],
-) -> Result<std::process::Output, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| format!("{tool_name} refused: failed to run git: {error}"))?;
-    if !output.status.success() {
+) -> Result<BoundedProcessOutput, String> {
+    let output = run_git_for_tool(tool_name, root, args)?;
+    if !output.success() {
         return Err(format!(
             "{tool_name} refused: git {} failed: {}",
             args.join(" "),
@@ -440,15 +405,8 @@ pub(crate) fn git_output_for_tool(
 }
 
 pub(crate) fn git_status_code(root: &Path, args: &[&str]) -> Result<i32, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| format!("git operation refused: failed to run git: {error}"))?;
-    Ok(output.status.code().unwrap_or(-1))
+    let output = run_git_for_tool("git operation", root, args)?;
+    Ok(output.exit_code)
 }
 
 pub(crate) fn rev_count_for_tool(tool_name: &str, root: &Path, range: &str) -> Result<u64, String> {
@@ -516,13 +474,12 @@ pub(crate) fn validate_git_branch(branch: &str) -> Result<String, String> {
     {
         return Err(format!("git workflow refused: invalid branch `{branch}`"));
     }
-    let status = Command::new("git")
-        .args(["check-ref-format", "--branch", branch])
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| format!("git workflow refused: failed to validate branch: {error}"))?;
-    if !status.status.success() {
+    let status = run_git_for_tool(
+        "git workflow",
+        Path::new("."),
+        &["check-ref-format", "--branch", branch],
+    )?;
+    if !status.success() {
         return Err(format!("git workflow refused: invalid branch `{branch}`"));
     }
     Ok(branch.to_string())
@@ -546,13 +503,12 @@ pub(crate) fn validate_git_ref_expression(value: &str) -> Result<String, String>
         return Err(format!("git workflow refused: invalid ref `{value}`"));
     }
 
-    let status = Command::new("git")
-        .args(["check-ref-format", "--allow-onelevel", value])
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| format!("git workflow refused: failed to validate ref: {error}"))?;
-    if !status.status.success() {
+    let status = run_git_for_tool(
+        "git workflow",
+        Path::new("."),
+        &["check-ref-format", "--allow-onelevel", value],
+    )?;
+    if !status.success() {
         return Err(format!("git workflow refused: invalid ref `{value}`"));
     }
     Ok(value.to_string())
@@ -616,6 +572,33 @@ pub(crate) fn resolve_commit(
     let commit_ref = format!("{ref_name}^{{commit}}");
     let commit = git_stdout_for_tool(tool_name, root, &["rev-parse", "--verify", &commit_ref])?;
     Ok(commit.trim().to_string())
+}
+
+fn run_git_for_tool(
+    tool_name: &str,
+    root: &Path,
+    args: &[&str],
+) -> Result<BoundedProcessOutput, String> {
+    let owned_args = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    let output = run_bounded_command(
+        root,
+        "git",
+        &owned_args,
+        GIT_SUBPROCESS_TIMEOUT,
+        "Git subprocess",
+    )
+    .map_err(|error| format!("{tool_name} refused: failed to run git: {error}"))?;
+    if output.timed_out {
+        return Err(format!(
+            "{tool_name} refused: git {} timed out after {} seconds; the Git process was terminated",
+            args.join(" "),
+            GIT_SUBPROCESS_TIMEOUT.as_secs()
+        ));
+    }
+    Ok(output)
 }
 
 pub(crate) fn changed_files_between(

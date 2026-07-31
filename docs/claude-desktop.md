@@ -39,26 +39,27 @@ The expected agent workflow is:
 15. Use `git_commit_prefix` when the desired commit is a large generated or fixture tree under known prefixes; inspect the dry-run expanded path list before confirming.
 16. When committing, use project-owned commit messages only. Do not add Claude, Anthropic, AI, assistant, or co-authored-by attribution unless the repository owner explicitly asks for it for that specific commit.
 17. Use `artifact_write_text` or `artifact_write_base64` for generator, trap-check, or other sidecar files that must not enter the repository tree.
-18. Use `artifact_python_run` for Python scratch analysis from the sidecar artifact root instead of creating temporary scripts inside the repository.
-19. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
-20. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
-21. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
-22. Use `image_cleanliness_check_run` for the narrow Docker image check that searches the built image for a forbidden file name such as `solve.sh`; keep dry-run unless Docker execution is explicitly needed.
-23. Use `docker_image_inspect` for the narrow read-only Docker image metadata workflow; do not ask for arbitrary Docker commands.
-24. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
-25. Use `delete_generated_prefix` for ignored/untracked generated files and empty directories under known prefixes, such as `__pycache__`, after reviewing the dry-run path list.
-26. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
-27. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
-28. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
-29. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
-30. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
-31. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
-32. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows and Actions evidence instead of asking for arbitrary `gh` access. Supply `repository: "OWNER/REPO"` when the checkout is a fork but the PR belongs to upstream. Use `pr_view` for the exact head SHA, `workflow_runs_for_commit` to separate current from stale runs, `pr_comments` with a short marker for sticky findings, and then `workflow_run_view` or `workflow_job_log` for execution evidence. If the evidence proves a transient failure, review the `workflow_run_rerun_failed` dry-run before confirming the failed-job rerun. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
-33. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
-34. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
-35. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
-36. Use `write_existing_file_exact_hash` for whole-file synchronization only when the current file SHA-256 is known and reviewed.
-37. Use `fixture_manifest_verify` and `fixture_manifest_refresh` to enforce exact fixture file sets and SHA-256 digests instead of asking for ad hoc hashing scripts.
+18. Use `artifact_delete_exact` to clean up one sidecar file after reviewing its dry-run SHA-256; do not create successive filenames merely to iterate a helper.
+19. Use `artifact_python_run` for Python scratch analysis from the sidecar artifact root instead of creating temporary scripts inside the repository.
+20. Use `bulk_write_new_files_base64` for bounded create-only fixture-tree imports when a generator cannot be run directly.
+21. Use `fixture_generator_run` for repo-relative Python fixture generators that need declared output mutation; it supports temporary untracked generator scripts and verifies all changed paths stay within declared outputs.
+22. Use `base_image_check_run` for the exact `references/check-base-image.sh` validation, optionally with `project_path: "task"`, instead of asking for generic shell.
+23. Use `image_cleanliness_check_run` for the narrow Docker image check that searches the built image for a forbidden file name such as `solve.sh`; keep dry-run unless Docker execution is explicitly needed.
+24. Use `docker_image_inspect` for the narrow read-only Docker image metadata workflow; do not ask for arbitrary Docker commands.
+25. Use `delete_untracked_exact` only for explicit untracked regular files that would otherwise fail clean-worktree or no-extraneous-files gates.
+26. Use `delete_generated_prefix` for ignored/untracked generated files and empty directories under known prefixes, such as `__pycache__`, after reviewing the dry-run path list.
+27. Use `git_remote_list` to inspect whether `origin` and fork/upstream remotes are configured before publishing.
+28. Use `git_remote_check` before publishing to fetch one explicit remote branch and inspect whether the remote is ahead.
+29. Use `git_branch_prepare` to create or switch to a local branch from one explicit remote base branch after a clean-worktree check.
+30. Use `git_merge_readiness` before PR/merge work when the question is whether two refs changed the same files since their merge base.
+31. Use `git_push_exact` only after a clean local exact commit, matching branch, matching expected HEAD, no remote-ahead divergence, and explicit confirmation.
+32. Use `setup_profile_run` for server-owned setup profiles instead of broad `npm install`, `pnpm add`, `npx`, or shell execution; keep `dry_run` enabled until the plan is reviewed.
+33. Use `github_pr_run` for GitHub PR auth/status/check/view/create workflows and Actions evidence instead of asking for arbitrary `gh` access. Supply `repository: "OWNER/REPO"` when the checkout is a fork but the PR belongs to upstream. Use `pr_view` for the exact head SHA, `workflow_runs_for_commit` to separate current from stale runs, `pr_comments` with a short marker for sticky findings, and then `workflow_run_view` or `workflow_job_log` for execution evidence. If the evidence proves a transient failure, review the `workflow_run_rerun_failed` dry-run before confirming the failed-job rerun. Keep PR creation in dry-run until the title, body, base, and head are reviewed.
+34. Use `github_fork_prepare` to plan or run `gh repo fork` with explicit confirmation instead of arbitrary `gh repo` commands.
+35. Use `native_build_run` for typed iOS/Android build and test actions instead of raw `xcodebuild` or `./gradlew`.
+36. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
+37. Use `write_existing_file_exact_hash` for whole-file synchronization only when the current file SHA-256 is known and reviewed.
+38. Use `fixture_manifest_verify` and `fixture_manifest_refresh` to enforce exact fixture file sets and SHA-256 digests instead of asking for ad hoc hashing scripts.
 
 ## Allow all ContextPatch tools without prompts
 
@@ -151,6 +152,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `read_file_bytes`
 - `artifact_write_text`
 - `artifact_write_base64`
+- `artifact_delete_exact`
 - `bulk_write_new_files_base64`
 - `create_directory`
 - `capability_manifest`
@@ -188,13 +190,15 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 
 Each advertised tool includes MCP annotations, but annotations do not suppress Claude Desktop approval prompts. The wildcard `toolPolicy` installed by `configure-claude-desktop` does.
 
-The rebuilt release binary advertises all forty-seven tools. If Claude Desktop lists fewer, compare `capability_manifest.build.git_sha` with the checkout. A mismatch means the configured binary is stale; a match usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+The rebuilt release binary advertises all forty-eight tools. If Claude Desktop lists fewer, compare `capability_manifest.build.git_sha` with the checkout. A mismatch means the configured binary is stale; a match usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
 ```
 
 Then list contextpatch tools again. If the list is still partial, the chat is likely connected to an older binary/config entry or Claude Desktop cached a partial MCP tool list for that session; start a fresh chat after restart.
+
+Tool loading, exact-name search ranking, and deduplication across configured MCP instances are controlled by Claude Desktop. The wildcard policy removes approval prompts but cannot make one instance's loaded tools count as loaded for another instance. Multiple entries that point at the same binary remain separate tool namespaces and may produce duplicate search results; prefer one active ContextPatch entry per repository when practical.
 
 ## Currently exposed tools
 
@@ -213,6 +217,7 @@ The current server exposes the implemented safe primitives:
 - `read_file_bytes`
 - `artifact_write_text`
 - `artifact_write_base64`
+- `artifact_delete_exact`
 - `bulk_write_new_files_base64`
 - `create_directory`
 - `capability_manifest`
@@ -250,7 +255,7 @@ The current server exposes the implemented safe primitives:
 
 Other documented boundary tools, including `apply_patch` and `insert_at_anchor`, remain roadmap items until implemented.
 
-`capability_manifest` reports the build Git SHA, dirty state, UTC build timestamp, and Cargo profile so the active binary can be identified without inference. It also reports the stable repository-specific scratch root, cooperative mutation coordination, receipt outcomes, and direct reply deadlines. Reads return within 30 seconds, direct writes within 60 seconds, and Git/GitHub operations within 120 seconds or return an unknown-outcome refusal with recovery guidance; operation-specific process timeouts remain separate. At most 16 deadline workers may remain active, after which new bounded calls are refused before starting.
+`capability_manifest` reports the build Git SHA, dirty state, UTC build timestamp, and Cargo profile so the active binary can be identified without inference. It also reports the stable repository-specific scratch root, cooperative mutation coordination, receipt outcomes, and direct reply deadlines. Reads return within 30 seconds, direct writes within 60 seconds, and Git/GitHub operations within 120 seconds or return an unknown-outcome refusal with recovery guidance. Git subprocesses have a separate 90-second hard timeout beneath that reply deadline; the child is terminated on every platform, and Unix process-group termination also stops hooks, credential helpers, or other descendants holding inherited pipes. At most 16 deadline workers may remain active, after which new bounded calls are refused before starting.
 
 Use `{scratch}` inside guarded command data/output arguments, such as `--output-dir={scratch}/run-1`, for byproducts that must persist outside the repository. ContextPatch expands only that token to its stable scratch root and refuses traversal outside it. The token cannot select a Python script; use `artifact_python_run` for scratch-hosted Python code.
 
@@ -264,6 +269,8 @@ Use `fixture_generator_run` for Dynamo-style fixture creation when the generator
 
 Use `bulk_write_new_files_base64` as a fallback for many binary/text fixture files when direct generator execution is unsuitable. It is create-only, repo-root-confined, bounded to 500 files and 20 MiB decoded total content, and can create missing parents only when `parents: true`.
 
+Use `artifact_delete_exact` to iterate or retire a sidecar helper without accumulating filenames. First call it in its default dry-run mode to obtain the current SHA-256, then pass that digest with `dry_run: false` and `confirm: "delete artifact exact"`. It deletes only that regular file under the fixed artifact root, rejects symlinks and traversal, leaves parent directories intact, and reports that repository state was not mutated.
+
 Use `base_image_check_run` for `references/check-base-image.sh`, and set `project_path: "task"` for Dynamo/Harbor tasks that require `bash references/check-base-image.sh task`. This is the only shell-script-shaped validation exception; it does not make arbitrary `bash` or shell snippets available.
 
 Use `image_cleanliness_check_run` for the Docker image cleanliness gate that checks whether a task image contains a forbidden file such as `solve.sh`. It plans or runs only `docker run --rm --network none --entrypoint find <image> / -name <filename>`, defaults to dry-run, and requires `confirm: "run image cleanliness check"` for execution. Do not ask for generic Docker access for this gate.
@@ -272,7 +279,7 @@ Use `write_existing_file_exact_hash` when an existing text file needs whole-file
 
 Use `fixture_manifest_refresh` after fixture or SPEC changes to regenerate a manifest from explicit `fixture_paths` or `fixture_prefixes`; overwriting an existing manifest requires its current `expected_manifest_sha256`. Use `fixture_manifest_verify` before deriving truth or committing fixture changes; it fails on missing, modified, or unlisted fixture files.
 
-Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values; the Dynamo/Harbor profile also includes a structured `harbor_summary` for oracle/nop rewards and determinism. Use `read_command_log` only for logs that need inspection.
+Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values; the Dynamo/Harbor profile reads per-trial rewards from Harbor's repository-confined `result.json` and uses rendered output only as a fallback before producing its structured oracle/nop and determinism summary. Use `read_command_log` only for logs that need inspection.
 
 Before launching a profile that depends on optional host tools, call `preflight_health`. It must report availability and resolved paths for validation executables used by shipped profiles, including `python3`, `pytest`, `harbor`, and the exact `bash references/check-base-image.sh` workflow. If Harbor is installed outside the MCP server process `PATH`, configure the host with `CONTEXTPATCH_VALIDATION_PATHS` rather than asking the model to pass an executable path or environment override. If Harbor is unavailable in the current environment, do not claim a completed `harbor run`; verify task-local Oracle/verifier logic directly only as a documented fallback for that environment limitation.
 

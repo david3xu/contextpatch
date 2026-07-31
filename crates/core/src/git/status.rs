@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::error::ContextPatchError;
+use crate::process::runner::{run_bounded_command, BoundedProcessOutput};
+use crate::process::GIT_SUBPROCESS_TIMEOUT;
 
 pub fn status_summary(repo_root: &Path) -> Result<String, ContextPatchError> {
     status_summary_for_path(repo_root, None)
@@ -83,22 +84,20 @@ fn git_output(
     root: &Path,
     args: &[&str],
     label: &str,
-) -> Result<std::process::Output, ContextPatchError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to run {label} for {}: {error}",
-                root.display()
-            ))
-        })?;
+) -> Result<BoundedProcessOutput, ContextPatchError> {
+    let args = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    let output = run_bounded_command(root, "git", &args, GIT_SUBPROCESS_TIMEOUT, label)?;
 
-    if !output.status.success() {
+    if output.timed_out {
+        return Err(ContextPatchError::new(format!(
+            "{label} timed out after {} seconds; the Git process was terminated",
+            GIT_SUBPROCESS_TIMEOUT.as_secs()
+        )));
+    }
+    if !output.success() {
         return Err(ContextPatchError::new(format!(
             "{label} failed for {}: {}",
             root.display(),

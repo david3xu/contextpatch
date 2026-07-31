@@ -22,6 +22,26 @@ pub(crate) struct ProcessOutput {
     pub(crate) stderr: String,
 }
 
+/// Raw output from one no-shell child process with a bounded execution time.
+///
+/// This lower-level result intentionally preserves stdout and stderr bytes. Git callers use
+/// NUL-delimited output and must not pass through the redaction and truncation applied to
+/// user-facing validation command output.
+pub struct BoundedProcessOutput {
+    pub cwd: PathBuf,
+    pub exit_code: i32,
+    pub timed_out: bool,
+    pub duration_ms: u128,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+impl BoundedProcessOutput {
+    pub fn success(&self) -> bool {
+        !self.timed_out && self.exit_code == 0
+    }
+}
+
 pub(crate) fn run_no_shell_command(
     cwd: &Path,
     program: &str,
@@ -29,6 +49,29 @@ pub(crate) fn run_no_shell_command(
     timeout: Duration,
     operation_label: &str,
 ) -> Result<ProcessOutput, ContextPatchError> {
+    let output = run_bounded_command(cwd, program, args, timeout, operation_label)?;
+    Ok(ProcessOutput {
+        cwd: output.cwd,
+        exit_code: output.exit_code,
+        timed_out: output.timed_out,
+        duration_ms: output.duration_ms,
+        stdout: redact_and_truncate(&String::from_utf8_lossy(&output.stdout)),
+        stderr: redact_and_truncate(&String::from_utf8_lossy(&output.stderr)),
+    })
+}
+
+/// Run a program directly, with null stdin, captured output, and a hard child-process timeout.
+///
+/// The caller owns command policy. This function supplies execution mechanics only: no shell is
+/// involved, Git paging is disabled, output pipes are drained concurrently, and the child is
+/// killed when the timeout expires.
+pub fn run_bounded_command(
+    cwd: &Path,
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    operation_label: &str,
+) -> Result<BoundedProcessOutput, ContextPatchError> {
     let resolved_program = resolve_program(program);
     let mut command = Command::new(
         resolved_program
@@ -46,6 +89,11 @@ pub(crate) fn run_no_shell_command(
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
 
     let started = std::time::Instant::now();
     let mut child = command.spawn().map_err(|error| {
@@ -74,17 +122,16 @@ pub(crate) fn run_no_shell_command(
         })? {
             Some(status) => break status,
             None if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_child(&mut child, operation_label)?;
                 let stdout = join_stream_reader(stdout_reader, operation_label)?;
                 let stderr = join_stream_reader(stderr_reader, operation_label)?;
-                return Ok(ProcessOutput {
+                return Ok(BoundedProcessOutput {
                     cwd: cwd.to_path_buf(),
                     exit_code: -1,
                     timed_out: true,
                     duration_ms: started.elapsed().as_millis(),
-                    stdout: redact_and_truncate(&stdout),
-                    stderr: redact_and_truncate(&stderr),
+                    stdout,
+                    stderr,
                 });
             }
             None => thread::sleep(Duration::from_millis(25)),
@@ -94,35 +141,90 @@ pub(crate) fn run_no_shell_command(
     let stdout = join_stream_reader(stdout_reader, operation_label)?;
     let stderr = join_stream_reader(stderr_reader, operation_label)?;
 
-    Ok(ProcessOutput {
+    Ok(BoundedProcessOutput {
         cwd: cwd.to_path_buf(),
         exit_code: status.code().unwrap_or(-1),
         timed_out: false,
         duration_ms: started.elapsed().as_millis(),
-        stdout: redact_and_truncate(&stdout),
-        stderr: redact_and_truncate(&stderr),
+        stdout,
+        stderr,
     })
+}
+
+fn terminate_child(
+    child: &mut std::process::Child,
+    operation_label: &str,
+) -> Result<(), ContextPatchError> {
+    let already_reaped;
+    #[cfg(unix)]
+    {
+        let process_group = -(child.id() as i32);
+        // The child starts a fresh process group, so this also stops hooks or credential helpers
+        // that would otherwise keep inherited output pipes open after the direct child is killed.
+        let result = unsafe { libc::kill(process_group, libc::SIGKILL) };
+        if result != 0 {
+            // The direct child can exit between try_wait and kill. Re-check before treating a
+            // missing process group as a timeout-handling failure.
+            already_reaped = kill_direct_child_if_running(child, operation_label)?;
+        } else {
+            already_reaped = false;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        already_reaped = kill_direct_child_if_running(child, operation_label)?;
+    }
+
+    if !already_reaped {
+        child.wait().map_err(|error| {
+            ContextPatchError::new(format!(
+                "failed to reap timed-out {operation_label}: {error}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn kill_direct_child_if_running(
+    child: &mut std::process::Child,
+    operation_label: &str,
+) -> Result<bool, ContextPatchError> {
+    match child.try_wait().map_err(|error| {
+        ContextPatchError::new(format!(
+            "failed to inspect timed-out {operation_label}: {error}"
+        ))
+    })? {
+        Some(_) => Ok(true),
+        None => {
+            child.kill().map_err(|error| {
+                ContextPatchError::new(format!(
+                    "failed to terminate timed-out {operation_label}: {error}"
+                ))
+            })?;
+            Ok(false)
+        }
+    }
 }
 
 fn spawn_stream_reader(
     label: &'static str,
     mut stream: impl Read + Send + 'static,
     operation_label: &str,
-) -> thread::JoinHandle<Result<String, ContextPatchError>> {
+) -> thread::JoinHandle<Result<Vec<u8>, ContextPatchError>> {
     let operation_label = operation_label.to_string();
     thread::spawn(move || {
         let mut buffer = Vec::new();
         stream.read_to_end(&mut buffer).map_err(|error| {
             ContextPatchError::new(format!("failed to read {operation_label} {label}: {error}"))
         })?;
-        Ok(String::from_utf8_lossy(&buffer).into_owned())
+        Ok(buffer)
     })
 }
 
 fn join_stream_reader(
-    reader: thread::JoinHandle<Result<String, ContextPatchError>>,
+    reader: thread::JoinHandle<Result<Vec<u8>, ContextPatchError>>,
     operation_label: &str,
-) -> Result<String, ContextPatchError> {
+) -> Result<Vec<u8>, ContextPatchError> {
     let (sender, receiver) = mpsc::channel();
     let operation_label = operation_label.to_string();
     let reader_operation_label = operation_label.clone();
@@ -323,4 +425,29 @@ fn is_probable_secret_value(value: &str) -> bool {
         || value
             .chars()
             .any(|ch| matches!(ch, '_' | '-' | '.' | '/' | '+' | '='))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_bounded_command;
+    use std::time::{Duration, Instant};
+
+    #[cfg(unix)]
+    #[test]
+    fn terminates_a_git_child_that_never_reaches_eof() {
+        let started = Instant::now();
+        let output = run_bounded_command(
+            std::env::current_dir().unwrap().as_path(),
+            "git",
+            &["hash-object".to_string(), "/dev/zero".to_string()],
+            Duration::from_millis(100),
+            "stalled Git regression",
+        )
+        .unwrap();
+
+        assert!(output.timed_out);
+        assert!(!output.success());
+        assert_eq!(output.exit_code, -1);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 }

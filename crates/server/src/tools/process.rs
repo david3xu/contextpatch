@@ -330,15 +330,19 @@ pub(crate) fn call_validation_profile_run(
         failed |= command_failed;
         if profile == "dynamo-harbor-task" && command.program == "harbor" {
             let agent = harbor_agent(&command.args).unwrap_or("unknown");
-            match extract_harbor_reward(&output) {
-                Some(reward) if agent == "oracle" => harbor_oracle_rewards.push(reward),
-                Some(reward) if agent == "nop" => harbor_nop_rewards.push(reward),
-                Some(_) => harbor_missing_rewards.push(format!(
+            // Prefer the result file Harbor writes over its rendered table: the table splits the word
+            // "reward" and its value across two lines, which no single-line scan can read.
+            let rewards = crate::tools::harbor::rewards_for_run(repo_root, &output)
+                .or_else(|| crate::tools::harbor::rewards_from_output(&output));
+            match (rewards, agent) {
+                (Some(values), "oracle") => harbor_oracle_rewards.extend(values),
+                (Some(values), "nop") => harbor_nop_rewards.extend(values),
+                (Some(_), _) => harbor_missing_rewards.push(format!(
                     "{}. {} | unrecognized_agent: {agent}",
                     index + 1,
                     command.display()
                 )),
-                None => harbor_missing_rewards.push(format!(
+                (None, _) => harbor_missing_rewards.push(format!(
                     "{}. {} | reward: missing | log_id: {log_id}",
                     index + 1,
                     command.display()
@@ -626,27 +630,6 @@ fn extract_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
 fn harbor_agent<'a>(args: &'a [&'static str]) -> Option<&'a str> {
     args.windows(2)
         .find_map(|window| (window[0] == "--agent").then_some(window[1]))
-}
-
-fn extract_harbor_reward(text: &str) -> Option<f64> {
-    text.lines().filter_map(parse_reward_line).next_back()
-}
-
-fn parse_reward_line(line: &str) -> Option<f64> {
-    let lower = line.to_ascii_lowercase();
-    let reward_index = lower.find("reward");
-    let score_index = lower.find("score");
-    let index = match (reward_index, score_index) {
-        (Some(reward), Some(score)) => reward.min(score),
-        (Some(reward), None) => reward,
-        (None, Some(score)) => score,
-        (None, None) => return None,
-    };
-    line[index..]
-        .split(|ch: char| !(ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+' | 'e' | 'E')))
-        .filter(|token| token.chars().any(|ch| ch.is_ascii_digit()))
-        .filter_map(|token| token.parse::<f64>().ok())
-        .next()
 }
 
 fn rewards_deterministic(rewards: &[f64]) -> bool {

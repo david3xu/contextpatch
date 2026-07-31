@@ -1,9 +1,10 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Output};
 
 use crate::error::ContextPatchError;
+use crate::process::runner::{run_bounded_command, BoundedProcessOutput};
+use crate::process::GIT_SUBPROCESS_TIMEOUT;
 
 pub(crate) fn canonical_repo_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
     let root = repo_root.canonicalize().map_err(|error| {
@@ -188,9 +189,9 @@ pub(crate) fn ensure_index_clean(root: &Path) -> Result<(), ContextPatchError> {
         &["diff", "--cached", "--quiet", "--exit-code"],
         "inspect Git index",
     )?;
-    match output.status.code() {
-        Some(0) => Ok(()),
-        Some(1) => Err(ContextPatchError::new(
+    match output.exit_code {
+        0 => Ok(()),
+        1 => Err(ContextPatchError::new(
             "Git index must be clean before moving a tracked file",
         )),
         _ => Err(ContextPatchError::new(format!(
@@ -310,9 +311,13 @@ fn ensure_no_symlink_components(
     Ok(())
 }
 
-fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output, ContextPatchError> {
+fn git_output(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+) -> Result<BoundedProcessOutput, ContextPatchError> {
     let output = git_output_allow_failure(root, args, label)?;
-    if !output.status.success() {
+    if !output.success() {
         return Err(ContextPatchError::new(format!(
             "{label} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -325,16 +330,19 @@ fn git_output_allow_failure(
     root: &Path,
     args: &[&str],
     label: &str,
-) -> Result<Output, ContextPatchError> {
-    Command::new("git")
-        .arg("--no-pager")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_PAGER", "cat")
-        .env("NO_COLOR", "1")
-        .output()
-        .map_err(|error| ContextPatchError::new(format!("failed to {label}: {error}")))
+) -> Result<BoundedProcessOutput, ContextPatchError> {
+    let args = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    let output = run_bounded_command(root, "git", &args, GIT_SUBPROCESS_TIMEOUT, label)?;
+    if output.timed_out {
+        return Err(ContextPatchError::new(format!(
+            "{label} timed out after {} seconds; the Git process was terminated",
+            GIT_SUBPROCESS_TIMEOUT.as_secs()
+        )));
+    }
+    Ok(output)
 }
 
 fn display_nul_output(bytes: &[u8]) -> String {

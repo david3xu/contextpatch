@@ -31,6 +31,35 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::artifact_delete_exact::NAME,
+                    "description": "Delete one exact regular artifact file outside the repository after a hash-reporting dry run and explicit confirmation.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Artifact path relative to the fixed artifact root. Must be an existing regular file."
+                            },
+                            "expected_sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$",
+                                "description": "Current lowercase SHA-256 reported by a dry run. Required when dry_run is false."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Inspect and report the current digest without deleting. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Required literal value `delete artifact exact` when dry_run is false."
+                            }
+                        },
+                        "required": ["path"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::read_write_receipts::NAME,
                     "description": "Report recent mutation attempts and whether each one settled. Call this after a tool call is interrupted or times out to find out whether the write landed.",
                     "inputSchema": {

@@ -34,6 +34,7 @@ This document is normative. If implementation behavior conflicts with this file,
 24. Receipt-enabled mutations must persist a begin record before mutation and a settle record with resulting state afterward so an interrupted transport can be reconciled.
 25. ContextPatch mutations for one repository must be cooperatively serialized across server processes; file compare-and-write operations must hold a target lock across verification and atomic replacement.
 26. Detached deadline workers must have a fixed ceiling. Saturation must refuse a new operation before it starts.
+27. If sidecar artifact cleanup is exposed, it must delete one exact regular file under the fixed artifact root only after a digest-reporting dry run, matching SHA-256, and explicit confirmation.
 
 ## Required refusal cases
 
@@ -50,6 +51,7 @@ Write tools must refuse the operation when:
 9. A tracked-file move or deletion encounters a symlink component, non-regular file, untracked source, dirty source, or mismatched content hash.
 10. A tracked-file move has a pre-existing or indexed destination or a non-clean Git index.
 11. A supplied complete-file `expected_sha256` is malformed or no longer matches the current file.
+12. A sidecar artifact deletion targets a missing, non-normalized, symlinked, non-regular, hash-mismatched, or outside-root path.
 
 Refusals must return a clear reason. They must not pretend success.
 
@@ -67,7 +69,7 @@ If the platform cannot provide the expected atomic behavior, the operation must 
 
 ## Reply deadlines and mutation receipts
 
-Direct MCP operations have bounded reply waits: 30 seconds for reads, 60 seconds for direct writes, and 120 seconds for Git and GitHub operations. Process, profile, setup, and native tools retain their operation-specific execution timeouts. A reply deadline does not cancel the worker because interrupting a filesystem or Git operation mid-flight could make the result less safe. The refusal must therefore say that the outcome is unknown and name a state-recovery tool. No more than 16 deadline workers may be active; saturation refuses the next call before its operation starts.
+Direct MCP operations have bounded reply waits: 30 seconds for reads, 60 seconds for direct writes, and 120 seconds for Git and GitHub operations. Process, profile, setup, and native tools retain their operation-specific execution timeouts. Production Git subprocesses also have a 90-second hard timeout below the outer reply deadline; a timeout terminates the child and, on Unix, its process group so hooks or credential helpers cannot keep inherited pipes open. A reply deadline still does not cancel other workers because interrupting a filesystem or non-child operation mid-flight could make the result less safe. That refusal must therefore say that the outcome is unknown and name a state-recovery tool. No more than 16 deadline workers may be active; saturation refuses the next call before its operation starts.
 
 `read_write_receipts` provides durable recovery evidence outside the repository under the stable scratch root. Receipt-enabled mutations append a begin record before mutation and a settle record after collecting the resulting file digest or Git HEAD. Reads, appends, and journal rotation must be cross-process locked, and rotation must preserve entries that never settled.
 

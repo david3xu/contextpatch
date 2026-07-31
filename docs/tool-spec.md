@@ -24,6 +24,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `read_file_bytes` | No | Bounded byte range from a regular file as hex or base64 |
 | `artifact_write_text` | Sidecar artifact only | Writes outside repo under fixed artifact root; create-only, no repo mutation |
 | `artifact_write_base64` | Sidecar artifact only | Binary sidecar artifact under fixed artifact root; create-only, size/byte-count guards |
+| `artifact_delete_exact` | Sidecar artifact only | Exact regular sidecar file, digest-reporting dry run, matching SHA-256, explicit confirmation |
 | `artifact_python_run` | No source edits | Runs a Python script under the fixed artifact root with no shell and bounded logs |
 | `bulk_write_new_files_base64` | Yes | Bounded multi-file create-only import from base64 entries |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
@@ -89,6 +90,7 @@ Rules:
 - Must report build Git SHA, dirty state, build timestamp, and profile so clients can detect a stale installed binary.
 - Must report the stable repository-specific scratch root and `{scratch}` argument token.
 - Must report direct read, write, Git, and GitHub reply deadlines, the active-worker ceiling, and state that expiry leaves the operation outcome unknown.
+- Must report the shorter hard Git subprocess timeout and that Unix process-group termination also stops blocked descendants before the outer Git reply deadline.
 - Must report cooperative repository mutation locking honestly and distinguish it from universal exclusion of external writers.
 - Must report the receipt outcome vocabulary and its recovery meaning.
 - Must not mutate repository state.
@@ -437,6 +439,28 @@ Rules:
 - Refuse invalid base64 or decoded content larger than 20 MiB.
 - When `expected_bytes` is provided, refuse if the decoded byte count does not match.
 
+### `artifact_delete_exact`
+
+Deletes one exact regular file under the fixed contextpatch artifact root without touching the repository or parent directories.
+
+Required inputs:
+
+- `path`: normalized artifact-root-relative path
+
+Optional inputs:
+
+- `expected_sha256`: current lowercase SHA-256; required for mutation
+- `dry_run`: defaults to `true`
+- `confirm`: must equal `delete artifact exact` when `dry_run` is false
+
+Rules:
+
+- Refuse absolute, non-normalized, traversal, missing, symlinked, and non-regular paths.
+- Hold the target mutation lock while inspecting and deleting the file.
+- A dry run must report the current SHA-256, byte size, artifact root, and required confirmation without deleting.
+- Mutation must require the current SHA-256 and exact confirmation, then re-read the digest immediately before deletion.
+- Delete only the named file, retain all parent directories, verify the file is absent, and report `repo_mutation: false`.
+
 ### `artifact_python_run`
 
 Runs a Python script that already exists under the fixed contextpatch artifact root.
@@ -758,6 +782,7 @@ Rules:
 - Full command output should be retrieved with `read_command_log` only when needed.
 - Profiles may use executable resolution from `CONTEXTPATCH_VALIDATION_PATHS` through the guarded runner; callers cannot pass environment overrides per request.
 - The `dynamo-harbor-task` profile must append a structured `harbor_summary` object with oracle rewards, nop rewards, deterministic repeat checks, expected oracle/nop pass checks, missing-reward diagnostics, and an aggregate `passed` boolean.
+- Harbor rewards must come from the repository-confined `result.json` path printed by Harbor when that file is readable and valid. Rendered reward tables, labeled rewards, and progress means are compatibility fallbacks only.
 - Profiles must not commit, push, reset, checkout, clean, stash, or mutate product files.
 
 ### `setup_profile_run`
@@ -1302,41 +1327,42 @@ The server currently ships:
 9. `read_file_bytes`
 10. `artifact_write_text`
 11. `artifact_write_base64`
-12. `bulk_write_new_files_base64`
-13. `create_directory`
-14. `diff_preview`
-15. `status_guard`
-16. `capability_manifest`
-17. `preflight_health`
-18. `run_guarded_command`
-19. `artifact_python_run`
-20. `image_cleanliness_check_run`
-21. `docker_image_inspect`
-22. `fixture_generator_run`
-23. `base_image_check_run`
-24. `fixture_manifest_verify`
-25. `fixture_manifest_refresh`
-26. `read_command_log`
-27. `validation_profile_run`
-28. `git_commit_exact`
-29. `git_stage_exact`
-30. `git_staged_scope_check`
-31. `git_commit_scoped`
-32. `git_commit_prefix`
-33. `git_restore_exact`
-34. `move_tracked`
-35. `delete_guarded`
-36. `delete_untracked_exact`
-37. `delete_generated_prefix`
-38. `git_remote_list`
-39. `git_remote_check`
-40. `git_branch_prepare`
-41. `git_merge_readiness`
-42. `git_push_exact`
-43. `github_pr_run`
-44. `github_fork_prepare`
-45. `setup_profile_run`
-46. `native_build_run`
-47. `native_device_run`
+12. `artifact_delete_exact`
+13. `bulk_write_new_files_base64`
+14. `create_directory`
+15. `diff_preview`
+16. `status_guard`
+17. `capability_manifest`
+18. `preflight_health`
+19. `run_guarded_command`
+20. `artifact_python_run`
+21. `image_cleanliness_check_run`
+22. `docker_image_inspect`
+23. `fixture_generator_run`
+24. `base_image_check_run`
+25. `fixture_manifest_verify`
+26. `fixture_manifest_refresh`
+27. `read_command_log`
+28. `validation_profile_run`
+29. `git_commit_exact`
+30. `git_stage_exact`
+31. `git_staged_scope_check`
+32. `git_commit_scoped`
+33. `git_commit_prefix`
+34. `git_restore_exact`
+35. `move_tracked`
+36. `delete_guarded`
+37. `delete_untracked_exact`
+38. `delete_generated_prefix`
+39. `git_remote_list`
+40. `git_remote_check`
+41. `git_branch_prepare`
+42. `git_merge_readiness`
+43. `git_push_exact`
+44. `github_pr_run`
+45. `github_fork_prepare`
+46. `setup_profile_run`
+47. `native_build_run`
+48. `native_device_run`
 
 Other documented boundary tools, such as `apply_patch` and `insert_at_anchor`, remain planned until implemented. See `docs/implementation-roadmap.md`.

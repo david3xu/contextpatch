@@ -39,6 +39,7 @@ fn stage1_mcp_tools_work_together() {
     );
 
     let list = &responses[0]["result"]["tools"];
+    assert_eq!(list.as_array().unwrap().len(), 48, "{list}");
     for name in [
         "capability_manifest",
         "preflight_health",
@@ -55,6 +56,7 @@ fn stage1_mcp_tools_work_together() {
         "read_file_bytes",
         "artifact_write_text",
         "artifact_write_base64",
+        "artifact_delete_exact",
         "bulk_write_new_files_base64",
         "create_directory",
         "run_guarded_command",
@@ -1117,6 +1119,55 @@ fn stage2_artifact_python_run_executes_scratch_outside_repo() {
 }
 
 #[test]
+fn stage2_artifact_delete_exact_requires_current_hash_and_deletes_only_the_file() {
+    let root = git_repo("stage2_artifact_delete_exact_requires_current_hash");
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"artifact_write_text","arguments":{"path":"cleanup/tool.txt","content":"sidecar\n","parents":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"artifact_delete_exact","arguments":{"path":"cleanup/tool.txt"}}}"#,
+        ],
+    );
+
+    let dry_run: Value = serde_json::from_str(response_text(&responses[1])).unwrap();
+    let artifact_root = PathBuf::from(dry_run["artifact_root"].as_str().unwrap());
+    let target = artifact_root.join("cleanup/tool.txt");
+    let sha256 = dry_run["sha256"].as_str().unwrap();
+    assert!(target.is_file());
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["deleted"], false);
+    assert_eq!(dry_run["repo_mutation"], false);
+
+    let wrong_hash_request = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"artifact_delete_exact","arguments":{{"path":"cleanup/tool.txt","expected_sha256":"{}","dry_run":false,"confirm":"delete artifact exact"}}}}}}"#,
+        "0".repeat(64)
+    );
+    let refused = run_server(&root, &[&wrong_hash_request]);
+    assert_eq!(refused[0]["result"]["isError"], true);
+    assert_text(&refused[0], "hash mismatch");
+    assert!(target.is_file());
+
+    let delete_request = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"artifact_delete_exact","arguments":{{"path":"cleanup/tool.txt","expected_sha256":"{sha256}","dry_run":false,"confirm":"delete artifact exact"}}}}}}"#
+    );
+    let deleted = run_server(&root, &[&delete_request]);
+    assert_text(&deleted[0], "\"deleted\": true");
+    assert_text(&deleted[0], "\"repo_mutation\": false");
+    assert!(!target.exists());
+    assert!(artifact_root.join("cleanup").is_dir());
+    assert_eq!(git_stdout(&root, &["status", "--short"]), "");
+
+    let missing = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"artifact_delete_exact","arguments":{"path":"cleanup/tool.txt"}}}"#,
+        ],
+    );
+    assert_eq!(missing[0]["result"]["isError"], true);
+    assert_text(&missing[0], "does not exist");
+}
+
+#[test]
 fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     let root = git_repo("stage2_mcp_reports_capabilities_and_runs_guarded_commands");
 
@@ -1160,6 +1211,8 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[0], "\"dynamo-harbor-task\"");
     assert_text(&responses[0], "\"move_tracked\": true");
     assert_text(&responses[0], "\"delete_guarded\": true");
+    assert_text(&responses[0], "\"artifact_delete_exact\": true");
+    assert_text(&responses[0], "\"git_subprocess_timeout\": 90");
     assert_text(&responses[0], "\"harbor_run_max_timeout_secs\": 3600");
     assert_text(&responses[0], "\"action\": \"ios_build\"");
     assert_text(&responses[1], "\"harbor_run_max_timeout_secs\": 3600");
@@ -1672,7 +1725,7 @@ fn stage2_dynamo_harbor_profile_reports_structured_rewards() {
     let bin = temp_root("stage2_dynamo_harbor_profile_bin");
     fs::write(
         bin.join("harbor"),
-        "#!/bin/sh\ncase \"$*\" in\n  *\"--agent oracle\"*) echo 'reward: 1.0' ;;\n  *\"--agent nop\"*) echo 'reward: 0.0' ;;\n  *) echo 'reward: 0.5' ;;\nesac\n",
+        "#!/bin/sh\nset -eu\ncase \"$*\" in\n  *\"--agent oracle\"*) agent=oracle; reward=1.0 ;;\n  *\"--agent nop\"*) agent=nop; reward=0.0 ;;\n  *) agent=unknown; reward=0.5 ;;\nesac\ndir=\"jobs/$agent\"\nmkdir -p \"$dir\"\nprintf '{\"stats\":{\"evals\":{\"%s__adhoc\":{\"reward_stats\":{\"reward\":{\"%s\":[\"task__trial\"]}}}}}}\\n' \"$agent\" \"$reward\" > \"$dir/result.json\"\nprintf '| Reward | Count |\\n| 0.5 | 1 |\\n'\nprintf 'Results written to %s/result.json\\n' \"$dir\"\n",
     )
     .unwrap();
     let mut permissions = fs::metadata(bin.join("harbor")).unwrap().permissions();

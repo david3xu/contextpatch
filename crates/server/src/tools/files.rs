@@ -1,3 +1,8 @@
+pub mod artifact_delete_exact {
+    pub const NAME: &str = "artifact_delete_exact";
+    pub const CONFIRMATION: &str = "delete artifact exact";
+}
+
 pub mod artifact_write_base64 {
     pub const NAME: &str = "artifact_write_base64";
 }
@@ -722,6 +727,148 @@ pub(crate) fn call_bulk_write_new_files_base64(
         "files": created
     }))
     .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))
+}
+
+pub(crate) fn call_artifact_delete_exact(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let tool_name = tools::artifact_delete_exact::NAME;
+    let path = required_string(arguments, "path")?;
+    let expected_sha256 = optional_string(arguments, "expected_sha256")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+    if let Some(expected_sha256) = expected_sha256 {
+        contextpatch_core::fs::hash::validate_sha256(expected_sha256)
+            .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    }
+    if !dry_run && expected_sha256.is_none() {
+        return Err(format!(
+            "{tool_name} refused: dry_run=false requires expected_sha256 from a current dry run"
+        ));
+    }
+    if !dry_run && confirm != Some(tools::artifact_delete_exact::CONFIRMATION) {
+        return Err(format!(
+            "{tool_name} refused: dry_run=false requires confirm: {:?}",
+            tools::artifact_delete_exact::CONFIRMATION
+        ));
+    }
+
+    let root = artifact_root(repo_root, tool_name)?;
+    let shown = normalize_repo_relative_path(tool_name, path)?;
+    if shown != path {
+        return Err(format!(
+            "{tool_name} refused: path must be a normalized relative path"
+        ));
+    }
+    let target = root.join(&shown);
+    let _target_lock =
+        contextpatch_core::fs::mutation_lock::try_file_mutation_lock(repo_root, &target)
+            .map_err(|error| format!("{tool_name} refused: {error}"))?;
+
+    let metadata = inspect_exact_artifact_file(tool_name, &root, Path::new(&shown))?;
+    let current_sha256 = contextpatch_core::fs::hash::sha256_file(&target)
+        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    if expected_sha256.is_some_and(|expected| expected != current_sha256) {
+        return Err(format!(
+            "{tool_name} refused: hash mismatch for `{shown}`; current_sha256={current_sha256}, expected_sha256={}",
+            expected_sha256.unwrap_or_default()
+        ));
+    }
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": tool_name,
+            "dry_run": true,
+            "deleted": false,
+            "artifact_root": root.display().to_string(),
+            "path": shown,
+            "sha256": current_sha256,
+            "bytes": metadata.len(),
+            "required_confirm_for_delete": tools::artifact_delete_exact::CONFIRMATION,
+            "repo_mutation": false
+        }))
+        .map_err(|error| format!("{tool_name} refused: {error}"));
+    }
+
+    let verified_metadata = inspect_exact_artifact_file(tool_name, &root, Path::new(&shown))?;
+    let verified_sha256 = contextpatch_core::fs::hash::sha256_file(&target)
+        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    let expected_sha256 = expected_sha256.unwrap_or_default();
+    if verified_sha256 != expected_sha256 {
+        return Err(format!(
+            "{tool_name} refused: artifact `{shown}` changed during validation; current_sha256={verified_sha256}, expected_sha256={expected_sha256}"
+        ));
+    }
+    fs::remove_file(&target)
+        .map_err(|error| format!("{tool_name} refused: failed to delete `{shown}`: {error}"))?;
+    match fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            return Err(format!(
+                "{tool_name} refused: delete verification failed; `{shown}` still exists"
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "{tool_name} refused: delete verification failed for `{shown}`: {error}"
+            ));
+        }
+    }
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tool_name,
+        "dry_run": false,
+        "deleted": true,
+        "artifact_root": root.display().to_string(),
+        "path": shown,
+        "sha256": verified_sha256,
+        "bytes_freed": verified_metadata.len(),
+        "repo_mutation": false
+    }))
+    .map_err(|error| format!("{tool_name} refused: {error}"))
+}
+
+fn inspect_exact_artifact_file(
+    tool_name: &str,
+    root: &Path,
+    relative: &Path,
+) -> Result<fs::Metadata, String> {
+    let shown = relative.display();
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                format!("{tool_name} refused: artifact `{shown}` does not exist")
+            } else {
+                format!("{tool_name} refused: failed to inspect artifact `{shown}`: {error}")
+            }
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{tool_name} refused: artifact `{shown}` contains a symlink component"
+            ));
+        }
+    }
+
+    let target = root.join(relative);
+    let metadata = fs::symlink_metadata(&target)
+        .map_err(|error| format!("{tool_name} refused: failed to inspect `{shown}`: {error}"))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{tool_name} refused: artifact `{shown}` is not a regular file"
+        ));
+    }
+    let resolved = target
+        .canonicalize()
+        .map_err(|error| format!("{tool_name} refused: failed to resolve `{shown}`: {error}"))?;
+    if !resolved.starts_with(root) {
+        return Err(format!(
+            "{tool_name} refused: artifact `{shown}` resolves outside the artifact root"
+        ));
+    }
+    Ok(metadata)
 }
 
 fn write_artifact(

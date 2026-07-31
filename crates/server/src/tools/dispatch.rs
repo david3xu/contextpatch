@@ -105,6 +105,9 @@ fn call_tool(
         tools::artifact_write_text::NAME => {
             tools::files::call_artifact_write_text(repo_root, arguments)
         }
+        tools::artifact_delete_exact::NAME => {
+            tools::files::call_artifact_delete_exact(repo_root, arguments)
+        }
         tools::artifact_write_base64::NAME => {
             tools::files::call_artifact_write_base64(repo_root, arguments)
         }
@@ -215,6 +218,7 @@ fn deadline_for(name: &str) -> Option<Duration> {
         | tools::write_new_file_base64::NAME
         | tools::write_existing_file_exact_hash::NAME
         | tools::artifact_write_text::NAME
+        | tools::artifact_delete_exact::NAME
         | tools::artifact_write_base64::NAME
         | tools::bulk_write_new_files_base64::NAME
         | tools::create_directory::NAME
@@ -250,6 +254,7 @@ fn serializes_repository_mutation(name: &str) -> bool {
             | tools::write_new_file_base64::NAME
             | tools::write_existing_file_exact_hash::NAME
             | tools::artifact_write_text::NAME
+            | tools::artifact_delete_exact::NAME
             | tools::artifact_write_base64::NAME
             | tools::bulk_write_new_files_base64::NAME
             | tools::create_directory::NAME
