@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -128,19 +129,29 @@ fn stage1_cli_refusals_are_visible() {
 }
 
 #[test]
-fn configure_claude_desktop_allows_every_contextpatch_tool() {
-    let root = temp_root("configure_claude_desktop_allows_every_contextpatch_tool");
+fn configure_claude_desktop_cleans_exact_legacy_policy_and_preserves_custom_policy() {
+    let root = temp_root("configure_claude_desktop_keeps_ordinary_servers");
     let config = root.join("claude_desktop_config.json");
+    let library = deprecated_config_library_path(&root);
+    fs::create_dir_all(&library).unwrap();
+    fs::write(
+        library.join("_meta.json"),
+        b"{this deliberately is not valid JSON}\n",
+    )
+    .unwrap();
+    let library_before = snapshot_tree(&library);
     let original = r#"{
   "mcpServers": {
     "contextpatch-one": {
       "command": "/opt/contextpatch-server",
       "args": ["--repo-root", "/repo/one"],
-      "toolPolicy": {"replace_exact": "ask"}
+      "toolPolicy": {"*": "allow"},
+      "env": {"RUST_LOG": "info"}
     },
     "contextpatch-two": {
       "command": "contextpatch-server",
-      "args": ["--repo-root", "/repo/two"]
+      "args": ["--repo-root", "/repo/two"],
+      "toolPolicy": {"replace_exact": "ask"}
     },
     "contextpatch-windows": {
       "command": "C:\\Program Files\\ContextPatch\\contextpatch-server.exe",
@@ -148,106 +159,149 @@ fn configure_claude_desktop_allows_every_contextpatch_tool() {
     },
     "unrelated": {
       "command": "/opt/other-server",
-      "toolPolicy": {"*": "blocked"}
+      "toolPolicy": {"*": "blocked"},
+      "custom": true
     }
   },
-  "theme": "dark"
+  "theme": "dark",
+  "otherData": {"keep": [1, 2, 3]}
 }"#;
+    let original_json: serde_json::Value = serde_json::from_str(original).unwrap();
+    let custom_policy_before =
+        serde_json::to_vec(&original_json["mcpServers"]["contextpatch-two"]["toolPolicy"]).unwrap();
     fs::write(&config, original).unwrap();
 
-    let output = run_ok_without_default_config_env(
-        &root,
-        &[
-            "configure-claude-desktop",
-            "--config",
-            config.to_str().unwrap(),
-        ],
-    );
-    assert!(output.stdout.contains("allowed all tools for 3"));
-    assert!(output.stdout.contains("restart Claude Desktop"));
+    let output = run_ok_with_config_env(&root, &configure_args(&config, &[]));
+    assert!(output.stdout.contains("normal `mcpServers` map"));
+    assert!(output
+        .stdout
+        .contains("removed the exact legacy ContextPatch wildcard `toolPolicy` from 1"));
+    assert!(output
+        .stdout
+        .contains("local ContextPatch MCP connection requires no authentication"));
+    assert!(output
+        .stdout
+        .contains("local MCP or Desktop Extension metadata cannot preapprove tools"));
+    assert!(output
+        .stdout
+        .contains("restart Claude Desktop to reload the updated configuration"));
 
-    let updated: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let updated = read_json(&config);
+    let servers = updated["mcpServers"].as_object().unwrap();
+    assert_eq!(servers.len(), 4);
     assert_eq!(
-        updated["mcpServers"]["contextpatch-one"]["toolPolicy"],
-        serde_json::json!({"*": "allow"})
+        servers["contextpatch-one"]["command"],
+        "/opt/contextpatch-server"
     );
     assert_eq!(
-        updated["mcpServers"]["contextpatch-two"]["toolPolicy"],
-        serde_json::json!({"*": "allow"})
+        servers["contextpatch-one"]["args"],
+        serde_json::json!(["--repo-root", "/repo/one"])
     );
     assert_eq!(
-        updated["mcpServers"]["contextpatch-windows"]["toolPolicy"],
-        serde_json::json!({"*": "allow"})
+        servers["contextpatch-one"]["env"],
+        serde_json::json!({"RUST_LOG": "info"})
+    );
+    assert!(servers["contextpatch-one"].get("toolPolicy").is_none());
+    assert_eq!(
+        servers["contextpatch-two"]["toolPolicy"],
+        serde_json::json!({"replace_exact": "ask"})
     );
     assert_eq!(
-        updated["mcpServers"]["unrelated"]["toolPolicy"],
+        serde_json::to_vec(&servers["contextpatch-two"]["toolPolicy"]).unwrap(),
+        custom_policy_before
+    );
+    assert!(servers["contextpatch-windows"].get("toolPolicy").is_none());
+    assert_eq!(
+        servers["unrelated"]["toolPolicy"],
         serde_json::json!({"*": "blocked"})
     );
+    assert_eq!(servers["unrelated"]["custom"], true);
     assert_eq!(updated["theme"], "dark");
+    assert_eq!(updated["otherData"], serde_json::json!({"keep": [1, 2, 3]}));
+    assert_eq!(snapshot_tree(&library), library_before);
 
-    let backups = fs::read_dir(&root)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("claude_desktop_config.json.contextpatch-backup-")
-        })
-        .map(|entry| entry.path())
-        .collect::<Vec<_>>();
+    let backups = backups_for(&config);
     assert_eq!(backups.len(), 1);
     assert_eq!(fs::read(&backups[0]).unwrap(), original.as_bytes());
 
-    let second = run_ok(
+    let config_after_first = fs::read(&config).unwrap();
+    let backups_before_second = backups_for(&config);
+    let second = run_ok_with_config_env(&root, &configure_args(&config, &[]));
+    assert!(second
+        .stdout
+        .contains("no exact legacy ContextPatch wildcard `toolPolicy` was present"));
+    assert!(!second.stdout.contains("restart Claude Desktop"));
+    assert_eq!(fs::read(&config).unwrap(), config_after_first);
+    assert_eq!(backups_for(&config), backups_before_second);
+    assert_eq!(snapshot_tree(&library), library_before);
+}
+
+#[test]
+fn configure_claude_desktop_dry_run_writes_no_policy_or_library_files() {
+    let root = temp_root("configure_claude_desktop_dry_run");
+    let config = root.join("claude_desktop_config.json");
+    let library = deprecated_config_library_path(&root);
+    let original = br#"{"mcpServers":{"contextpatch":{"command":"/opt/contextpatch-server","args":["--repo-root","/repo"],"toolPolicy":{"*":"allow"}}}}"#;
+    fs::write(&config, original).unwrap();
+
+    let output = run_ok_with_config_env(&root, &configure_args(&config, &["--dry-run"]));
+    assert!(output
+        .stdout
+        .contains("would remove the exact legacy ContextPatch wildcard `toolPolicy`"));
+    assert!(!output.stdout.contains("restart Claude Desktop"));
+    assert_eq!(fs::read(&config).unwrap(), original);
+    assert!(!library.exists());
+    assert!(backups_for(&config).is_empty());
+}
+
+#[test]
+fn configure_claude_desktop_help_and_parser_have_no_config_library_surface() {
+    let root = temp_root("configure_help");
+    let help = run_ok(&root, &["--help"]);
+    assert!(help
+        .stdout
+        .contains("configure-claude-desktop [--config <path>] [--dry-run]"));
+    assert!(!help.stdout.contains("--config-library"));
+
+    let config = root.join("claude_desktop_config.json");
+    fs::write(
+        &config,
+        br#"{"mcpServers":{"contextpatch":{"command":"contextpatch-server"}}}"#,
+    )
+    .unwrap();
+    let refused = run_err(
         &root,
         &[
             "configure-claude-desktop",
             "--config",
             config.to_str().unwrap(),
+            "--config-library",
+            root.to_str().unwrap(),
         ],
     );
-    assert!(second.stdout.contains("already allowed"));
-    let backups_after_second_run = fs::read_dir(&root)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("claude_desktop_config.json.contextpatch-backup-")
-        })
-        .count();
-    assert_eq!(backups_after_second_run, 1);
+    assert!(refused
+        .stderr
+        .contains("unknown argument `--config-library`"));
 }
 
 #[test]
 fn configure_claude_desktop_refuses_invalid_config_without_changing_it() {
-    let root = temp_root("configure_claude_desktop_refuses_invalid_config_without_changing_it");
+    let root = temp_root("configure_claude_desktop_refuses_invalid_config");
     let config = root.join("claude_desktop_config.json");
     fs::write(&config, b"{not json}\n").unwrap();
+    let before = snapshot_tree(&root);
 
-    let output = run_err(
-        &root,
-        &[
-            "configure-claude-desktop",
-            "--config",
-            config.to_str().unwrap(),
-        ],
-    );
+    let output = run_err(&root, &configure_args(&config, &[]));
     assert!(output.stderr.contains("not valid JSON"));
     assert_eq!(fs::read(&config).unwrap(), b"{not json}\n");
-    let backups = fs::read_dir(&root)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("claude_desktop_config.json.contextpatch-backup-")
-        })
-        .count();
-    assert_eq!(backups, 0);
+    assert!(backups_for(&config).is_empty());
+    assert_eq!(
+        snapshot_tree(&root)
+            .keys()
+            .filter(|path| !path.ends_with(".contextpatch.lock"))
+            .count(),
+        before.len()
+    );
 }
 
 struct OutputText {
@@ -255,8 +309,91 @@ struct OutputText {
     stderr: String,
 }
 
+fn configure_args<'a>(config: &'a Path, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec![
+        "configure-claude-desktop",
+        "--config",
+        config.to_str().unwrap(),
+    ];
+    args.extend_from_slice(extra);
+    args
+}
+
+fn read_json(path: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn backups_for(path: &Path) -> Vec<PathBuf> {
+    let prefix = format!(
+        "{}.contextpatch-backup-",
+        path.file_name().unwrap().to_string_lossy()
+    );
+    let mut backups = fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    backups.sort();
+    backups
+}
+
+fn snapshot_tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn collect(root: &Path, directory: &Path, snapshot: &mut BTreeMap<String, Vec<u8>>) {
+        let mut entries = fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(root, &path, snapshot);
+            } else {
+                snapshot.insert(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+
+    let mut snapshot = BTreeMap::new();
+    collect(root, root, &mut snapshot);
+    snapshot
+}
+
+fn deprecated_config_library_path(root: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        root.join("Library/Application Support/Claude-3p/configLibrary")
+    } else {
+        root.join("Claude-3p/configLibrary")
+    }
+}
+
 fn run_ok(root: &Path, args: &[&str]) -> OutputText {
     let output = command(root, args);
+    assert!(
+        output.status.success(),
+        "expected success for {args:?}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output_text(output)
+}
+
+fn run_ok_with_config_env(root: &Path, args: &[&str]) -> OutputText {
+    let output = Command::new(contextpatch())
+        .current_dir(root)
+        .env("HOME", root)
+        .env("APPDATA", root)
+        .env("XDG_CONFIG_HOME", root)
+        .args(args)
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "expected success for {args:?}\nstdout:\n{}\nstderr:\n{}",
@@ -271,24 +408,6 @@ fn run_err(root: &Path, args: &[&str]) -> OutputText {
     assert!(
         !output.status.success(),
         "expected refusal for {args:?}\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output_text(output)
-}
-
-fn run_ok_without_default_config_env(root: &Path, args: &[&str]) -> OutputText {
-    let output = Command::new(contextpatch())
-        .current_dir(root)
-        .env_remove("HOME")
-        .env_remove("APPDATA")
-        .env_remove("XDG_CONFIG_HOME")
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "expected success for {args:?}\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

@@ -60,7 +60,7 @@ Owns:
 - Terminal help text
 - Exit codes
 - Human-readable output
-- Safe Claude Desktop configuration updates, cooperative locking, stale-read checks, backups, and wildcard tool-policy installation
+- Safe maintenance of ordinary Claude Desktop ContextPatch entries, including exact legacy wildcard-policy cleanup, preservation of other policies, cooperative locking, stale-read checks, backups, and atomic replacement
 
 Must call `core` for edit behavior instead of reimplementing safety logic.
 
@@ -123,6 +123,6 @@ Repository-level integration tests should cover:
 9. Native build/device dry-run planning and refusal behavior
 10. Stale complete-file SHA refusal in shared-worktree replacement
 11. Durable mutation receipt settlement and interrupted-receipt recovery
-12. Claude Desktop wildcard policy configuration, backup, preservation, and idempotence
+12. Claude Desktop ordinary-config preservation, exact legacy wildcard-policy cleanup, backup, and idempotence
 13. Cooperative mutation-lock contention and deadline-worker saturation
-14. Claude Desktop stale-read refusal and Windows executable detection
+14. Claude Desktop stale-read refusal, no managed-library access, and Windows executable detection

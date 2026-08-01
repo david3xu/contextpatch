@@ -55,7 +55,7 @@ contextpatch diff-preview <path> --old <text> --new <text>
 contextpatch replace-exact <path> --old <text> --new <text>
 contextpatch write-new-file <path> --content <text>
 contextpatch status-guard [path]
-contextpatch configure-claude-desktop [--dry-run]
+contextpatch configure-claude-desktop [--config <path>] [--dry-run]
 ```
 
 The MCP server exposes the safe tool surface to local agent clients:
@@ -109,9 +109,9 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `github_pr_run`
 - `github_fork_prepare`
 
-To make every current and future ContextPatch tool available in Claude Desktop without per-call approval prompts, run `contextpatch configure-claude-desktop`. It replaces the `toolPolicy` of every configured `contextpatch-server` entry with `{"*":"allow"}`, preserves unrelated settings, creates a timestamped backup from the exact original bytes, and writes the configuration atomically under an adjacent cooperative lock with a final stale-read check. Client auto-approval is only a usability setting: mutation-capable tools still keep their dry-run defaults, exact confirmation strings, path checks, clean-index/worktree gates, and refusal behavior.
+Run `contextpatch configure-claude-desktop` to validate detected ContextPatch entries in the normal `claude_desktop_config.json` `mcpServers` map. The command keeps ordinary command-and-args entries in place, preserves unrelated configuration and user-authored policies, and removes only the exact legacy ContextPatch wildcard `toolPolicy: {"*":"allow"}` from targeted entries. It uses a cooperative lock and stale-read check and creates an exact backup before an update. `--dry-run` leaves the config unchanged and creates no backup.
 
-Every advertised MCP tool also includes stable annotations for clients that use permission hints. Annotations alone do not suppress Claude Desktop approval prompts; the wildcard `toolPolicy` does.
+The local ContextPatch MCP connection requires no authentication. Claude Desktop owns runtime tool authorization: ordinary MCP configuration and local Desktop Extension metadata cannot preapprove tools. Zero prompts from first use require a Claude organization administrator's default-always-allow connector-tool setting when available; otherwise Claude may require a one-time persistent **Always allow** or **Allow for all tasks** selection. These client-side approval choices never weaken ContextPatch's dry-run defaults, exact confirmations, path checks, Git-state gates, or refusals.
 
 `run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata. The default timeout is 120 seconds and the general maximum remains 600 seconds; only exact `harbor run` commands may request up to 3600 seconds. It supports repo-relative Python scripts, `pytest`, `harbor run`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` base-image checks for project validation; it still refuses Docker, `pip`, arbitrary `python -m`, arbitrary shell scripts, and generic package installation.
 
@@ -154,7 +154,7 @@ See [docs/safety-contract.md](docs/safety-contract.md) for the full contract.
 
 ## Current status
 
-Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery and build provenance, preflight health, bounded reply deadlines with hard Git child-process termination, durable mutation receipts, stable scratch paths, allowlisted guarded command execution with a Harbor-only 3600-second ceiling, authoritative Harbor reward summaries, bounded file/directory/binary inspection, binary/sidecar/bulk fixture writes, exact sidecar cleanup, artifact-root Python scratch execution, hash-guarded existing-file synchronization, fixture manifest verification/refresh, typed fixture generator/base-image/image-cleanliness/Docker-inspect workflows, exact/stage/scoped/prefix Git workflows, guarded tracked-file moves and deletions, generated-prefix cleanup, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. The CLI can install wildcard Claude Desktop tool approval without weakening those runtime guards. Code changes should keep the relevant Markdown file synchronized in the same commit.
+Stage 1 MVP is implemented across the core crate, CLI, and MCP server for `replace-exact`, `read-range`, `write-new-file`, `diff-preview`, and `status-guard`. Stage 2 MCP validation support now adds capability discovery and build provenance, preflight health, bounded reply deadlines with hard Git child-process termination, durable mutation receipts, stable scratch paths, allowlisted guarded command execution with a Harbor-only 3600-second ceiling, authoritative Harbor reward summaries, bounded file/directory/binary inspection, binary/sidecar/bulk fixture writes, exact sidecar cleanup, artifact-root Python scratch execution, hash-guarded existing-file synchronization, fixture manifest verification/refresh, typed fixture generator/base-image/image-cleanliness/Docker-inspect workflows, exact/stage/scoped/prefix Git workflows, guarded tracked-file moves and deletions, generated-prefix cleanup, GitHub PR/fork workflows, dry-run setup-profile planning, and typed native build/device workflows for Claude Desktop. The CLI safely maintains ordinary Claude Desktop ContextPatch entries but does not claim authority over Claude's runtime tool approvals. Code changes should keep the relevant Markdown file synchronized in the same commit.
 
 ## Repository layout
 

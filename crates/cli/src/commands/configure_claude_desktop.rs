@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 pub fn run(args: &[String]) -> ExitCode {
     match configure(args) {
@@ -47,7 +47,7 @@ fn configure(args: &[String]) -> Result<String, String> {
         })?;
 
     let mut matched = Vec::new();
-    let mut changed = false;
+    let mut cleaned = 0;
     for (name, server) in servers {
         let Some(server) = server.as_object_mut() else {
             continue;
@@ -56,10 +56,9 @@ fn configure(args: &[String]) -> Result<String, String> {
             continue;
         }
         matched.push(name.clone());
-        let desired = json!({"*": "allow"});
-        if server.get("toolPolicy") != Some(&desired) {
-            server.insert("toolPolicy".to_string(), desired);
-            changed = true;
+        if has_legacy_contextpatch_tool_policy(server) {
+            server.remove("toolPolicy");
+            cleaned += 1;
         }
     }
     matched.sort();
@@ -70,21 +69,36 @@ fn configure(args: &[String]) -> Result<String, String> {
             config_path.display()
         ));
     }
+
     let names = matched.join(", ");
+    let authorization_notice = authorization_notice();
     if options.dry_run {
+        if cleaned == 0 {
+            return Ok(format!(
+                "would make no changes; {} ordinary Claude Desktop ContextPatch server(s) already \
+                 use the normal `mcpServers` configuration: {names}\n{authorization_notice}",
+                matched.len()
+            ));
+        }
         return Ok(format!(
-            "would allow all tools for {} ContextPatch server(s): {names}",
-            matched.len()
-        ));
-    }
-    if !changed {
-        return Ok(format!(
-            "all tools are already allowed for {} ContextPatch server(s): {names}",
+            "would update {} ordinary Claude Desktop ContextPatch server(s): {names}\nwould remove \
+             the exact legacy ContextPatch wildcard `toolPolicy` from {cleaned} targeted server(s); \
+             command and args remain in the normal `mcpServers` map\n{authorization_notice}",
             matched.len()
         ));
     }
 
-    let backup = backup_path(&config_path)?;
+    if cleaned == 0 {
+        return Ok(format!(
+            "{} ordinary Claude Desktop ContextPatch server(s) are configured in the normal \
+             `mcpServers` map: {names}\nno exact legacy ContextPatch wildcard `toolPolicy` was \
+             present; no approval policy was written\n\
+             {authorization_notice}",
+            matched.len()
+        ));
+    }
+
+    let backup = unique_backup_path(&config_path)?;
     let permissions = fs::metadata(&config_path)
         .map_err(|error| format!("failed to inspect `{}`: {error}", config_path.display()))?
         .permissions();
@@ -98,10 +112,21 @@ fn configure(args: &[String]) -> Result<String, String> {
     }
 
     Ok(format!(
-        "allowed all tools for {} ContextPatch server(s): {names}\nbackup: {}\nrestart Claude Desktop to apply the policy",
+        "updated {} ordinary Claude Desktop ContextPatch server(s): {names}\nremoved the exact \
+         legacy ContextPatch wildcard `toolPolicy` from {cleaned} targeted server(s); command and \
+         args remain in the normal `mcpServers` map\nbackup: {}\nrestart Claude Desktop to reload \
+         the updated configuration\n{authorization_notice}",
         matched.len(),
         backup.display()
     ))
+}
+
+fn authorization_notice() -> &'static str {
+    "The local ContextPatch MCP connection requires no authentication. Claude Desktop controls \
+     runtime tool authorization: local MCP or Desktop Extension metadata cannot preapprove tools. \
+     Zero prompts from first use require a Claude organization administrator's \
+     default-always-allow connector-tool setting when available; otherwise Claude may require a \
+     one-time persistent Always allow/Allow for all tasks selection."
 }
 
 #[derive(Default)]
@@ -169,6 +194,13 @@ fn is_contextpatch_server(server: &Map<String, Value>) -> bool {
         || executable.eq_ignore_ascii_case("contextpatch-server.exe")
 }
 
+fn has_legacy_contextpatch_tool_policy(server: &Map<String, Value>) -> bool {
+    let Some(policy) = server.get("toolPolicy").and_then(Value::as_object) else {
+        return false;
+    };
+    policy.len() == 1 && policy.get("*").and_then(Value::as_str) == Some("allow")
+}
+
 fn config_lock_path(config_path: &Path) -> Result<PathBuf, String> {
     let file_name = config_path
         .file_name()
@@ -205,7 +237,7 @@ fn acquire_config_lock(config_path: &Path) -> Result<File, String> {
     }
 }
 
-fn backup_path(config_path: &Path) -> Result<PathBuf, String> {
+fn unique_backup_path(config_path: &Path) -> Result<PathBuf, String> {
     let file_name = config_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -214,7 +246,23 @@ fn backup_path(config_path: &Path) -> Result<PathBuf, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?
         .as_millis();
-    Ok(config_path.with_file_name(format!("{file_name}.contextpatch-backup-{timestamp}")))
+    for attempt in 0..100 {
+        let suffix = if attempt == 0 {
+            String::new()
+        } else {
+            format!("-{attempt}")
+        };
+        let candidate = config_path.with_file_name(format!(
+            "{file_name}.contextpatch-backup-{timestamp}{suffix}"
+        ));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "failed to choose a unique backup path for `{}`",
+        config_path.display()
+    ))
 }
 
 fn write_backup(path: &Path, contents: &[u8], permissions: &Permissions) -> Result<(), String> {
@@ -273,7 +321,7 @@ fn write_atomic_preserving_permissions(
             .open(&temporary)
         {
             Ok(handle) => handle,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 return Err(format!(
                     "failed to create temporary config `{}`: {error}",
@@ -330,21 +378,14 @@ fn write_atomic_preserving_permissions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn exact_config_write_refuses_a_stale_read() {
-        let root = std::env::temp_dir().join(format!(
-            "contextpatch-config-stale-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        let root = test_root("stale");
         let config = root.join("claude_desktop_config.json");
         let original = b"{\"mcpServers\":{}}\n";
         let concurrent = b"{\"theme\":\"light\"}\n";
-        fs::write(&config, original).unwrap();
         fs::write(&config, concurrent).unwrap();
 
         let error =
@@ -361,5 +402,15 @@ mod tests {
             "command": r"C:\Program Files\ContextPatch\contextpatch-server.EXE"
         });
         assert!(is_contextpatch_server(server.as_object().unwrap()));
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("contextpatch-config-{name}-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 }

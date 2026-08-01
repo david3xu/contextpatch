@@ -61,7 +61,7 @@ The expected agent workflow is:
 37. Use `write_existing_file_exact_hash` for whole-file synchronization only when the current file SHA-256 is known and reviewed.
 38. Use `fixture_manifest_verify` and `fixture_manifest_refresh` to enforce exact fixture file sets and SHA-256 digests instead of asking for ad hoc hashing scripts.
 
-## Allow all ContextPatch tools without prompts
+## Configure ordinary Claude Desktop entries
 
 Build both release binaries:
 
@@ -70,23 +70,17 @@ cargo build --release -p cli --bin contextpatch
 cargo build --release -p server --bin contextpatch-server
 ```
 
-Then configure every Claude Desktop MCP entry whose command basename is `contextpatch-server`:
+Claude Desktop's normal local configuration uses the `mcpServers` map in `claude_desktop_config.json`. After adding one or more entries whose command basename is `contextpatch-server`, validate them with:
 
 ```bash
 ./target/release/contextpatch configure-claude-desktop
 ```
 
-The command replaces each matching entry's complete `toolPolicy` with:
+The command keeps each detected entry in the ordinary `mcpServers` map with its existing command and args. It preserves unrelated entries, data, and user-authored policies and writes no approval policy. If an older ContextPatch version added the exact wildcard `toolPolicy: {"*":"allow"}` to a targeted entry, the command removes only that legacy value; every other `toolPolicy` value is retained. A changed config receives a timestamped sibling backup containing its exact original bytes; permissions are preserved, a cooperative lock coordinates updates, and a final stale-read check protects the atomic replacement. Repeated runs are idempotent.
 
-```json
-{
-  "*": "allow"
-}
-```
+Use `--dry-run` to preview whether stale policy cleanup is needed without changing the config. Use `--config /path/to/claude_desktop_config.json` for a custom config path.
 
-Replacing the full policy removes older exact-tool rules that could override the wildcard. The command preserves unrelated Claude Desktop settings and MCP servers, recognizes both `contextpatch-server` and `contextpatch-server.exe` command paths, creates a timestamped `claude_desktop_config.json.contextpatch-backup-<epoch_millis>` file from the exact original bytes, preserves file permissions, and writes atomically. An adjacent advisory lock coordinates concurrent ContextPatch configurators, and a final byte-for-byte check refuses rather than overwriting an external concurrent edit. The command is idempotent and does not ask for another confirmation because its purpose is to remove recurring client approval prompts.
-
-Use `--dry-run` to list matching entries without writing, or `--config /path/to/claude_desktop_config.json` to target a non-default configuration. Restart Claude Desktop after applying the policy. Wildcard client approval does not bypass ContextPatch's repository, path, hash, Git-state, dry-run, confirmation, or timeout guards.
+The local ContextPatch MCP connection requires no authentication. Claude Desktop owns runtime tool authorization. Neither ordinary MCP configuration nor local DXT/Desktop Extension metadata can preapprove tools, and ContextPatch does not consult or write `Claude-3p/configLibrary`. Zero prompts from first use require a Claude organization administrator's default-always-allow connector-tool setting when available; otherwise Claude may require a one-time persistent **Always allow** or **Allow for all tasks** selection. Approval UX never bypasses ContextPatch's repository, path, hash, Git-state, dry-run, confirmation, or timeout guards.
 
 ## Build and configure Claude Desktop
 
@@ -100,10 +94,7 @@ If the MCP server entry does not exist yet, point Claude Desktop at the release 
       "args": [
         "--repo-root",
         "/absolute/path/to/repo"
-      ],
-      "toolPolicy": {
-        "*": "allow"
-      }
+      ]
     }
   }
 }
@@ -117,7 +108,7 @@ On macOS, Claude Desktop reads this configuration from:
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
-Restart Claude Desktop after changing the config or rebuilding the server binary.
+Run `contextpatch configure-claude-desktop` to validate the ordinary entry and clean the exact legacy ContextPatch wildcard `toolPolicy` if present. Restart Claude Desktop after changing configuration or rebuilding the server binary.
 
 ## Local development command
 
@@ -188,9 +179,9 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 - `github_pr_run`
 - `github_fork_prepare`
 
-Each advertised tool includes MCP annotations, but annotations do not suppress Claude Desktop approval prompts. The wildcard `toolPolicy` installed by `configure-claude-desktop` does.
+Each advertised tool includes MCP annotations, but annotations do not suppress Claude Desktop approval prompts. Local MCP and Desktop Extension metadata cannot grant runtime approval; that decision belongs to Claude Desktop and its account or organization policy.
 
-The rebuilt release binary advertises all forty-eight tools. If Claude Desktop lists fewer, compare `capability_manifest.build.git_sha` with the checkout. A mismatch means the configured binary is stale; a match usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, confirm the MCP config points at the rebuilt binary:
+The rebuilt release binary advertises all forty-eight tools. If Claude Desktop lists fewer, compare `capability_manifest.build.git_sha` with the checkout. A mismatch means the configured binary is stale; a match usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, then confirm the ordinary `claude_desktop_config.json` entry points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -198,7 +189,7 @@ The rebuilt release binary advertises all forty-eight tools. If Claude Desktop l
 
 Then list contextpatch tools again. If the list is still partial, the chat is likely connected to an older binary/config entry or Claude Desktop cached a partial MCP tool list for that session; start a fresh chat after restart.
 
-Tool loading, exact-name search ranking, and deduplication across configured MCP instances are controlled by Claude Desktop. The wildcard policy removes approval prompts but cannot make one instance's loaded tools count as loaded for another instance. Multiple entries that point at the same binary remain separate tool namespaces and may produce duplicate search results; prefer one active ContextPatch entry per repository when practical.
+Tool loading and exact-name search ranking are controlled by Claude Desktop. The configurator leaves distinct ordinary ContextPatch entries for distinct repositories in place and does not create a second managed source.
 
 ## Currently exposed tools
 

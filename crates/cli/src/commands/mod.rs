@@ -81,7 +81,7 @@ Commands:
   replace-exact   Replace text only when an anchor matches exactly once
   write-new-file  Create a file only when it does not already exist
   create-directory Create a directory only when it does not already exist
-  configure-claude-desktop Allow all ContextPatch tools without approval prompts
+  configure-claude-desktop Validate ordinary Claude Desktop ContextPatch entries
   apply-patch     Apply a guarded unified patch
   serve           Run the local context server
   version         Print version
