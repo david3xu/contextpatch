@@ -9,11 +9,60 @@ pub mod preflight_health {
 use std::path::Path;
 use std::process::Stdio;
 
-use contextpatch_core::git::status::status_summary;
-use contextpatch_core::process::guarded_command::resolve_guarded_program;
+use contextpatch_core::git::status::status_snapshot;
+use contextpatch_core::process::guarded_command::{
+    redact_and_truncate_output, resolve_guarded_program,
+};
 use serde_json::{json, Value};
 
 use crate::tools::{self, ToolSurface};
+
+const PREFLIGHT_FULL_STATUS_ENTRIES: usize = 100;
+const PREFLIGHT_FULL_STATUS_BYTES: usize = 64 * 1024;
+const PREFLIGHT_COMPACT_STATUS_ENTRIES: usize = 20;
+const PREFLIGHT_COMPACT_STATUS_BYTES: usize = 12 * 1024;
+
+#[derive(Clone, Copy)]
+enum PreflightResponseMode {
+    Minimal,
+    Compact,
+    Full,
+}
+
+impl PreflightResponseMode {
+    fn parse(arguments: &serde_json::Map<String, Value>) -> Result<Self, String> {
+        match crate::tools::common::optional_string(arguments, "response_mode")
+            .map_err(|error| format!("preflight_health refused: {error}"))?
+            .unwrap_or("full")
+        {
+            "minimal" => Ok(Self::Minimal),
+            "compact" => Ok(Self::Compact),
+            "full" => Ok(Self::Full),
+            value => Err(format!(
+                "preflight_health refused: response_mode must be one of minimal, compact, full; got {value:?}"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Compact => "compact",
+            Self::Full => "full",
+        }
+    }
+
+    fn status_sample_limits(self) -> (usize, usize) {
+        match self {
+            Self::Minimal => (0, 0),
+            Self::Compact => (
+                PREFLIGHT_COMPACT_STATUS_ENTRIES,
+                PREFLIGHT_COMPACT_STATUS_BYTES,
+            ),
+            Self::Full => (PREFLIGHT_FULL_STATUS_ENTRIES, PREFLIGHT_FULL_STATUS_BYTES),
+        }
+    }
+}
 
 pub(crate) fn build_metadata() -> Value {
     json!({
@@ -569,17 +618,49 @@ pub(crate) fn call_capability_manifest(
         .map_err(|error| format!("capability_manifest refused: {error}"))
 }
 
-pub(crate) fn call_preflight_health(repo_root: &Path) -> Result<String, String> {
+pub(crate) fn call_preflight_health(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let response_mode = PreflightResponseMode::parse(arguments)?;
     let root = repo_root
         .canonicalize()
         .map_err(|error| format!("preflight_health refused: {error}"))?;
-    let git_status = match status_summary(&root) {
-        Ok(summary) => json!({ "clean": true, "summary": summary }),
-        Err(error) => json!({ "clean": false, "summary": error.to_string() }),
+    let (max_status_entries, max_status_bytes) = response_mode.status_sample_limits();
+    let git_status = match status_snapshot(&root, max_status_entries, max_status_bytes) {
+        Ok(snapshot) => json!({
+            "available": true,
+            "clean": snapshot.clean,
+            "summary": snapshot.summary(),
+            "change_count": snapshot.change_count,
+            "sampled_changes": snapshot.sampled_changes,
+            "sample_truncated": snapshot.sample_truncated,
+            "sample_limits": {
+                "max_entries": max_status_entries,
+                "max_bytes": max_status_bytes
+            }
+        }),
+        Err(error) => {
+            let (summary, _) = redact_and_truncate_output(&error.to_string(), 4_096);
+            json!({
+                "available": false,
+                "clean": false,
+                "summary": summary,
+                "change_count": null,
+                "sampled_changes": [],
+                "sample_truncated": false,
+                "sample_limits": {
+                    "max_entries": max_status_entries,
+                    "max_bytes": max_status_bytes
+                }
+            })
+        }
     };
-    serde_json::to_string_pretty(&json!({
+    let document = json!({
         "server": "contextpatch",
         "version": contextpatch_core::VERSION,
+        "build": build_metadata(),
+        "response_mode": response_mode.as_str(),
         "repo_root": root.display().to_string(),
         "repository": git_status,
         "guarded_process_execution": {
@@ -670,8 +751,102 @@ pub(crate) fn call_preflight_health(repo_root: &Path) -> Result<String, String> 
                 "adb": executable_available("adb")
             }
         }
-    }))
-    .map_err(|error| format!("preflight_health refused: {error}"))
+    });
+    let projected = match response_mode {
+        PreflightResponseMode::Minimal => minimal_preflight(&document),
+        PreflightResponseMode::Compact => compact_preflight(&document),
+        PreflightResponseMode::Full => document,
+    };
+
+    serde_json::to_string_pretty(&projected)
+        .map_err(|error| format!("preflight_health refused: {error}"))
+}
+
+fn compact_preflight(document: &Value) -> Value {
+    json!({
+        "server": document["server"].clone(),
+        "version": document["version"].clone(),
+        "build": document["build"].clone(),
+        "response_mode": "compact",
+        "repo_root": document["repo_root"].clone(),
+        "repository": document["repository"].clone(),
+        "guarded_process_execution": document["guarded_process_execution"].clone(),
+        "tools": availability_projection(&document["tools"]),
+        "validation_tools": availability_projection(&document["validation_tools"]),
+        "validation_profiles": availability_projection(&document["validation_profiles"]),
+        "setup_profiles": availability_projection(&document["setup_profiles"]),
+        "native_build": compact_native_status(&document["native_build"]),
+        "native_device": compact_native_status(&document["native_device"])
+    })
+}
+
+fn minimal_preflight(document: &Value) -> Value {
+    json!({
+        "server": document["server"].clone(),
+        "version": document["version"].clone(),
+        "build": document["build"].clone(),
+        "response_mode": "minimal",
+        "repo_root": document["repo_root"].clone(),
+        "repository": document["repository"].clone(),
+        "guarded_process_execution": {
+            "available": document["guarded_process_execution"]["available"].clone()
+        },
+        "validation_tools": availability_summary(&document["validation_tools"]),
+        "validation_profiles": availability_summary(&document["validation_profiles"]),
+        "setup_profiles": availability_summary(&document["setup_profiles"]),
+        "native_build_available": document["native_build"]["available"].clone(),
+        "native_device_available": document["native_device"]["available"].clone()
+    })
+}
+
+fn compact_native_status(status: &Value) -> Value {
+    json!({
+        "available": status["available"].clone(),
+        "required_tools": availability_projection(&status["required_tools"])
+    })
+}
+
+fn availability_projection(statuses: &Value) -> Value {
+    let Some(statuses) = statuses.as_object() else {
+        return Value::Object(serde_json::Map::new());
+    };
+    Value::Object(
+        statuses
+            .iter()
+            .map(|(name, status)| (name.clone(), availability_flag(status)))
+            .collect(),
+    )
+}
+
+fn availability_summary(statuses: &Value) -> Value {
+    let projected = availability_projection(statuses);
+    let Some(projected) = projected.as_object() else {
+        return json!({ "total": 0, "available": 0, "unavailable": [] });
+    };
+    let unavailable = projected
+        .iter()
+        .filter_map(|(name, available)| {
+            (!available.as_bool().unwrap_or(false)).then_some(name.clone())
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "total": projected.len(),
+        "available": projected.len().saturating_sub(unavailable.len()),
+        "unavailable": unavailable
+    })
+}
+
+fn availability_flag(status: &Value) -> Value {
+    status
+        .as_bool()
+        .map(Value::Bool)
+        .or_else(|| {
+            status
+                .get("available")
+                .and_then(Value::as_bool)
+                .map(Value::Bool)
+        })
+        .unwrap_or(Value::Bool(false))
 }
 
 fn executable_available(program: &str) -> Value {

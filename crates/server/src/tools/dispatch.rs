@@ -8,6 +8,8 @@ use crate::tools;
 use crate::tools::project::ProjectCall;
 use crate::tools::ToolSurface;
 
+const MAX_SERIALIZED_TOOL_RESPONSE_BYTES: usize = 900 * 1024;
+
 pub(crate) fn handle_tool_call(
     repo_root: &Path,
     surface: ToolSurface,
@@ -47,31 +49,65 @@ pub(crate) fn handle_tool_call(
         }
     };
 
-    match result {
-        Ok(text) => success_response(
-            id,
-            json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": text
-                    }
-                ]
-            }),
-        ),
-        Err(message) => success_response(
-            id,
-            json!({
-                "isError": true,
-                "content": [
-                    {
-                        "type": "text",
-                        "text": message
-                    }
-                ]
-            }),
-        ),
+    bounded_tool_result_response(id, name, result)
+}
+
+fn bounded_tool_result_response(
+    id: Value,
+    tool_name: &str,
+    result: Result<String, String>,
+) -> String {
+    let (is_error, text) = match result {
+        Ok(text) => (false, text),
+        Err(message) => (true, message),
+    };
+    let result = tool_result(text, is_error);
+    let response = success_response(id.clone(), result);
+    if response.len() <= MAX_SERIALIZED_TOOL_RESPONSE_BYTES {
+        return response;
     }
+
+    let measured_response_bytes = response.len();
+    let fallback_text = if is_error {
+        json!({
+            "tool": tool_name,
+            "handler_result": "error",
+            "diagnostic_omitted": true,
+            "reason": "the serialized diagnostic exceeded ContextPatch's MCP response limit",
+            "measured_response_bytes": measured_response_bytes,
+            "max_response_bytes": MAX_SERIALIZED_TOOL_RESPONSE_BYTES,
+            "next_step": "Use narrower, paged, compact, or minimal arguments. If the action can mutate state, inspect current state before retrying."
+        })
+        .to_string()
+    } else {
+        json!({
+            "tool": tool_name,
+            "handler_result": "success",
+            "output_omitted": true,
+            "reason": "the serialized output exceeded ContextPatch's MCP response limit",
+            "measured_response_bytes": measured_response_bytes,
+            "max_response_bytes": MAX_SERIALIZED_TOOL_RESPONSE_BYTES,
+            "next_step": "Use narrower, paged, compact, or minimal arguments.",
+            "retry_warning": "The action completed successfully; do not retry a mutation solely because its output was omitted."
+        })
+        .to_string()
+    };
+    success_response(id, tool_result(fallback_text, is_error))
+}
+
+fn tool_result(text: String, is_error: bool) -> Value {
+    let mut result = json!({
+        "content": [
+            {
+                "type": "text",
+                "text": text
+            }
+        ]
+    });
+    if is_error {
+        result["isError"] = Value::Bool(true);
+    }
+    result
 }
 
 fn execute_tool(
@@ -123,7 +159,9 @@ fn call_tool(
         tools::capability_manifest::NAME => {
             tools::capability::call_capability_manifest(repo_root, arguments, surface)
         }
-        tools::preflight_health::NAME => tools::capability::call_preflight_health(repo_root),
+        tools::preflight_health::NAME => {
+            tools::capability::call_preflight_health(repo_root, arguments)
+        }
         tools::read_range::NAME => tools::files::call_read_range(repo_root, arguments),
         tools::diff_preview::NAME => tools::files::call_diff_preview(repo_root, arguments),
         tools::replace_exact::NAME => tools::files::call_replace_exact(repo_root, arguments),

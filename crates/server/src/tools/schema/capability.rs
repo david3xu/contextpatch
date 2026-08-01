@@ -26,10 +26,17 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::preflight_health::NAME,
-                    "description": "Check repository and local tool readiness for Claude Desktop workflows without mutating the repository.",
+                    "description": "Check repository and local tool readiness for Claude Desktop workflows without mutating the repository. Dirty-path evidence is sampled within fixed entry and byte limits; use response_mode compact or minimal when full probe details are unnecessary.",
                     "inputSchema": {
                         "type": "object",
-                        "properties": {},
+                        "properties": {
+                            "response_mode": {
+                                "type": "string",
+                                "enum": ["minimal", "compact", "full"],
+                                "default": "full",
+                                "description": "full returns bounded detailed probes and resolved paths; compact returns availability booleans; minimal returns readiness counts. Repository status sampling is bounded in every mode."
+                            }
+                        },
                         "additionalProperties": false
                     }
                 }

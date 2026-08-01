@@ -143,9 +143,18 @@ Reports whether the repository and local validation tools are ready for agent wo
 
 Required inputs: none.
 
+Optional inputs:
+
+- `response_mode`: `full` (default), `compact`, or `minimal`
+
 Rules:
 
 - Must report repository cleanliness using the same Git guard semantics as `status_guard`.
+- Must bound dirty-status evidence in every mode. `full` may sample at most 100 entries and 64 KiB,
+  `compact` at most 20 entries and 12 KiB, and `minimal` must return counts without path samples.
+- Must report the total change count and whether the returned path sample was truncated.
+- `full` must retain detailed probes and resolved executable paths, `compact` must project probe
+  details to availability booleans, and `minimal` must return availability counts and unavailable names.
 - Must report whether guarded process execution is available.
 - Must report local availability of expected validation tools without treating missing optional tools as server failure.
 - Must include every executable that appears in a shipped validation profile or documented guarded validation workflow, including `python3`, `pytest`, `harbor`, and the `bash` base-image script path, so clients can detect host gaps before launching a long profile.
@@ -1337,6 +1346,11 @@ Rules:
 - Timing metadata must not include command output, arguments classified as secret values, or environment values.
 - Timings should be monotonic-duration measurements, not wall-clock timestamps.
 - Tools should keep compact summaries as the default and use `read_command_log` for large output details.
+- Every serialized `tools/call` response must remain at or below 900 KiB so it fits below the
+  client's 1 MiB result ceiling after JSON escaping. If a successful handler still exceeds that
+  envelope, the server must return a compact success marker stating that output was omitted and
+  warning callers not to retry mutations. Oversized error diagnostics must remain `isError: true`
+  while replacing the diagnostic with bounded recovery guidance.
 - The instrumentation goal is p50/p95/p99 diagnosis across long sessions, especially to distinguish MCP transport overhead from process/output handling.
 
 ### `delete_guarded`

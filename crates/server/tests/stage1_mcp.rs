@@ -162,6 +162,49 @@ fn stage2_capability_manifest_projects_cheaply_without_losing_the_build_stamp() 
 }
 
 #[test]
+fn stage2_mcp_bounds_health_evidence_and_oversized_tool_results() {
+    let root = git_repo("stage2_mcp_bounds_tool_results");
+    for index in 0..105 {
+        fs::write(root.join(format!("dirty-{index:03}.txt")), "dirty\n").unwrap();
+    }
+    fs::write(root.join("large.txt"), format!("{}\n", "a".repeat(950_000))).unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preflight_health","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_range","arguments":{"path":"large.txt","start_line":1,"end_line":1}}}"#,
+        ],
+    );
+
+    let health: Value = serde_json::from_str(response_text(&responses[0])).unwrap();
+    assert_eq!(health["repository"]["change_count"], 106);
+    assert_eq!(
+        health["repository"]["sampled_changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        100
+    );
+    assert_eq!(health["repository"]["sample_truncated"], true);
+    assert!(
+        serde_json::to_vec(&responses[0]).unwrap().len() < 1_000_000,
+        "preflight response must fit below the client limit"
+    );
+
+    assert!(responses[1]["result"].get("isError").is_none());
+    let omitted: Value = serde_json::from_str(response_text(&responses[1])).unwrap();
+    assert_eq!(omitted["tool"], "read_range");
+    assert_eq!(omitted["handler_result"], "success");
+    assert_eq!(omitted["output_omitted"], true);
+    assert!(
+        omitted["measured_response_bytes"].as_u64().unwrap() > 900 * 1024,
+        "the fixture must exercise the response-envelope fallback"
+    );
+    assert_text(&responses[1], "do not retry a mutation");
+}
+
+#[test]
 fn stage1_mcp_initialize_carries_client_instructions() {
     // The instructions field is what a client surfaces to the model before its first tool call, so its
     // presence is a contract rather than a nicety. Asserted through the real handshake rather than
@@ -1492,6 +1535,9 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_guarded_command","arguments":{"program":"git","args":["reset"],"timeout_secs":30}}}"#,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"github_pr_run","arguments":{"action":"pr_create","base":"main","head":"feature/task","title":"Add task solution","body":"Ready for review.","dry_run":true}}}"#,
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"github_fork_prepare","arguments":{"dry_run":true}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"preflight_health","arguments":{"response_mode":"compact"}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"preflight_health","arguments":{"response_mode":"minimal"}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"preflight_health","arguments":{"response_mode":"verbose"}}}"#,
         ],
     );
 
@@ -1541,6 +1587,8 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[1], "\"native_build\"");
     assert_text(&responses[1], "\"probe\": \"xcodebuild -version\"");
     assert_text(&responses[1], "\"native_device\"");
+    assert_text(&responses[1], "\"response_mode\": \"full\"");
+    assert_text(&responses[1], "\"sample_truncated\"");
     assert_text(&responses[2], "allowlist: git/status");
     assert_text(&responses[2], "exit_code: 0");
     assert_eq!(responses[3]["result"]["isError"], true);
@@ -1552,6 +1600,28 @@ fn stage2_mcp_reports_capabilities_and_runs_guarded_commands() {
     assert_text(&responses[5], "\"tool\": \"github_fork_prepare\"");
     assert_text(&responses[5], "\"dry_run\": true");
     assert_text(&responses[5], "\"fork\"");
+
+    let compact: Value = serde_json::from_str(response_text(&responses[6])).unwrap();
+    assert_eq!(compact["response_mode"], "compact");
+    assert!(compact["validation_tools"]["git"].is_boolean());
+    assert!(compact["native_build"]["required_tools"]["xcodebuild"].is_boolean());
+
+    let minimal: Value = serde_json::from_str(response_text(&responses[7])).unwrap();
+    assert_eq!(minimal["response_mode"], "minimal");
+    assert!(minimal["validation_tools"]["total"].is_number());
+    assert_eq!(
+        minimal["repository"]["sampled_changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    assert_eq!(responses[8]["result"]["isError"], true);
+    assert_text(
+        &responses[8],
+        "response_mode must be one of minimal, compact, full",
+    );
 }
 
 #[test]

@@ -111,6 +111,12 @@ Sidecar artifact creation, if exposed, must use a fixed artifact root outside th
 
 Read-only file inspection may report metadata, SHA-256 digests, line counts, one-directory entries, symlink status, and bounded byte ranges, but it must stay repository-root-confined and must not become recursive unrestricted filesystem traversal.
 
+All `tools/call` responses must fit within the server's 900 KiB serialized-response envelope.
+Successful operations whose output would exceed that limit return a compact success marker rather
+than a client-side transport failure; mutation callers are explicitly warned not to retry solely
+because detailed output was omitted. Read tools should still expose narrower ranges, limits,
+projections, or paging so useful data can be retrieved without relying on the fallback.
+
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
 
 ## Guarded validation command expectation

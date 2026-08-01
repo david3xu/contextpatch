@@ -5,8 +5,63 @@ use crate::error::ContextPatchError;
 use crate::process::runner::{run_bounded_command, BoundedProcessOutput};
 use crate::process::GIT_SUBPROCESS_TIMEOUT;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct StatusSnapshot {
+    pub clean: bool,
+    pub change_count: usize,
+    pub sampled_changes: Vec<String>,
+    pub sample_truncated: bool,
+}
+
+impl StatusSnapshot {
+    pub fn summary(&self) -> String {
+        if self.clean {
+            return "clean: no Git changes".to_string();
+        }
+        if self.sample_truncated {
+            return format!(
+                "repository has {} uncommitted changes; showing {}",
+                self.change_count,
+                self.sampled_changes.len()
+            );
+        }
+        format!("repository has {} uncommitted changes", self.change_count)
+    }
+}
+
 pub fn status_summary(repo_root: &Path) -> Result<String, ContextPatchError> {
     status_summary_for_path(repo_root, None)
+}
+
+pub fn status_snapshot(
+    repo_root: &Path,
+    max_sampled_changes: usize,
+    max_sample_bytes: usize,
+) -> Result<StatusSnapshot, ContextPatchError> {
+    let (_, changes) = status_changes_for_path(repo_root, None)?;
+    let change_count = changes.len();
+    let mut sampled_changes = Vec::new();
+    let mut sampled_bytes = 0usize;
+
+    for change in &changes {
+        if sampled_changes.len() >= max_sampled_changes {
+            break;
+        }
+        let separator_bytes = usize::from(!sampled_changes.is_empty());
+        let required_bytes = separator_bytes.saturating_add(change.len());
+        if required_bytes > max_sample_bytes.saturating_sub(sampled_bytes) {
+            break;
+        }
+        sampled_bytes = sampled_bytes.saturating_add(required_bytes);
+        sampled_changes.push(change.clone());
+    }
+
+    Ok(StatusSnapshot {
+        clean: changes.is_empty(),
+        change_count,
+        sample_truncated: sampled_changes.len() < changes.len(),
+        sampled_changes,
+    })
 }
 
 pub fn status_short(repo_root: &Path) -> Result<String, ContextPatchError> {
@@ -35,6 +90,29 @@ pub fn status_summary_for_path(
     repo_root: &Path,
     path: Option<&Path>,
 ) -> Result<String, ContextPatchError> {
+    let (scope, changes) = status_changes_for_path(repo_root, path)?;
+
+    if changes.is_empty() {
+        return Ok(match scope {
+            Some(scope) => format!("clean: no Git changes under {}", scope.display()),
+            None => "clean: no Git changes".to_string(),
+        });
+    }
+
+    let scope_label = scope
+        .as_ref()
+        .map(|scope| format!(" under {}", scope.display()))
+        .unwrap_or_default();
+    Err(ContextPatchError::new(format!(
+        "repository has uncommitted changes{scope_label}:\n{}",
+        changes.join("\n")
+    )))
+}
+
+fn status_changes_for_path(
+    repo_root: &Path,
+    path: Option<&Path>,
+) -> Result<(Option<PathBuf>, Vec<String>), ContextPatchError> {
     let root = canonical_repo_root(repo_root)?;
     let scope = path
         .map(|path| guarded_relative_path(&root, path))
@@ -52,23 +130,8 @@ pub fn status_summary_for_path(
     let stdout = String::from_utf8(output.stdout).map_err(|error| {
         ContextPatchError::new(format!("git status output was not valid UTF-8: {error}"))
     })?;
-    let changes: Vec<&str> = stdout.lines().collect();
-
-    if changes.is_empty() {
-        return Ok(match scope {
-            Some(scope) => format!("clean: no Git changes under {}", scope.display()),
-            None => "clean: no Git changes".to_string(),
-        });
-    }
-
-    let scope_label = scope
-        .as_ref()
-        .map(|scope| format!(" under {}", scope.display()))
-        .unwrap_or_default();
-    Err(ContextPatchError::new(format!(
-        "repository has uncommitted changes{scope_label}:\n{}",
-        changes.join("\n")
-    )))
+    let changes = stdout.lines().map(str::to_string).collect();
+    Ok((scope, changes))
 }
 
 fn canonical_repo_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
@@ -192,7 +255,9 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{dirty_paths, status_short, status_summary, status_summary_for_path};
+    use super::{
+        dirty_paths, status_short, status_snapshot, status_summary, status_summary_for_path,
+    };
 
     #[test]
     fn returns_clean_summary_for_clean_repository() {
@@ -214,6 +279,29 @@ mod tests {
             .to_string()
             .contains("repository has uncommitted changes"));
         assert!(error.to_string().contains("?? sample.txt"));
+    }
+
+    #[test]
+    fn snapshots_dirty_status_with_entry_and_byte_bounds() {
+        let root = git_root("snapshots_dirty_status_with_bounds");
+        for index in 0..5 {
+            fs::write(root.join(format!("sample-{index}.txt")), "content").unwrap();
+        }
+
+        let entry_bounded = status_snapshot(&root, 2, 1_000).unwrap();
+        assert!(!entry_bounded.clean);
+        assert_eq!(entry_bounded.change_count, 5);
+        assert_eq!(entry_bounded.sampled_changes.len(), 2);
+        assert!(entry_bounded.sample_truncated);
+        assert_eq!(
+            entry_bounded.summary(),
+            "repository has 5 uncommitted changes; showing 2"
+        );
+
+        let byte_bounded = status_snapshot(&root, 5, 1).unwrap();
+        assert_eq!(byte_bounded.change_count, 5);
+        assert!(byte_bounded.sampled_changes.is_empty());
+        assert!(byte_bounded.sample_truncated);
     }
 
     #[test]
