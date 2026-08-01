@@ -382,12 +382,9 @@ Rules:
 
 Lists one repository directory with compact entry metadata.
 
-Required inputs:
-
-- `path`
-
 Optional inputs:
 
+- `path`: defaults to the configured repository root
 - `include_hidden`: defaults to `false`
 
 Rules:

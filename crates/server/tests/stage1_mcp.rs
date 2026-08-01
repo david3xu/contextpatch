@@ -1182,6 +1182,8 @@ fn stage2_file_inspection_tools_report_digest_listing_and_binary_ranges() {
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"file_info","arguments":{"path":"data/sample.txt"}}}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_directory","arguments":{"path":"data"}}}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_file_bytes","arguments":{"path":"data/blob.bin","offset":1,"max_bytes":3,"encoding":"hex"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_directory","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_directory","arguments":{"path":""}}}"#,
         ],
     );
 
@@ -1195,6 +1197,10 @@ fn stage2_file_inspection_tools_report_digest_listing_and_binary_ranges() {
     assert_text(&responses[2], "\"total_bytes\": 6");
     assert_text(&responses[2], "\"bytes_returned\": 3");
     assert_text(&responses[2], "\"data\": \"0102ff\"");
+    assert_text(&responses[3], "\"path\": \".\"");
+    assert_text(&responses[3], "\"path\": \"data\"");
+    assert_eq!(responses[4]["result"]["isError"], true);
+    assert_text(&responses[4], "path must not be empty");
 
     #[cfg(unix)]
     {

@@ -273,7 +273,11 @@ pub(crate) fn call_list_directory(
     let path = optional_string(arguments, "path")?.unwrap_or(".");
     let include_hidden = optional_bool(arguments, "include_hidden")?.unwrap_or(false);
     let root = canonical_repo_root(repo_root, tools::list_directory::NAME)?;
-    let normalized = normalize_repo_relative_path(tools::list_directory::NAME, path)?;
+    let normalized = if path == "." {
+        ".".to_string()
+    } else {
+        normalize_repo_relative_path(tools::list_directory::NAME, path)?
+    };
     let target = root.join(&normalized);
     if !target.is_dir() {
         return Err(format!(
