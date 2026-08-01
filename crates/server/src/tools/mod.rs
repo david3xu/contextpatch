@@ -9,6 +9,7 @@ pub mod harbor;
 pub mod journal;
 pub mod native;
 pub mod process;
+pub mod project;
 pub mod schema;
 pub mod setup;
 
@@ -34,4 +35,6 @@ pub use process::{
     artifact_python_run, docker_image_inspect, image_cleanliness_check_run, read_command_log,
     run_guarded_command, validation_profile_run,
 };
+pub use project::project_execute;
+pub(crate) use project::ToolSurface;
 pub use setup::setup_profile_run;

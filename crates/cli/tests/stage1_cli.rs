@@ -179,9 +179,7 @@ fn configure_claude_desktop_cleans_exact_legacy_policy_and_preserves_custom_poli
     assert!(output
         .stdout
         .contains("local ContextPatch MCP connection requires no authentication"));
-    assert!(output
-        .stdout
-        .contains("local MCP or Desktop Extension metadata cannot preapprove tools"));
+    assert!(output.stdout.contains("project_execute"));
     assert!(output
         .stdout
         .contains("restart Claude Desktop to reload the updated configuration"));
@@ -195,11 +193,24 @@ fn configure_claude_desktop_cleans_exact_legacy_policy_and_preserves_custom_poli
     );
     assert_eq!(
         servers["contextpatch-one"]["args"],
-        serde_json::json!(["--repo-root", "/repo/one"])
+        serde_json::json!(["--repo-root", "/repo/one", "--tool-surface", "project"])
     );
     assert_eq!(
         servers["contextpatch-one"]["env"],
         serde_json::json!({"RUST_LOG": "info"})
+    );
+    assert_eq!(
+        servers["contextpatch-two"]["args"],
+        serde_json::json!(["--repo-root", "/repo/two", "--tool-surface", "project"])
+    );
+    assert_eq!(
+        servers["contextpatch-windows"]["args"],
+        serde_json::json!([
+            "--repo-root",
+            "C:\\repo\\three",
+            "--tool-surface",
+            "project"
+        ])
     );
     assert!(servers["contextpatch-one"].get("toolPolicy").is_none());
     assert_eq!(
@@ -258,9 +269,9 @@ fn configure_claude_desktop_dry_run_writes_no_policy_or_library_files() {
 fn configure_claude_desktop_help_and_parser_have_no_config_library_surface() {
     let root = temp_root("configure_help");
     let help = run_ok(&root, &["--help"]);
-    assert!(help
-        .stdout
-        .contains("configure-claude-desktop [--config <path>] [--dry-run]"));
+    assert!(help.stdout.contains(
+        "configure-claude-desktop [--config <path>] [--dry-run] [--tool-surface <project|full>]"
+    ));
     assert!(!help.stdout.contains("--config-library"));
 
     let config = root.join("claude_desktop_config.json");
@@ -282,6 +293,62 @@ fn configure_claude_desktop_help_and_parser_have_no_config_library_surface() {
     assert!(refused
         .stderr
         .contains("unknown argument `--config-library`"));
+}
+
+#[test]
+fn configure_claude_desktop_can_restore_full_surface_without_reordering_other_args() {
+    let root = temp_root("configure_claude_desktop_full_surface");
+    let config = root.join("claude_desktop_config.json");
+    fs::write(
+        &config,
+        br#"{"mcpServers":{"contextpatch":{"command":"contextpatch-server","args":["--repo-root","/repo","--custom","value","--tool-surface","project"],"env":{"KEEP":"yes"}}}}"#,
+    )
+    .unwrap();
+
+    let output = run_ok(&root, &configure_args(&config, &["--tool-surface", "full"]));
+    assert!(output.stdout.contains("set the `full` tool surface"));
+    let updated = read_json(&config);
+    assert_eq!(
+        updated["mcpServers"]["contextpatch"]["args"],
+        serde_json::json!([
+            "--repo-root",
+            "/repo",
+            "--custom",
+            "value",
+            "--tool-surface",
+            "full"
+        ])
+    );
+    assert_eq!(
+        updated["mcpServers"]["contextpatch"]["env"],
+        serde_json::json!({"KEEP": "yes"})
+    );
+}
+
+#[test]
+fn configure_claude_desktop_refuses_malformed_surface_without_writing() {
+    let root = temp_root("configure_claude_desktop_malformed_surface");
+    let config = root.join("claude_desktop_config.json");
+    let original = br#"{"mcpServers":{"contextpatch":{"command":"contextpatch-server","args":["--repo-root","/repo","--tool-surface","wide"]}}}"#;
+    fs::write(&config, original).unwrap();
+
+    let output = run_err(&root, &configure_args(&config, &[]));
+    assert!(output.stderr.contains("invalid tool surface `wide`"));
+    assert_eq!(fs::read(&config).unwrap(), original);
+    assert!(backups_for(&config).is_empty());
+}
+
+#[test]
+fn configure_claude_desktop_refuses_duplicate_surface_without_writing() {
+    let root = temp_root("configure_claude_desktop_duplicate_surface");
+    let config = root.join("claude_desktop_config.json");
+    let original = br#"{"mcpServers":{"contextpatch":{"command":"contextpatch-server","args":["--repo-root","/repo","--tool-surface","project","--tool-surface","full"]}}}"#;
+    fs::write(&config, original).unwrap();
+
+    let output = run_err(&root, &configure_args(&config, &[]));
+    assert!(output.stderr.contains("duplicate `--tool-surface`"));
+    assert_eq!(fs::read(&config).unwrap(), original);
+    assert!(backups_for(&config).is_empty());
 }
 
 #[test]

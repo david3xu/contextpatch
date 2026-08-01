@@ -6,6 +6,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 
 | Tool | Writes? | Guard |
 | --- | --- | --- |
+| `project_execute` | Depends on selected action | Project-surface wrapper; exactly one existing guarded action per call |
 | `capability_manifest` | No | Reports exact supported capabilities and unsupported boundaries |
 | `preflight_health` | No | Repository/tool readiness summary |
 | `read_range` | No | Bounded path and line range |
@@ -66,9 +67,39 @@ Every server-advertised MCP tool must include an `annotations` object in `tools/
 
 These annotations are a client-permission hint only. They must not remove internal contextpatch safety gates: mutation-capable tools still default to dry-run where designed, still require exact confirmation strings for execution where designed, and still enforce repository-root, hash, path, clean-index/worktree, timeout, and refusal policies.
 
-Claude Desktop approval prompts are controlled separately from MCP annotations. `contextpatch configure-claude-desktop` validates detected native and `.exe` ContextPatch commands in the ordinary `claude_desktop_config.json` `mcpServers` map, preserves those entries, unrelated data, and user-authored policies, and removes only the exact legacy ContextPatch wildcard `toolPolicy: {"*":"allow"}` from targeted entries. It does not consult or write `Claude-3p/configLibrary`. Changed configs receive an exact backup, preserved permissions, cooperative locking, a stale-read check, and atomic replacement; `--dry-run` leaves the config unchanged and creates no backup, and repeated runs are idempotent. The local ContextPatch MCP connection requires no authentication, but zero prompts from first use require a Claude organization administrator's default-always-allow connector-tool setting when available; otherwise Claude may require a one-time persistent Always allow/Allow for all tasks selection.
+Claude Desktop approval prompts are controlled separately from MCP annotations. `contextpatch configure-claude-desktop` validates detected native and `.exe` ContextPatch commands in the ordinary `claude_desktop_config.json` `mcpServers` map, preserves those entries, unrelated data, user-authored policies, and unrelated command arguments, and defaults each targeted entry to `--tool-surface project`. Use `--tool-surface full` for the direct-tool rollback. The configurator removes only the exact legacy ContextPatch wildcard `toolPolicy: {"*":"allow"}` from targeted entries and does not consult or write `Claude-3p/configLibrary`. Changed configs receive an exact backup, preserved permissions, cooperative locking, a stale-read check, and atomic replacement; `--dry-run` leaves the config unchanged and creates no backup, and repeated runs are idempotent. The local ContextPatch MCP connection requires no authentication. Project mode reduces the persistent approval surface to one stable `project_execute` identity per configured project, but Claude still owns the approval decision and local metadata cannot silently preauthorize it.
 
 ## Tool contracts
+
+### `project_execute`
+
+The sole public MCP tool when the server starts with `--tool-surface project`. It discovers or executes
+one existing ContextPatch action for the server's fixed repository root.
+
+Required inputs:
+
+- `action`: an internal action name, or the reserved value `describe`
+
+Optional inputs:
+
+- `arguments`: the original JSON object for the selected action
+
+Discovery:
+
+- `{"action":"describe"}` returns build provenance and the sorted internal action names.
+- `{"action":"describe","arguments":{"name":"read_range"}}` returns that action's exact schema and annotations.
+
+Rules:
+
+- Execute exactly one action per call; batching and recursive `project_execute` dispatch are refused.
+- Do not accept a repository root or server identity in wrapper arguments.
+- Keep the public wrapper name, description, input schema, and annotations stable as internal actions are added.
+- Resolve the internal action before selecting its deadline, repository mutation lock, handler, receipt/log
+  identity, refusal text, and timeout recovery guidance.
+- Reuse the existing action handlers and all repository, path, hash, Git-state, dry-run, confirmation,
+  process, timeout, and receipt policy without weakening or duplicating it.
+- Reject direct calls to hidden internal tools while project mode is active.
+- Advertise `readOnlyHint: false` because the wrapper can route mutation-capable actions.
 
 ### `capability_manifest`
 
@@ -78,14 +109,15 @@ Required inputs: none.
 
 Optional inputs:
 
-- `names_only`: return sorted names from the registered MCP schemas instead of the full manifest
-- `section`: return one of `build`, `scratch`, `deadlines_seconds`, `mutation_coordination`,
+- `names_only`: return the active public tool names and sorted internal action names
+- `section`: return one of `build`, `tool_surface`, `scratch`, `deadlines_seconds`, `mutation_coordination`,
   `write_receipts`, `file_tools`, `git_workflows`, `github_workflows`, `process_execution`,
   `setup_profiles`, `native_build`, or `native_device`
 
 Rules:
 
 - Must report file tools and process-execution availability honestly.
+- Must report the active tool surface, its public names, and the internal action names.
 - Projected responses must retain `build.git_sha`; a section response must include both
   `"section": "<name>"` and a property named for the requested section.
 - Unknown sections must refuse and list the valid choices.
@@ -1384,6 +1416,7 @@ The server currently ships:
 47. `setup_profile_run`
 48. `native_build_run`
 49. `native_device_run`
+50. `project_execute` (project surface only; the other 49 remain internal actions)
 
 The CLI `apply-patch` command remains a not-implemented stub, and `insert_at_anchor` remains a
 non-advertised boundary concept. Neither is an MCP capability. See `docs/implementation-roadmap.md`.

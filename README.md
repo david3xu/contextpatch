@@ -55,10 +55,20 @@ contextpatch diff-preview <path> --old <text> --new <text>
 contextpatch replace-exact <path> --old <text> --new <text>
 contextpatch write-new-file <path> --content <text>
 contextpatch status-guard [path]
-contextpatch configure-claude-desktop [--config <path>] [--dry-run]
+contextpatch configure-claude-desktop [--config <path>] [--dry-run] \
+  [--tool-surface <project|full>]
 ```
 
-The MCP server exposes the safe tool surface to local agent clients:
+The server supports two public MCP surfaces over the same guarded actions:
+
+- `full` is the server default and advertises every action as a direct MCP tool.
+- `project` advertises one stable `project_execute` wrapper for the fixed `--repo-root`. Use
+  `action: "describe"` to list actions or retrieve one action's exact schema, then execute one action
+  per call with its original arguments. The wrapper resolves back to the internal action before
+  deadlines, mutation locks, handlers, logs, and receipts are selected.
+
+The full surface exposes these direct actions; project mode keeps the same set behind
+`project_execute`:
 
 - `capability_manifest`
 - `preflight_health`
@@ -109,9 +119,9 @@ The MCP server exposes the safe tool surface to local agent clients:
 - `github_pr_run`
 - `github_fork_prepare`
 
-Run `contextpatch configure-claude-desktop` to validate detected ContextPatch entries in the normal `claude_desktop_config.json` `mcpServers` map. The command keeps ordinary command-and-args entries in place, preserves unrelated configuration and user-authored policies, and removes only the exact legacy ContextPatch wildcard `toolPolicy: {"*":"allow"}` from targeted entries. It uses a cooperative lock and stale-read check and creates an exact backup before an update. `--dry-run` leaves the config unchanged and creates no backup.
+Run `contextpatch configure-claude-desktop` to validate detected ContextPatch entries in the normal `claude_desktop_config.json` `mcpServers` map and default them to `--tool-surface project`. The command preserves repository roots, unrelated arguments, configuration, and user-authored policies, and removes only the exact legacy ContextPatch wildcard `toolPolicy: {"*":"allow"}` from targeted entries. It uses a cooperative lock and stale-read check and creates an exact backup before an update. `--dry-run` leaves the config unchanged and creates no backup; `--tool-surface full` restores the direct-tool surface.
 
-The local ContextPatch MCP connection requires no authentication. Claude Desktop owns runtime tool authorization: ordinary MCP configuration and local Desktop Extension metadata cannot preapprove tools. Zero prompts from first use require a Claude organization administrator's default-always-allow connector-tool setting when available; otherwise Claude may require a one-time persistent **Always allow** or **Allow for all tasks** selection. These client-side approval choices never weaken ContextPatch's dry-run defaults, exact confirmations, path checks, Git-state gates, or refusals.
+The local ContextPatch MCP connection requires no authentication. Claude Desktop owns runtime tool authorization: ordinary MCP configuration and local Desktop Extension metadata cannot preapprove tools. Project mode reduces the normal persistent approval scope from one identity per direct tool to one stable `project_execute` identity per configured project; it cannot eliminate an approval Claude requires. These client-side approval choices never weaken ContextPatch's dry-run defaults, exact confirmations, path checks, Git-state gates, deadlines, locks, receipts, or refusals.
 
 `run_guarded_command` is Stage 2 MCP-only validation support: it runs no shell, stays repo-root-confined, allows only selected validation-oriented programs/subcommands, drains stdout/stderr concurrently, applies a timeout, redacts probable secret values without hiding ordinary paths or docs, and reports command/cwd/exit-code/duration metadata. The default timeout is 120 seconds and the general maximum remains 600 seconds; only exact `harbor run` commands may request up to 3600 seconds. It supports repo-relative Python scripts, `pytest`, `harbor run`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` base-image checks for project validation; it still refuses Docker, `pip`, arbitrary `python -m`, arbitrary shell scripts, and generic package installation.
 

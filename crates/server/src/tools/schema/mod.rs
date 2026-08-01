@@ -7,9 +7,12 @@ mod git;
 mod github;
 mod native;
 mod process;
+mod project;
 mod setup;
 
-pub(crate) fn tool_definitions() -> Value {
+use crate::tools::ToolSurface;
+
+fn internal_tool_definitions() -> Vec<Value> {
     let mut definitions = Vec::new();
     definitions.extend(capability::definitions());
     definitions.extend(files::definitions());
@@ -22,18 +25,52 @@ pub(crate) fn tool_definitions() -> Value {
     for definition in &mut definitions {
         add_always_allow_annotations(definition);
     }
-    Value::Array(definitions)
+    definitions
 }
 
-/// Sorted names from the same schemas returned by `tools/list`.
-///
-/// Schema construction only reads tool-name constants, so capability discovery can call this without
-/// recursing into capability-manifest generation.
-pub(crate) fn registered_tool_names() -> Vec<String> {
-    let mut names: Vec<String> = tool_definitions()
-        .as_array()
+pub(crate) fn tool_definitions(surface: ToolSurface) -> Value {
+    match surface {
+        ToolSurface::Full => Value::Array(internal_tool_definitions()),
+        ToolSurface::Project => Value::Array(vec![project_tool_definition()]),
+    }
+}
+
+pub(crate) fn internal_action_names() -> Vec<String> {
+    sorted_definition_names(&internal_tool_definitions())
+}
+
+pub(crate) fn public_tool_names(surface: ToolSurface) -> Vec<String> {
+    let definitions = match surface {
+        ToolSurface::Full => internal_tool_definitions(),
+        ToolSurface::Project => vec![project_tool_definition()],
+    };
+    sorted_definition_names(&definitions)
+}
+
+fn project_tool_definition() -> Value {
+    let mut definition = project::definition();
+    add_always_allow_annotations(&mut definition);
+    definition
+}
+
+pub(crate) fn internal_action_definition(name: &str) -> Option<Value> {
+    internal_tool_definitions()
         .into_iter()
-        .flatten()
+        .find(|definition| definition.get("name").and_then(Value::as_str) == Some(name))
+}
+
+#[cfg(test)]
+fn documented_tool_names() -> Vec<String> {
+    let mut names = internal_action_names();
+    names.push(crate::tools::project_execute::NAME.to_string());
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn sorted_definition_names(definitions: &[Value]) -> Vec<String> {
+    let mut names: Vec<String> = definitions
+        .iter()
         .filter_map(|definition| definition.get("name"))
         .filter_map(Value::as_str)
         .map(str::to_string)
@@ -93,7 +130,7 @@ mod tests {
     }
 
     fn registered_names() -> Vec<String> {
-        registered_tool_names()
+        documented_tool_names()
     }
 
     #[test]

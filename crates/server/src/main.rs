@@ -7,13 +7,13 @@ mod tools;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let repo_root = match server::parse_repo_root(std::env::args().skip(1).collect()) {
-        Ok(repo_root) => repo_root,
+    let options = match server::parse_server_options(std::env::args().skip(1).collect()) {
+        Ok(options) => options,
         Err(message) => {
             eprintln!("{message}");
             return ExitCode::from(2);
         }
     };
 
-    server::run_stdio_server(&repo_root)
+    server::run_stdio_server(&options)
 }

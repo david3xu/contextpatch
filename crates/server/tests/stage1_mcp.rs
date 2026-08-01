@@ -191,6 +191,109 @@ fn stage1_mcp_initialize_carries_client_instructions() {
 }
 
 #[test]
+fn project_surface_wraps_existing_actions_without_changing_their_policy_identity() {
+    let root = git_repo("project_surface_wraps_existing_actions");
+    fs::write(root.join("sample.txt"), "alpha\n").unwrap();
+    git(&root, &["add", "sample.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    let direct_read = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_range","arguments":{"path":"sample.txt","start_line":1,"end_line":1}}}"#,
+        ],
+    );
+
+    let responses = run_server_project(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"describe"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"describe","arguments":{"name":"read_range"}}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"read_range","arguments":{"path":"sample.txt","start_line":1,"end_line":1}}}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"capability_manifest","arguments":{"names_only":true}}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_range","arguments":{"path":"sample.txt","start_line":1,"end_line":1}}}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"missing_action","arguments":{}}}}"#,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"project_execute","arguments":{}}}}"#,
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"replace_exact","arguments":{"path":"sample.txt","old":"alpha","new":"beta"}}}}"#,
+            r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"git_commit_exact","arguments":{"paths":["sample.txt"],"subject":"test: wrapped dry run"}}}}"#,
+            r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"read_write_receipts","arguments":{"limit":10}}}}"#,
+            r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"run_guarded_command","arguments":{"program":"git","args":["status","--short"],"timeout_secs":30}}}}"#,
+        ],
+    );
+
+    assert!(responses[0]["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .starts_with("Call project_execute first"));
+
+    let tools = responses[1]["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "project_execute");
+    assert_eq!(
+        tools[0]["description"],
+        "Describe or execute one guarded ContextPatch action for this configured project."
+    );
+    assert_eq!(
+        tools[0]["annotations"],
+        serde_json::json!({
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        })
+    );
+
+    let discovery: Value = serde_json::from_str(response_text(&responses[2])).unwrap();
+    assert_eq!(discovery["tool_surface"], "project");
+    assert_eq!(discovery["action_count"], 49);
+    assert!(discovery["action_names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|name| name == "replace_exact"));
+
+    let read_definition: Value = serde_json::from_str(response_text(&responses[3])).unwrap();
+    assert_eq!(read_definition["definition"]["name"], "read_range");
+    assert_eq!(
+        read_definition["definition"]["annotations"]["readOnlyHint"],
+        true
+    );
+    assert_eq!(response_text(&responses[4]), response_text(&direct_read[0]));
+
+    let capabilities: Value = serde_json::from_str(response_text(&responses[5])).unwrap();
+    assert_eq!(capabilities["tool_surface"], "project");
+    assert_eq!(
+        capabilities["tool_names"],
+        serde_json::json!(["project_execute"])
+    );
+    assert_eq!(capabilities["action_names"].as_array().unwrap().len(), 49);
+
+    for (response, expected) in [
+        (&responses[6], "unknown tool for project surface"),
+        (&responses[7], "unknown action `missing_action`"),
+        (&responses[8], "recursive wrapper dispatch"),
+    ] {
+        assert_eq!(response["result"]["isError"], true);
+        assert_text(response, expected);
+    }
+
+    assert_text(&responses[9], "replaced bytes");
+    assert_eq!(
+        fs::read_to_string(root.join("sample.txt")).unwrap(),
+        "beta\n"
+    );
+    assert_text(&responses[10], "\"dry_run\": true");
+    let receipts: Value = serde_json::from_str(response_text(&responses[11])).unwrap();
+    assert!(receipts["receipts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|receipt| receipt["tool"] == "replace_exact"));
+    assert_text(&responses[12], "allowlist: git/status");
+}
+
+#[test]
 fn stage1_mcp_tools_work_together() {
     let root = git_repo("stage1_mcp_tools_work_together");
     fs::write(root.join("sample.txt"), "alpha\nbeta\ngamma\n").unwrap();
@@ -2073,10 +2176,24 @@ fn run_server(root: &Path, requests: &[&str]) -> Vec<Value> {
     run_server_with_env(root, &[], requests)
 }
 
+fn run_server_project(root: &Path, requests: &[&str]) -> Vec<Value> {
+    run_server_with_options(root, &["--tool-surface", "project"], &[], requests)
+}
+
 fn run_server_with_env(root: &Path, envs: &[(&str, String)], requests: &[&str]) -> Vec<Value> {
+    run_server_with_options(root, &[], envs, requests)
+}
+
+fn run_server_with_options(
+    root: &Path,
+    options: &[&str],
+    envs: &[(&str, String)],
+    requests: &[&str],
+) -> Vec<Value> {
     let mut child = Command::new(contextpatch_server())
         .arg("--repo-root")
         .arg(root)
+        .args(options)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .envs(envs.iter().map(|(key, value)| (*key, value)))

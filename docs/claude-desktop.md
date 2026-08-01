@@ -6,6 +6,21 @@
 
 The server should expose safe edit and validation tools rather than generic filesystem writes or broad shell access. Claude Desktop or another client can request bounded reads, preview diffs, apply guarded edits, discover capabilities, run preflight health checks, and run allowlisted validation commands.
 
+## Tool surfaces
+
+`contextpatch-server` supports two public surfaces over the same internal action handlers:
+
+- `--tool-surface full` advertises all 49 actions directly. It is the server default when the option
+  is omitted.
+- `--tool-surface project` advertises only `project_execute` for the fixed `--repo-root`. Call it
+  with `action: "describe"` to list actions, or include `arguments.name` to retrieve one action's
+  exact schema. A normal call selects one action and passes its original argument object.
+
+Project mode reduces Claude's persistent approval scope to one stable public tool identity per
+configured project. It does not combine repositories, execute batches, or weaken guards. The server
+resolves the internal action before choosing its deadline, mutation lock, handler, log/receipt name,
+or recovery guidance. Direct hidden-tool calls are refused.
+
 ## Server boundary
 
 The server should not expose broad filesystem write tools. In particular, the default server must not expose:
@@ -76,11 +91,20 @@ Claude Desktop's normal local configuration uses the `mcpServers` map in `claude
 ./target/release/contextpatch configure-claude-desktop
 ```
 
-The command keeps each detected entry in the ordinary `mcpServers` map with its existing command and args. It preserves unrelated entries, data, and user-authored policies and writes no approval policy. If an older ContextPatch version added the exact wildcard `toolPolicy: {"*":"allow"}` to a targeted entry, the command removes only that legacy value; every other `toolPolicy` value is retained. A changed config receives a timestamped sibling backup containing its exact original bytes; permissions are preserved, a cooperative lock coordinates updates, and a final stale-read check protects the atomic replacement. Repeated runs are idempotent.
+The command keeps each detected entry in the ordinary `mcpServers` map, preserves its command,
+repository root, environment, unrelated arguments, unrelated entries/data, and user-authored
+policies, and sets `--tool-surface project` by default. It writes no approval policy. If an older
+ContextPatch version added the exact wildcard `toolPolicy: {"*":"allow"}` to a targeted entry, the
+command removes only that legacy value; every other `toolPolicy` value is retained. A changed config
+receives a timestamped sibling backup containing its exact original bytes; permissions are preserved,
+a cooperative lock coordinates updates, and a final stale-read check protects the atomic replacement.
+Repeated runs are idempotent.
 
-Use `--dry-run` to preview whether stale policy cleanup is needed without changing the config. Use `--config /path/to/claude_desktop_config.json` for a custom config path.
+Use `--dry-run` to preview the migration without changing the config. Use
+`--config /path/to/claude_desktop_config.json` for a custom config path. Use
+`--tool-surface full` as the explicit rollback when direct tools are preferred.
 
-The local ContextPatch MCP connection requires no authentication. Claude Desktop owns runtime tool authorization. Neither ordinary MCP configuration nor local DXT/Desktop Extension metadata can preapprove tools, and ContextPatch does not consult or write `Claude-3p/configLibrary`. Zero prompts from first use require a Claude organization administrator's default-always-allow connector-tool setting when available; otherwise Claude may require a one-time persistent **Always allow** or **Allow for all tasks** selection. Approval UX never bypasses ContextPatch's repository, path, hash, Git-state, dry-run, confirmation, or timeout guards.
+The local ContextPatch MCP connection requires no authentication. Claude Desktop owns runtime tool authorization. Neither ordinary MCP configuration nor local DXT/Desktop Extension metadata can preapprove tools, and ContextPatch does not consult or write `Claude-3p/configLibrary`. Project mode usually reduces the required persistent choice to **Always allow** or **Allow for all tasks** for `project_execute` once per configured project; it cannot silently grant that choice. Approval UX never bypasses ContextPatch's repository, path, hash, Git-state, dry-run, confirmation, deadline, lock, or receipt guards.
 
 ## Build and configure Claude Desktop
 
@@ -93,7 +117,9 @@ If the MCP server entry does not exist yet, point Claude Desktop at the release 
       "command": "/absolute/path/to/contextpatch/target/release/contextpatch-server",
       "args": [
         "--repo-root",
-        "/absolute/path/to/repo"
+        "/absolute/path/to/repo",
+        "--tool-surface",
+        "project"
       ]
     }
   }
@@ -108,27 +134,32 @@ On macOS, Claude Desktop reads this configuration from:
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
-Run `contextpatch configure-claude-desktop` to validate the ordinary entry and clean the exact legacy ContextPatch wildcard `toolPolicy` if present. Restart Claude Desktop after changing configuration or rebuilding the server binary.
+Run `contextpatch configure-claude-desktop` to validate the ordinary entry, add or normalize the
+project surface, and clean the exact legacy ContextPatch wildcard `toolPolicy` if present. Restart
+Claude Desktop after changing configuration or rebuilding the server binary.
 
 ## Local development command
 
 Before packaging, the server can be launched from the workspace with:
 
 ```bash
-cargo run -p server --bin contextpatch-server -- --repo-root /path/to/repo
+cargo run -p server --bin contextpatch-server -- --repo-root /path/to/repo \
+  --tool-surface project
 ```
 
 After installation, the intended command is:
 
 ```bash
-contextpatch-server --repo-root /path/to/repo
+contextpatch-server --repo-root /path/to/repo --tool-surface project
 ```
 
 The workspace package is named `server`; the installed binary remains `contextpatch-server` to avoid colliding with generic commands.
 
 ## Quick MCP smoke test
 
-After restarting Claude Desktop, ask it to list available `contextpatch` tools. It should see:
+After restarting Claude Desktop, ask it to list available `contextpatch` tools. A project-surface
+entry should expose exactly `project_execute`; call `{"action":"describe"}` to verify the 49 internal
+actions and build stamp. A full-surface entry should expose:
 
 - `read_range`
 - `read_write_receipts`
@@ -181,7 +212,7 @@ After restarting Claude Desktop, ask it to list available `contextpatch` tools. 
 
 Each advertised tool includes MCP annotations, but annotations do not suppress Claude Desktop approval prompts. Local MCP and Desktop Extension metadata cannot grant runtime approval; that decision belongs to Claude Desktop and its account or organization policy.
 
-The rebuilt release binary advertises all forty-eight tools. If Claude Desktop lists fewer, compare `capability_manifest.build.git_sha` with the checkout. A mismatch means the configured binary is stale; a match usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, then confirm the ordinary `claude_desktop_config.json` entry points at the rebuilt binary:
+The rebuilt release binary advertises 49 direct tools in full mode or one wrapper in project mode. If Claude Desktop lists a different surface, inspect the entry's `--tool-surface` argument. In full mode compare `capability_manifest.build.git_sha` with the checkout; in project mode use `project_execute` action `describe`. A mismatched SHA means the configured binary is stale; a matching SHA with stale tools usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, then confirm the ordinary `claude_desktop_config.json` entry points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -193,7 +224,8 @@ Tool loading and exact-name search ranking are controlled by Claude Desktop. The
 
 ## Currently exposed tools
 
-The current server exposes the implemented safe primitives:
+The current server exposes these implemented safe primitives directly in full mode and as internal
+actions behind `project_execute` in project mode:
 
 - `read_range`
 - `read_write_receipts`

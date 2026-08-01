@@ -71,7 +71,8 @@ Usage:
   contextpatch replace-exact <path> --old <text> --new <text>
   contextpatch write-new-file <path> --content <text>
   contextpatch create-directory <path> [--parents]
-  contextpatch configure-claude-desktop [--config <path>] [--dry-run]
+  contextpatch configure-claude-desktop [--config <path>] [--dry-run] \
+[--tool-surface <project|full>]
 
 Commands:
   status-guard    Refuse when Git status is dirty
@@ -81,7 +82,7 @@ Commands:
   replace-exact   Replace text only when an anchor matches exactly once
   write-new-file  Create a file only when it does not already exist
   create-directory Create a directory only when it does not already exist
-  configure-claude-desktop Validate ordinary Claude Desktop ContextPatch entries
+  configure-claude-desktop Configure Claude entries; project surface is the default
   apply-patch     Apply a guarded unified patch
   serve           Run the local context server
   version         Print version

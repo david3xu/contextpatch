@@ -5,8 +5,15 @@ use serde_json::{json, Value};
 
 use crate::protocol::response::{error_response, success_response};
 use crate::tools;
+use crate::tools::project::ProjectCall;
+use crate::tools::ToolSurface;
 
-pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> String {
+pub(crate) fn handle_tool_call(
+    repo_root: &Path,
+    surface: ToolSurface,
+    id: Value,
+    request: &Value,
+) -> String {
     let Some(params) = request.get("params") else {
         return error_response(id, -32602, "tools/call missing params");
     };
@@ -19,19 +26,25 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
         .cloned()
         .unwrap_or_default();
 
-    let result = match deadline_for(name) {
-        Some(limit) => {
-            let owned_root = repo_root.to_path_buf();
-            let owned_name = name.to_string();
-            let owned_arguments = arguments.clone();
-            contextpatch_core::process::deadline::with_deadline(name, limit, move || {
-                call_tool_with_mutation_lock(&owned_root, &owned_name, &owned_arguments)
-            })
-            .into_result()
-            .map_err(|error| format!("{name} refused: {error}"))
-            .and_then(|result| result)
+    let resolved = match surface {
+        ToolSurface::Full => Ok(ProjectCall::Execute {
+            name: name.to_string(),
+            arguments,
+        }),
+        ToolSurface::Project if name == tools::project_execute::NAME => {
+            tools::project::resolve(&arguments)
         }
-        None => call_tool_with_mutation_lock(repo_root, name, &arguments),
+        ToolSurface::Project => Err(format!(
+            "unknown tool for project surface: {name}; use project_execute"
+        )),
+    };
+
+    let result = match resolved {
+        Err(message) => Err(message),
+        Ok(ProjectCall::Describe(text)) => Ok(text),
+        Ok(ProjectCall::Execute { name, arguments }) => {
+            execute_tool(repo_root, surface, &name, &arguments)
+        }
     };
 
     match result {
@@ -61,8 +74,31 @@ pub(crate) fn handle_tool_call(repo_root: &Path, id: Value, request: &Value) -> 
     }
 }
 
+fn execute_tool(
+    repo_root: &Path,
+    surface: ToolSurface,
+    name: &str,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    match deadline_for(name) {
+        Some(limit) => {
+            let owned_root = repo_root.to_path_buf();
+            let owned_name = name.to_string();
+            let owned_arguments = arguments.clone();
+            contextpatch_core::process::deadline::with_deadline(name, limit, move || {
+                call_tool_with_mutation_lock(&owned_root, surface, &owned_name, &owned_arguments)
+            })
+            .into_result()
+            .map_err(|error| format!("{name} refused: {error}"))
+            .and_then(|result| result)
+        }
+        None => call_tool_with_mutation_lock(repo_root, surface, name, arguments),
+    }
+}
+
 fn call_tool_with_mutation_lock(
     repo_root: &Path,
+    surface: ToolSurface,
     name: &str,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
@@ -74,17 +110,18 @@ fn call_tool_with_mutation_lock(
     } else {
         None
     };
-    call_tool(repo_root, name, arguments)
+    call_tool(repo_root, surface, name, arguments)
 }
 
 fn call_tool(
     repo_root: &Path,
+    surface: ToolSurface,
     name: &str,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     match name {
         tools::capability_manifest::NAME => {
-            tools::capability::call_capability_manifest(repo_root, arguments)
+            tools::capability::call_capability_manifest(repo_root, arguments, surface)
         }
         tools::preflight_health::NAME => tools::capability::call_preflight_health(repo_root),
         tools::read_range::NAME => tools::files::call_read_range(repo_root, arguments),

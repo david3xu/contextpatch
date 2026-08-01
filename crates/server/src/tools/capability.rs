@@ -13,14 +13,26 @@ use contextpatch_core::git::status::status_summary;
 use contextpatch_core::process::guarded_command::resolve_guarded_program;
 use serde_json::{json, Value};
 
-use crate::tools;
+use crate::tools::{self, ToolSurface};
+
+pub(crate) fn build_metadata() -> Value {
+    json!({
+        "git_sha": contextpatch_core::BUILD_GIT_SHA,
+        "git_dirty": contextpatch_core::BUILD_GIT_DIRTY,
+        "built_at": contextpatch_core::BUILD_TIMESTAMP,
+        "profile": contextpatch_core::BUILD_PROFILE,
+        "note": "Compare git_sha against the checked out commit. If they differ, this server \
+                 predates the source tree, and a rebuild plus reinstall may provide capabilities \
+                 that appear absent here."
+    })
+}
 
 /// Build the whole manifest, before any projection.
 ///
 /// Split from the tool entry point so the projection in `call_capability_manifest` cannot drift from
 /// the document: there is exactly one place the content is defined, and sections are selected from it
 /// rather than assembled a second time.
-fn full_manifest(root: &Path) -> Value {
+fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
     json!({
         "server": "contextpatch",
         "version": contextpatch_core::VERSION,
@@ -28,14 +40,14 @@ fn full_manifest(root: &Path) -> Value {
         // rebuilds, so a client that finds a tool absent cannot tell whether the capability does not
         // exist or whether this binary predates it. The natural inference is the wrong one, and the
         // failure is silent and confident. These fields make staleness detectable in one call.
-        "build": {
-            "git_sha": contextpatch_core::BUILD_GIT_SHA,
-            "git_dirty": contextpatch_core::BUILD_GIT_DIRTY,
-            "built_at": contextpatch_core::BUILD_TIMESTAMP,
-            "profile": contextpatch_core::BUILD_PROFILE,
-            "note": "Compare git_sha against the checked out commit. If they differ, this server \
-                     predates the source tree, and a rebuild plus reinstall may provide capabilities \
-                     that appear absent here."
+        "build": build_metadata(),
+        "tool_surface": {
+            "mode": surface.as_str(),
+            "public_tool_names": crate::tools::schema::public_tool_names(surface),
+            "action_names": crate::tools::schema::internal_action_names(),
+            "note": "Full mode advertises each action as a direct MCP tool. Project mode advertises \
+                     only project_execute while preserving the same internal actions and safety \
+                     policy."
         },
         "repo_root": root.display().to_string(),
         "scratch": {
@@ -486,6 +498,7 @@ fn projected_build(document: &Value) -> Result<Value, String> {
 /// the complete document, so nothing that already depends on it changes.
 pub(crate) const PROJECTABLE_SECTIONS: &[&str] = &[
     "build",
+    "tool_surface",
     "scratch",
     "deadlines_seconds",
     "mutation_coordination",
@@ -502,11 +515,12 @@ pub(crate) const PROJECTABLE_SECTIONS: &[&str] = &[
 pub(crate) fn call_capability_manifest(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
+    surface: ToolSurface,
 ) -> Result<String, String> {
     let root = repo_root
         .canonicalize()
         .map_err(|error| format!("capability_manifest refused: {error}"))?;
-    let document = full_manifest(&root);
+    let document = full_manifest(&root, surface);
 
     let names_only = crate::tools::common::optional_bool(arguments, "names_only")
         .map_err(|error| format!("capability_manifest refused: {error}"))?
@@ -520,7 +534,9 @@ pub(crate) fn call_capability_manifest(
             json!({
                 "server": "contextpatch",
                 "build": build,
-                "tool_names": crate::tools::schema::registered_tool_names()
+                "tool_surface": surface.as_str(),
+                "tool_names": crate::tools::schema::public_tool_names(surface),
+                "action_names": crate::tools::schema::internal_action_names()
             })
         }
         (false, Some(section)) => {
