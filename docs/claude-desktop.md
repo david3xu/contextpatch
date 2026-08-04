@@ -12,14 +12,30 @@ The server should expose safe edit and validation tools rather than generic file
 
 - `--tool-surface full` advertises all 49 actions directly. It is the server default when the option
   is omitted.
-- `--tool-surface project` advertises only `project_execute` for the fixed `--repo-root`. Call it
-  with `action: "describe"` to list actions, or include `arguments.name` to retrieve one action's
-  exact schema. A normal call selects one action and passes its original argument object.
+- `--tool-surface project` advertises only `project_execute` for the fixed `--repo-root` trust
+  boundary. Call it with `action: "describe"` to list actions, or include `arguments.name` to
+  retrieve one action's exact schema. A normal call selects one action and passes its original
+  argument object.
 
 Project mode reduces Claude's persistent approval scope to one stable public tool identity per
-configured project. It does not combine repositories, execute batches, or weaken guards. The server
-resolves the internal action before choosing its deadline, mutation lock, handler, log/receipt name,
-or recovery guidance. Direct hidden-tool calls are refused.
+configured server entry. When the configured root is a workspace containing multiple repositories,
+the wrapper-level `repository` property may select one normalized workspace-relative descendant that
+is exactly a Git worktree root:
+
+```json
+{
+  "repository": "dynamo-75751f6-build-dependency-and-release-management",
+  "action": "status_guard",
+  "arguments": {}
+}
+```
+
+The configured workspace remains immutable: absolute paths, traversal, malformed separators, `.git`
+components, symlink components, non-Git directories, and subdirectories inside a worktree are
+refused. Omitting `repository` preserves the configured-root behavior, and the full tool surface
+never accepts this wrapper-only selector. The server derives the effective root before choosing the
+internal action's deadline, mutation lock, handler, log/receipt name, or recovery guidance. It does
+not execute batches or weaken any existing guard. Direct hidden-tool calls are refused.
 
 ## Server boundary
 

@@ -32,6 +32,7 @@ pub(crate) fn handle_tool_call(
         ToolSurface::Full => Ok(ProjectCall::Execute {
             name: name.to_string(),
             arguments,
+            repository: None,
         }),
         ToolSurface::Project if name == tools::project_execute::NAME => {
             tools::project::resolve(&arguments)
@@ -43,13 +44,31 @@ pub(crate) fn handle_tool_call(
 
     let result = match resolved {
         Err(message) => Err(message),
-        Ok(ProjectCall::Describe(text)) => Ok(text),
-        Ok(ProjectCall::Execute { name, arguments }) => {
-            execute_tool(repo_root, surface, &name, &arguments)
+        Ok(ProjectCall::Describe { text, repository }) => {
+            effective_repository_root(repo_root, repository.as_deref()).map(|_| text)
         }
+        Ok(ProjectCall::Execute {
+            name,
+            arguments,
+            repository,
+        }) => effective_repository_root(repo_root, repository.as_deref())
+            .and_then(|root| execute_tool(&root, surface, &name, &arguments)),
     };
 
     bounded_tool_result_response(id, name, result)
+}
+
+fn effective_repository_root(
+    configured_root: &Path,
+    repository: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    match repository {
+        Some(repository) => {
+            contextpatch_core::git::resolve_workspace_git_root(configured_root, repository)
+                .map_err(|error| format!("project_execute refused: {error}"))
+        }
+        None => Ok(configured_root.to_path_buf()),
+    }
 }
 
 fn bounded_tool_result_response(

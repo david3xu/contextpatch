@@ -13,9 +13,10 @@ read_write_receipts before retrying.";
 const PROJECT_CLIENT_INSTRUCTIONS: &str = "\
 Call project_execute first with action=\"describe\". Omit arguments.name to list actions, or provide \
 one action name to retrieve its exact schema and annotations. Execute exactly one action per call by \
-passing its original arguments unchanged. The wrapper preserves repository confinement, hashes, \
-confirmations, dry runs, deadlines, mutation locks, receipts, and command allowlists. After an \
-interrupted or timed-out mutation, inspect receipts and current state before retrying.";
+passing its original arguments unchanged. For a workspace root, repository may select a normalized \
+workspace-relative exact child Git worktree; omit it to use the configured root. The wrapper preserves \
+confinement, hashes, confirmations, dry runs, deadlines, locks, receipts, and command allowlists. After \
+an interrupted or timed-out mutation, inspect receipts and current state before retrying.";
 
 pub(crate) const fn client_instructions(surface: ToolSurface) -> &'static str {
     match surface {

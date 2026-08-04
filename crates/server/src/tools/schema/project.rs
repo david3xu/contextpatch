@@ -16,6 +16,10 @@ pub(crate) fn definition() -> Value {
                 "arguments": {
                     "type": "object",
                     "description": "Arguments for the selected action."
+                },
+                "repository": {
+                    "type": "string",
+                    "description": "Optional normalized workspace-relative path to an exact descendant Git worktree root. Omit it to use the configured --repo-root unchanged."
                 }
             },
             "required": ["action"],

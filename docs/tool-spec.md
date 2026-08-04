@@ -74,7 +74,7 @@ Claude Desktop approval prompts are controlled separately from MCP annotations. 
 ### `project_execute`
 
 The sole public MCP tool when the server starts with `--tool-surface project`. It discovers or executes
-one existing ContextPatch action for the server's fixed repository root.
+one existing ContextPatch action within the server's fixed workspace boundary.
 
 Required inputs:
 
@@ -83,23 +83,37 @@ Required inputs:
 Optional inputs:
 
 - `arguments`: the original JSON object for the selected action
+- `repository`: a normalized workspace-relative path to an exact descendant Git worktree root; omit
+  it to use the configured `--repo-root` unchanged
 
 Discovery:
 
 - `{"action":"describe"}` returns build provenance and the sorted internal action names.
 - `{"action":"describe","arguments":{"name":"read_range"}}` returns that action's exact schema and annotations.
+- A `repository` supplied with `describe` is validated against the workspace boundary before discovery
+  is returned.
 
 Rules:
 
 - Execute exactly one action per call; batching and recursive `project_execute` dispatch are refused.
-- Do not accept a repository root or server identity in wrapper arguments.
+- Keep the configured `--repo-root` immutable. `repository` accepts no absolute path, traversal,
+  malformed separator, control character, `.git` component, symlink component, non-directory,
+  non-Git directory, or worktree subdirectory.
+- Require the selected directory to equal `git rev-parse --show-toplevel`; merely being inside a Git
+  repository is insufficient.
+- Do not accept an arbitrary repository root or server identity. The selector grants authority only
+  to an exact descendant worktree beneath the configured workspace.
 - Keep the public wrapper name, description, input schema, and annotations stable as internal actions are added.
-- Resolve the internal action before selecting its deadline, repository mutation lock, handler, receipt/log
-  identity, refusal text, and timeout recovery guidance.
+- Resolve the effective repository root and internal action before selecting the action's deadline,
+  repository mutation lock, handler, receipt/log identity, refusal text, and timeout recovery guidance.
 - Reuse the existing action handlers and all repository, path, hash, Git-state, dry-run, confirmation,
   process, timeout, and receipt policy without weakening or duplicating it.
 - Reject direct calls to hidden internal tools while project mode is active.
 - Advertise `readOnlyHint: false` because the wrapper can route mutation-capable actions.
+
+The wrapper-level `repository` is distinct from
+`github_pr_run.arguments.repository`, which is an optional GitHub `OWNER/REPO` target after the local
+worktree has already been selected.
 
 ### `capability_manifest`
 

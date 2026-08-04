@@ -32,15 +32,19 @@ impl ToolSurface {
 }
 
 pub(crate) enum ProjectCall {
-    Describe(String),
+    Describe {
+        text: String,
+        repository: Option<String>,
+    },
     Execute {
         name: String,
         arguments: Map<String, Value>,
+        repository: Option<String>,
     },
 }
 
 pub(crate) fn resolve(arguments: &Map<String, Value>) -> Result<ProjectCall, String> {
-    reject_unknown_keys(arguments, &["action", "arguments"])?;
+    reject_unknown_keys(arguments, &["action", "arguments", "repository"])?;
     let action = arguments
         .get("action")
         .and_then(Value::as_str)
@@ -53,6 +57,14 @@ pub(crate) fn resolve(arguments: &Map<String, Value>) -> Result<ProjectCall, Str
         })?,
         None => Map::new(),
     };
+    let repository = arguments
+        .get("repository")
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                "project_execute refused: repository must be a string when provided".to_string()
+            })
+        })
+        .transpose()?;
 
     if action == "describe" {
         reject_unknown_keys(&nested, &["name"])?;
@@ -62,7 +74,7 @@ pub(crate) fn resolve(arguments: &Map<String, Value>) -> Result<ProjectCall, Str
             })?,
             None => "",
         };
-        return describe(name).map(ProjectCall::Describe);
+        return describe(name).map(|text| ProjectCall::Describe { text, repository });
     }
 
     if action == project_execute::NAME {
@@ -80,6 +92,7 @@ pub(crate) fn resolve(arguments: &Map<String, Value>) -> Result<ProjectCall, Str
     Ok(ProjectCall::Execute {
         name: action.to_string(),
         arguments: nested,
+        repository,
     })
 }
 
@@ -91,6 +104,11 @@ fn describe(name: &str) -> Result<String, String> {
             "tool_surface": ToolSurface::Project.as_str(),
             "action_count": tools::schema::internal_action_names().len(),
             "action_names": tools::schema::internal_action_names(),
+            "repository_selection": {
+                "argument": "repository",
+                "scope": "optional normalized workspace-relative path to an exact descendant Git worktree root",
+                "omitted": "use the configured --repo-root unchanged"
+            },
             "note": "Execute exactly one action by passing its name as action and its original \
                      arguments as arguments. Existing guards, deadlines, locks, confirmations, and \
                      receipts remain authoritative."
@@ -132,6 +150,7 @@ mod tests {
     #[test]
     fn resolves_internal_action_without_changing_arguments() {
         let arguments = serde_json::from_value(json!({
+            "repository": "child-repository",
             "action": "read_range",
             "arguments": {
                 "path": "README.md",
@@ -141,10 +160,16 @@ mod tests {
         }))
         .unwrap();
 
-        let ProjectCall::Execute { name, arguments } = resolve(&arguments).unwrap() else {
+        let ProjectCall::Execute {
+            name,
+            arguments,
+            repository,
+        } = resolve(&arguments).unwrap()
+        else {
             panic!("expected executable action");
         };
         assert_eq!(name, "read_range");
+        assert_eq!(repository.as_deref(), Some("child-repository"));
         assert_eq!(arguments["path"], "README.md");
         assert_eq!(arguments["start_line"], 1);
     }
@@ -181,6 +206,10 @@ mod tests {
             (
                 json!({"action": "read_range", "extra": true}),
                 "unknown argument `extra`",
+            ),
+            (
+                json!({"action": "read_range", "repository": 7}),
+                "repository must be a string",
             ),
         ];
 

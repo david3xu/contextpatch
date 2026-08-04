@@ -62,10 +62,12 @@ contextpatch configure-claude-desktop [--config <path>] [--dry-run] \
 The server supports two public MCP surfaces over the same guarded actions:
 
 - `full` is the server default and advertises every action as a direct MCP tool.
-- `project` advertises one stable `project_execute` wrapper for the fixed `--repo-root`. Use
-  `action: "describe"` to list actions or retrieve one action's exact schema, then execute one action
-  per call with its original arguments. The wrapper resolves back to the internal action before
-  deadlines, mutation locks, handlers, logs, and receipts are selected.
+- `project` advertises one stable `project_execute` wrapper for the fixed `--repo-root` trust
+  boundary. Use `action: "describe"` to list actions or retrieve one action's exact schema, then
+  execute one action per call with its original arguments. If `--repo-root` is a non-Git workspace,
+  a wrapper-level `repository` may select a normalized workspace-relative path that is itself an
+  exact descendant Git worktree root. Omitting it preserves the configured root. The wrapper derives
+  that effective root before deadlines, mutation locks, handlers, logs, and receipts are selected.
 
 The full surface exposes these direct actions; project mode keeps the same set behind
 `project_execute`:

@@ -2,7 +2,7 @@
 
 Claude Desktop authorizes local MCP tools by server and tool identity. A ContextPatch server currently
 advertises 49 tools, so each configured project can require many separate approval decisions even though
-all tools share the same fixed repository root and safety implementation.
+all tools share the same safety implementation and configured trust boundary.
 
 Add an optional project tool surface that advertises one stable `project_execute` tool. The tool routes one
 named action to the existing handler for that action. Claude can then persist one approval for the wrapper
@@ -14,17 +14,20 @@ still force per-call approval, and the user must select **Always allow** once wh
 
 ## Product decision
 
-- Keep one MCP server per configured project with a fixed `--repo-root`.
+- Keep one MCP server per configured project or workspace with a fixed `--repo-root` trust boundary.
 - Add `--tool-surface full|project` to `contextpatch-server`.
 - Keep `full` as the server default for backward compatibility and direct MCP users.
 - Make Claude Desktop configuration use `project` mode for ContextPatch entries.
 - In `project` mode, advertise only `project_execute`.
 - Keep the existing 49 tool names as internal action names.
 - Execute exactly one action per wrapper call. Do not add batching.
-- Do not create one global server that can select arbitrary project roots.
+- Let project mode optionally select exact descendant Git worktree roots beneath that boundary.
+- Do not create one global server that can select arbitrary filesystem project roots.
 
-The fixed repository root is an important usability guard. A single global wrapper would reduce approvals
-further, but it would also make choosing the wrong project part of every call.
+The fixed workspace boundary is an important usability guard. A broad global wrapper would reduce
+approvals further, but it would also grant every call authority to choose any project on the machine.
+The bounded selector handles the real multi-repository workspace case without crossing the configured
+root.
 
 ## Public wrapper contract
 
@@ -44,6 +47,10 @@ Use a deliberately stable schema:
       "arguments": {
         "type": "object",
         "description": "Arguments for the selected action."
+      },
+      "repository": {
+        "type": "string",
+        "description": "Optional normalized workspace-relative path to an exact descendant Git worktree root. Omit it to use the configured --repo-root unchanged."
       }
     },
     "required": ["action"],
@@ -54,7 +61,8 @@ Use a deliberately stable schema:
 
 Do not put action names in an `enum`, action count in the description, or generated schemas in the wrapper
 definition. Claude's persistent approval key can include tool metadata. The wrapper metadata must remain
-unchanged when an internal action is added or its schema evolves.
+unchanged when an internal action is added or its schema evolves. Adding the bounded `repository` property
+is an intentional one-time metadata change and can require one renewed Claude approval.
 
 Reserve `action: "describe"` for discovery:
 
@@ -67,6 +75,7 @@ All other action values are existing tool names, for example:
 
 ```json
 {
+  "repository": "dynamo-75751f6-build-dependency-and-release-management",
   "action": "read_range",
   "arguments": {
     "path": "README.md",
@@ -84,6 +93,7 @@ Resolve the public invocation before selecting a deadline or acquiring a mutatio
 MCP tools/call
   -> validate public tool for configured surface
   -> resolve project_execute.action to existing internal tool name
+  -> resolve optional repository under the fixed workspace boundary
   -> select the existing per-tool deadline
   -> acquire the existing per-tool repository mutation lock when required
   -> call the existing handler
@@ -98,9 +108,9 @@ The resolved internal name, not `project_execute`, must be passed to:
 - receipt and command-log reporting
 - refusal and unknown-outcome recovery guidance
 
-This keeps behavior identical to a direct call. A wrapped `git_commit_exact` remains a Git-deadline,
-serialized, journaled commit operation; a wrapped `read_range` remains a read-deadline, non-mutating
-operation.
+This keeps behavior identical to a direct call against the effective root. A wrapped
+`git_commit_exact` remains a Git-deadline, serialized, journaled commit operation; a wrapped
+`read_range` remains a read-deadline, non-mutating operation.
 
 Do not duplicate handlers or move safety policy into the wrapper. `project_execute` is routing only.
 
@@ -133,13 +143,14 @@ The documentation drift test must cover both the wrapper contract and all intern
 
 Add a small project-surface module under `crates/server/src/tools/` that:
 
-- parses `action` and optional `arguments`;
+- parses `action`, optional `arguments`, and the optional wrapper-level `repository`;
 - implements the reserved `describe` action;
 - rejects recursive wrapper dispatch;
 - returns a resolved internal name plus argument map for normal actions.
 
 In `crates/server/src/tools/dispatch.rs`, resolve the invocation before calling `deadline_for` and
-`call_tool_with_mutation_lock`. Keep the existing `call_tool` match as the only handler router.
+`call_tool_with_mutation_lock`. Resolve `repository` through a core workspace guard and pass the
+derived root to the existing handler. Keep the existing `call_tool` match as the only handler router.
 
 ### Capability and client instructions
 
@@ -178,7 +189,10 @@ wrapper approval per server. It must not claim to preauthorize tools or override
 
 ## Safety invariants
 
-- The wrapper cannot change `repo_root`.
+- The wrapper cannot change or escape the configured `repo_root` workspace boundary.
+- A repository selector must be normalized, workspace-relative, symlink-free, and exactly equal to
+  its Git worktree root.
+- Omitting the selector preserves configured-root behavior, and full mode remains unchanged.
 - The wrapper cannot dispatch itself.
 - One call invokes one action only.
 - Existing argument parsing and refusal behavior remain authoritative.
@@ -204,6 +218,10 @@ Add focused server tests for:
 8. Read, write, and Git actions retain their existing deadline class.
 9. Mutating actions retain repository serialization.
 10. Receipt-enabled wrapped actions record the internal action name.
+11. A non-Git workspace can select multiple exact child worktrees for reads, Git, validation,
+    base-image checks, GitHub dry runs, and repository-specific receipts.
+12. Absolute, traversal, malformed, `.git`, symlink, non-Git, and worktree-subdirectory selectors
+    refuse before any handler runs.
 
 Add configurator tests for:
 
@@ -221,11 +239,12 @@ Add configurator tests for:
 2. Add `project_execute`, discovery, and wrapped dispatch.
 3. Prove safety equivalence with read, write, process, Git, and receipt tests.
 4. Extend the Claude Desktop configurator and documentation.
-5. Build the release server and migrate configured ContextPatch projects.
-6. Restart Claude Desktop and verify that each project advertises only `project_execute`.
-7. Select **Always allow** once for the wrapper, then exercise read, write, command, and Git dry-run
+5. Add exact descendant-worktree selection for multi-repository workspace entries.
+6. Build the release server and migrate configured ContextPatch projects or workspaces.
+7. Restart Claude Desktop and verify that each entry advertises only `project_execute`.
+8. Select **Always allow** once for the wrapper, then exercise read, write, command, and Git dry-run
    actions without another tool-specific approval prompt.
-8. Restart Claude Desktop and repeat to prove the approval persists.
+9. Restart Claude Desktop and repeat to prove the approval persists.
 
 ## Validation
 
@@ -249,10 +268,11 @@ git diff --check
 
 ## Success criteria
 
-- Project mode exposes one MCP tool per configured project.
+- Project mode exposes one MCP tool per configured project or workspace entry.
 - All 49 current actions remain reachable through that tool.
 - Adding an internal action does not change the wrapper schema or invalidate its persistent approval.
 - Full mode remains backward-compatible.
 - Wrapped actions preserve direct-call deadlines, locks, receipts, guards, outputs, and refusals.
-- Claude Desktop requires at most one persistent tool approval per project when account and organization
-  policy permit **Always allow**.
+- Exact child-repository selection cannot escape the configured workspace boundary.
+- Claude Desktop requires at most one persistent tool approval per configured entry when account and
+  organization policy permit **Always allow**.
