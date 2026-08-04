@@ -97,7 +97,7 @@ Git state is a guardrail, not a hidden side effect. Tools may inspect Git state 
 
 `delete_guarded` may delete only one clean tracked regular worktree file whose current lowercase SHA-256 matches the caller's expected digest. It must reject symlinks and non-regular files, default to dry-run, require `confirm: "delete tracked file"` for mutation, recheck the digest immediately before removal, preserve the index entry, and verify an unstaged tracked deletion.
 
-Remote Git authority is intentionally split. `git_remote_check` may fetch exactly one explicit remote branch and report local/remote divergence without changing source files. `git_branch_prepare` may fetch exactly one explicit remote base branch, create or switch to one validated local branch from that base, and reset an existing local branch only when the worktree is clean and `confirm: "reset branch from remote base"` is supplied. `git_merge_readiness` may optionally fetch one explicit remote branch, then run read-only merge-base, rev-count, and diff-name queries to identify files changed on both sides of two validated refs. `git_push_exact` may push only the current `HEAD` to the matching named remote branch after verifying a clean worktree, current branch match, expected HEAD hash, no remote-ahead divergence, and explicit `confirm: "push exact commit"`. Tools must not expose broad reset, checkout, merge, merge-tree through generic command execution, rebase, stash, clean, force-push, push tags, push multiple refs, delete refs, or discard user work outside those explicit branch-prep reset guards.
+Remote Git authority is intentionally split. `git_remote_check` may fetch exactly one explicit remote branch and report local/remote divergence without changing source files. `git_branch_prepare` defaults to a non-fetching dry-run that reports exact command argv; only `dry_run: false` may fetch one explicit remote base branch and create or switch to one validated local branch from that base, and it may reset an existing local branch only when the worktree is clean and `confirm: "reset branch from remote base"` is supplied. `git_merge_readiness` may optionally fetch one explicit remote branch, then run read-only merge-base, rev-count, and diff-name queries to identify files changed on both sides of two validated refs. `git_push_exact` may push only the current `HEAD` to the matching named remote branch after verifying a clean worktree, current branch match, expected HEAD hash, no remote-ahead divergence, and explicit `confirm: "push exact commit"`. Tools must not expose broad reset, checkout, merge, merge-tree through generic command execution, rebase, stash, clean, force-push, push tags, push multiple refs, delete refs, or discard user work outside those explicit branch-prep reset guards.
 
 ## Default-deny tools
 
@@ -116,6 +116,11 @@ Successful operations whose output would exceed that limit return a compact succ
 than a client-side transport failure; mutation callers are explicitly warned not to retry solely
 because detailed output was omitted. Read tools should still expose narrower ranges, limits,
 projections, or paging so useful data can be retrieved without relying on the fallback.
+
+Every advertised action schema is closed with `additionalProperties: false`, and the server enforces
+that boundary at runtime for both direct calls and nested `project_execute` actions. Unknown action
+arguments must refuse before reply deadlines, repository mutation locks, or handler dispatch; a
+schema-only hint is not an execution guard.
 
 Default-deny is a trust feature. Adding a broad write primitive would change the product, not merely expand the API.
 

@@ -345,6 +345,32 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
 }
 
 #[test]
+fn full_and_project_surfaces_refuse_unknown_action_arguments() {
+    let root = git_repo("surfaces_refuse_unknown_action_arguments");
+    fs::write(root.join("sample.txt"), "alpha\n").unwrap();
+    git(&root, &["add", "sample.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let direct = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_range","arguments":{"path":"sample.txt","start_line":1,"end_line":1,"dry_run":true}}}"#,
+        ],
+    );
+    let wrapped = run_server_project(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_execute","arguments":{"action":"read_range","arguments":{"path":"sample.txt","start_line":1,"end_line":1,"dry_run":true}}}}"#,
+        ],
+    );
+
+    for response in [&direct[0], &wrapped[0]] {
+        assert_eq!(response["result"]["isError"], true);
+        assert_text(response, "read_range refused: unknown argument `dry_run`");
+    }
+}
+
+#[test]
 fn project_surface_selects_exact_child_repositories_within_a_workspace() {
     let workspace = temp_root("project_surface_workspace");
     fs::write(workspace.join("workspace.txt"), "workspace\n").unwrap();
@@ -733,7 +759,7 @@ fn replace_exact_hash_guard_and_file_receipts_are_end_to_end() {
 }
 
 #[test]
-fn stage2_git_branch_prepare_creates_branch_from_remote_base() {
+fn stage2_git_branch_prepare_defaults_to_plan_then_creates_from_remote_base() {
     let origin = bare_repo("stage2_git_branch_prepare_creates_branch_origin");
     let seed = git_repo("stage2_git_branch_prepare_creates_branch_seed");
     fs::write(
@@ -756,24 +782,97 @@ fn stage2_git_branch_prepare_creates_branch_from_remote_base() {
         &root,
         &["config", "user.email", "contextpatch@example.invalid"],
     );
+    let branch_before = git_stdout(&root, &["branch", "--show-current"]);
+    let remote_ref_before = git_stdout(&root, &["rev-parse", "refs/remotes/origin/Develop"]);
 
-    let responses = run_server(
+    fs::write(
+        seed.join("azure-pipelines.foundry-adapter.yml"),
+        "updated pipeline\n",
+    )
+    .unwrap();
+    git(&seed, &["commit", "--quiet", "-am", "remote update"]);
+    git(&seed, &["push", "--quiet", "origin", "Develop"]);
+    let remote_head = git_stdout(&seed, &["rev-parse", "HEAD"]);
+    assert_ne!(remote_ref_before, remote_head);
+
+    let planned = run_server(
         &root,
         &[
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"chore/personal-fresh-redeploy-20260704-085732","required_files":["azure-pipelines.foundry-adapter.yml"]}}}"#,
         ],
     );
 
-    assert_text(&responses[0], "\"prepared\": true");
-    assert_text(&responses[0], "\"action\": \"created_branch\"");
+    let plan: Value = serde_json::from_str(response_text(&planned[0])).unwrap();
+    assert_eq!(plan["dry_run"], true);
+    assert_eq!(plan["prepared"], false);
+    assert_eq!(plan["would_prepare"], true);
+    assert_eq!(plan["action"], "create_branch");
+    assert_eq!(
+        plan["commands"],
+        serde_json::json!([
+            {
+                "program": "git",
+                "args": [
+                    "fetch",
+                    "origin",
+                    "refs/heads/Develop:refs/remotes/origin/Develop"
+                ]
+            },
+            {
+                "program": "git",
+                "args": [
+                    "switch",
+                    "-c",
+                    "chore/personal-fresh-redeploy-20260704-085732",
+                    "refs/remotes/origin/Develop"
+                ]
+            }
+        ])
+    );
+    assert_eq!(
+        git_stdout(&root, &["branch", "--show-current"]),
+        branch_before
+    );
+    assert_eq!(
+        git_stdout(&root, &["rev-parse", "refs/remotes/origin/Develop"]),
+        remote_ref_before,
+        "dry-run must not fetch"
+    );
+    assert_eq!(
+        git_stdout(
+            &root,
+            &[
+                "branch",
+                "--list",
+                "chore/personal-fresh-redeploy-20260704-085732"
+            ]
+        ),
+        "",
+        "dry-run must not create the local branch"
+    );
+
+    let executed = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"chore/personal-fresh-redeploy-20260704-085732","required_files":["azure-pipelines.foundry-adapter.yml"],"dry_run":false}}}"#,
+        ],
+    );
+
+    assert_text(&executed[0], "\"dry_run\": false");
+    assert_text(&executed[0], "\"prepared\": true");
+    assert_text(&executed[0], "\"action\": \"created_branch\"");
     assert_text(
-        &responses[0],
+        &executed[0],
         "\"current_branch\": \"chore/personal-fresh-redeploy-20260704-085732\"",
     );
-    assert_text(&responses[0], "\"remote_base_is_ancestor\": true");
+    assert_text(&executed[0], "\"remote_base_is_ancestor\": true");
     assert_eq!(
         git_stdout(&root, &["branch", "--show-current"]).trim(),
         "chore/personal-fresh-redeploy-20260704-085732"
+    );
+    assert_eq!(
+        git_stdout(&root, &["rev-parse", "refs/remotes/origin/Develop"]),
+        remote_head
     );
     assert_eq!(git_stdout(&root, &["status", "--short"]), "");
 }
@@ -803,7 +902,7 @@ fn stage2_git_branch_prepare_refuses_missing_required_file_before_switch() {
     let responses = run_server(
         &root,
         &[
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"chore/personal-fresh-redeploy-20260704-085732","required_files":["azure-pipelines.foundry-adapter.yml"]}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"chore/personal-fresh-redeploy-20260704-085732","required_files":["azure-pipelines.foundry-adapter.yml"],"dry_run":false}}}"#,
         ],
     );
 
@@ -850,9 +949,9 @@ fn stage2_git_branch_prepare_requires_confirmation_to_reset_existing_branch() {
     let responses = run_server(
         &root,
         &[
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature"}}}"#,
-            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature","reset_existing":true}}}"#,
-            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature","reset_existing":true,"confirm":"reset branch from remote base","required_files":["pipeline.yml"]}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature","dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature","reset_existing":true,"dry_run":false}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"remote":"origin","base_branch":"Develop","branch":"feature","reset_existing":true,"confirm":"reset branch from remote base","required_files":["pipeline.yml"],"dry_run":false}}}"#,
         ],
     );
 

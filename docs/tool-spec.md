@@ -1207,7 +1207,7 @@ Rules:
 
 ### `git_branch_prepare`
 
-Prepares and switches to one local branch from one explicit remote base branch.
+Plans or prepares one local branch from one explicit remote base branch.
 
 Required inputs:
 
@@ -1219,10 +1219,14 @@ Optional inputs:
 - `remote`: remote name; defaults to `origin`
 - `required_files`: repository-relative files that must exist after preparation
 - `reset_existing`: defaults to `false`
+- `dry_run`: defaults to `true`
 - `confirm`: required literal `reset branch from remote base` when `reset_existing` is `true`
 
 Rules:
 
+- The default dry-run must validate the repository, remote, clean-worktree gate, branch names, and required-file path syntax without fetching, updating refs, creating/resetting branches, or switching the worktree.
+- The dry-run response must report the exact `git fetch` and branch command argv that `dry_run: false` would run. Guards that depend on the newly fetched ref remain explicitly deferred until execution.
+- Branch preparation may execute only when `dry_run` is explicitly `false`.
 - The tool must require a clean worktree before fetching or switching branches.
 - The tool may fetch only `refs/heads/<base_branch>:refs/remotes/<remote>/<base_branch>`.
 - Remote, base branch, local branch, and required-file paths must be validated before Git mutation.
@@ -1230,7 +1234,7 @@ Rules:
 - If the local branch exists and `reset_existing` is false, the fetched remote-tracking ref must already be an ancestor of that branch before switching.
 - If the local branch exists and `reset_existing` is true, the tool must require `confirm: "reset branch from remote base"` before recreating that branch from the fetched remote-tracking ref.
 - Required files must be checked against the target ref before switching/resetting and checked again in the worktree after preparation.
-- The response must include the action taken, previous branch, current branch, remote ref, remote commit, prepared head, ancestor check, required-file results, and post-preparation status.
+- A dry-run response must include the planned action, exact commands, previous branch, remote ref, required files, and deferred execution guards. An execution response must include the action taken, previous branch, current branch, remote ref, remote commit, prepared head, ancestor check, required-file results, and post-preparation status.
 - The tool must not expose generic checkout, rebase, merge, merge-tree, stash, clean, arbitrary reset, arbitrary fetch, push, or multi-branch operations.
 
 ### `git_merge_readiness`

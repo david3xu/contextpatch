@@ -110,11 +110,15 @@ pub(crate) fn call_git_branch_prepare(
     let branch = validate_git_branch(required_string(arguments, "branch")?)?;
     let required_files = optional_string_array(arguments, "required_files")?;
     let reset_existing = optional_bool(arguments, "reset_existing")?.unwrap_or(false);
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
     let confirm = optional_string(arguments, "confirm")?;
     if reset_existing && confirm != Some(CONFIRMATION) {
         return Err(format!(
             "git_branch_prepare refused: reset_existing=true requires confirm: {CONFIRMATION:?}"
         ));
+    }
+    for required_file in &required_files {
+        validate_required_file_path_syntax(tools::git_branch_prepare::NAME, required_file)?;
     }
 
     let root = canonical_repo_root(repo_root, tools::git_branch_prepare::NAME)?;
@@ -128,15 +132,94 @@ pub(crate) fn call_git_branch_prepare(
     }
 
     let remote_ref = remote_ref(&remote, &base_branch);
-    git_success_for_tool(
-        tools::git_branch_prepare::NAME,
-        &root,
-        vec![
-            "fetch".to_string(),
-            remote.clone(),
-            format!("refs/heads/{base_branch}:{remote_ref}"),
-        ],
-    )?;
+    let fetch_args = vec![
+        "fetch".to_string(),
+        remote.clone(),
+        format!("refs/heads/{base_branch}:{remote_ref}"),
+    ];
+    if dry_run {
+        let branch_existed = local_branch_exists(&root, &branch)?;
+        let previous_branch = current_branch(tools::git_branch_prepare::NAME, &root)?;
+        let (action, branch_commands) = if branch_existed {
+            if reset_existing {
+                if previous_branch == branch {
+                    (
+                        "reset_existing_branch",
+                        vec![vec![
+                            "reset".to_string(),
+                            "--hard".to_string(),
+                            remote_ref.clone(),
+                        ]],
+                    )
+                } else {
+                    (
+                        "reset_existing_branch",
+                        vec![
+                            vec![
+                                "branch".to_string(),
+                                "-f".to_string(),
+                                branch.clone(),
+                                remote_ref.clone(),
+                            ],
+                            vec!["switch".to_string(), branch.clone()],
+                        ],
+                    )
+                }
+            } else {
+                (
+                    "switch_existing_branch",
+                    vec![vec!["switch".to_string(), branch.clone()]],
+                )
+            }
+        } else {
+            (
+                "create_branch",
+                vec![vec![
+                    "switch".to_string(),
+                    "-c".to_string(),
+                    branch.clone(),
+                    remote_ref.clone(),
+                ]],
+            )
+        };
+        let commands = std::iter::once(fetch_args.clone())
+            .chain(branch_commands)
+            .map(|args| {
+                json!({
+                    "program": "git",
+                    "args": args
+                })
+            })
+            .collect::<Vec<_>>();
+
+        return serde_json::to_string_pretty(&json!({
+            "tool": tools::git_branch_prepare::NAME,
+            "dry_run": true,
+            "prepared": false,
+            "would_prepare": true,
+            "action": action,
+            "remote": remote,
+            "base_branch": base_branch,
+            "remote_ref": remote_ref,
+            "branch": branch,
+            "previous_branch": previous_branch,
+            "branch_existed": branch_existed,
+            "reset_existing": reset_existing,
+            "required_files": required_files,
+            "commands": commands,
+            "post_fetch_guards_deferred_until_execution": [
+                "resolve the fetched remote commit",
+                "verify required files against the selected target ref",
+                "verify the fetched remote base is an ancestor of the prepared branch",
+                "verify the prepared branch, HEAD, required files, and worktree status"
+            ],
+            "required_confirm_for_reset": CONFIRMATION,
+            "status_short": status_before
+        }))
+        .map_err(|error| format!("git_branch_prepare refused: {error}"));
+    }
+
+    git_success_for_tool(tools::git_branch_prepare::NAME, &root, fetch_args)?;
 
     let status_after_fetch = git_status_short(&root)?;
     if status_after_fetch != status_before {
@@ -245,6 +328,7 @@ pub(crate) fn call_git_branch_prepare(
 
     serde_json::to_string_pretty(&json!({
         "tool": tools::git_branch_prepare::NAME,
+        "dry_run": false,
         "prepared": true,
         "action": action,
         "remote": remote,

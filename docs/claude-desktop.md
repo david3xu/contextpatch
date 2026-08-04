@@ -348,7 +348,7 @@ Use `delete_generated_prefix` for ignored/untracked generated output and empty d
 
 Use `git_remote_check` and `git_push_exact` for the separate remote-publishing boundary. `git_remote_check` fetches one explicit remote branch and reports whether the remote is ahead without source changes. `git_push_exact` requires `confirm: "push exact commit"`, a clean worktree, current branch equal to the requested branch, `expected_head` equal to current `HEAD`, and no remote-ahead divergence after fetch; it pushes only `HEAD:refs/heads/<branch>` and never force-pushes.
 
-Use `git_branch_prepare` for guarded branch setup from a remote base. It requires a clean worktree, fetches only `refs/heads/<base_branch>` into the matching remote-tracking ref, creates or switches to the requested local branch, requires explicit confirmation before resetting an existing branch, verifies the remote base is an ancestor, and can check required files such as split pipeline definitions.
+Use `git_branch_prepare` for guarded branch setup from a remote base. It defaults to a non-fetching dry-run that reports the exact command plan. Set `dry_run: false` to fetch only `refs/heads/<base_branch>` into the matching remote-tracking ref and create or switch to the requested local branch from a clean worktree. Resetting an existing branch still requires explicit confirmation, and execution verifies ancestry plus required files such as split pipeline definitions.
 
 Use `git_merge_readiness` for read-only PR or merge planning. It validates two refs, optionally fetches one explicit target branch, computes the merge base and ahead counts, and reports files changed on both sides as likely conflict candidates. It does not perform a merge, checkout, reset, stash, or source edit.
 

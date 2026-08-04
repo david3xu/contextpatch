@@ -344,7 +344,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::git_branch_prepare::NAME,
-                    "description": "Prepare and switch to a local branch from one explicit remote base branch with guard checks.",
+                    "description": "Dry-run or prepare and switch to a local branch from one explicit remote base branch with guard checks.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -370,6 +370,10 @@ pub(crate) fn definitions() -> Vec<Value> {
                             "reset_existing": {
                                 "type": "boolean",
                                 "description": "Reset an existing local branch to the fetched remote base. Defaults to false."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Validate and report the exact fetch and branch command plan without mutation. Defaults to true."
                             },
                             "confirm": {
                                 "type": "string",

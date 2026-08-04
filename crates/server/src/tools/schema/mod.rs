@@ -59,6 +59,34 @@ pub(crate) fn internal_action_definition(name: &str) -> Option<Value> {
         .find(|definition| definition.get("name").and_then(Value::as_str) == Some(name))
 }
 
+pub(crate) fn validate_internal_action_arguments(
+    name: &str,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<(), String> {
+    let definition =
+        internal_action_definition(name).ok_or_else(|| format!("unknown tool: {name}"))?;
+    let input_schema = definition
+        .get("inputSchema")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{name} refused: internal input schema is missing"))?;
+    if input_schema.get("additionalProperties") != Some(&Value::Bool(false)) {
+        return Err(format!(
+            "{name} refused: internal input schema is not closed"
+        ));
+    }
+    let properties = input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{name} refused: internal input properties are missing"))?;
+    if let Some(argument) = arguments
+        .keys()
+        .find(|argument| !properties.contains_key(*argument))
+    {
+        return Err(format!("{name} refused: unknown argument `{argument}`"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 fn documented_tool_names() -> Vec<String> {
     let mut names = internal_action_names();
@@ -201,5 +229,26 @@ mod tests {
             registered_names(),
             "docs/tool-spec.md summary table must advertise exactly the registered MCP tools"
         );
+    }
+
+    #[test]
+    fn runtime_argument_validation_rejects_names_outside_closed_schema() {
+        let valid = serde_json::from_value(json!({
+            "path": "README.md",
+            "start_line": 1,
+            "end_line": 2
+        }))
+        .unwrap();
+        validate_internal_action_arguments("read_range", &valid).unwrap();
+
+        let invalid = serde_json::from_value(json!({
+            "path": "README.md",
+            "start_line": 1,
+            "end_line": 2,
+            "dry_run": true
+        }))
+        .unwrap();
+        let error = validate_internal_action_arguments("read_range", &invalid).unwrap_err();
+        assert_eq!(error, "read_range refused: unknown argument `dry_run`");
     }
 }

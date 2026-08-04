@@ -135,6 +135,7 @@ fn execute_tool(
     name: &str,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
+    tools::schema::validate_internal_action_arguments(name, arguments)?;
     match deadline_for(name) {
         Some(limit) => {
             let owned_root = repo_root.to_path_buf();

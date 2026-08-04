@@ -150,7 +150,9 @@ Add a small project-surface module under `crates/server/src/tools/` that:
 
 In `crates/server/src/tools/dispatch.rs`, resolve the invocation before calling `deadline_for` and
 `call_tool_with_mutation_lock`. Resolve `repository` through a core workspace guard and pass the
-derived root to the existing handler. Keep the existing `call_tool` match as the only handler router.
+derived root to the existing handler. Validate nested action argument names against the same closed
+internal schema used by the full surface before applying a deadline or mutation lock. Keep the
+existing `call_tool` match as the only handler router.
 
 ### Capability and client instructions
 
