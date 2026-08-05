@@ -14,11 +14,22 @@ fn refused(tool_name: &str, error: contextpatch_core::error::ContextPatchError) 
     format!("{tool_name} refused: {error}")
 }
 
-pub(crate) fn call_git_remote_list(repo_root: &Path) -> Result<String, String> {
+pub(crate) fn call_git_remote_list(
+    repository: contextpatch_core::git::GitRepository<'_>,
+) -> Result<String, String> {
     const TOOL: &str = tools::git_remote_list::NAME;
 
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let remotes = core_sync::list_remotes(&root)
+    // An anchored target was resolved and validated when it was selected, so re-resolving its path here
+    // would be exactly the reopen this phase removes. Only a path-backed target needs resolving.
+    let resolved;
+    let target = if repository.is_anchored() {
+        repository
+    } else {
+        resolved = resolved_repo_root(repository.path(), TOOL)?;
+        contextpatch_core::git::GitRepository::from_path(&resolved)
+    };
+
+    let remotes = core_sync::list_remotes(target)
         .map_err(|error| refused(TOOL, error))?
         .into_iter()
         .map(|remote| {

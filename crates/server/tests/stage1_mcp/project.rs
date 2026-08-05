@@ -160,6 +160,72 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
     assert_text(&responses[14], "either `name` or `action`, not both");
 }
 
+#[cfg(unix)]
+#[test]
+fn project_dispatch_queries_the_anchored_repository_not_a_replacement() {
+    // The vertical proof for descriptor-anchored dispatch. `git_remote_list` is migrated to the typed
+    // repository target, so a selected repository is queried through the descriptor that validated it
+    // rather than by re-resolving the selector. Two repositories with distinguishable remotes make it
+    // visible which one actually answered.
+    let workspace = temp_root("project_surface_anchored_remote");
+
+    let target = workspace.join("target");
+    fs::create_dir_all(&target).unwrap();
+    init_git_repo(&target);
+    git(
+        &target,
+        &["remote", "add", "origin", "https://example.invalid/target.git"],
+    );
+
+    let decoy = workspace.join("decoy");
+    fs::create_dir_all(&decoy).unwrap();
+    init_git_repo(&decoy);
+    git(
+        &decoy,
+        &["remote", "add", "origin", "https://example.invalid/decoy.git"],
+    );
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // The selector answers from the repository it names, never from the workspace root or the sibling.
+    let selected = server.exchange(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_remote_list","arguments":{}}}}"#,
+    );
+    assert_text(&selected, "target.git");
+    assert!(
+        !response_text(&selected).contains("decoy.git"),
+        "{}",
+        response_text(&selected)
+    );
+
+    // And the reverse direction, so the first assertion cannot pass by accident of ordering.
+    let sibling = server.exchange(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"decoy","action":"git_remote_list","arguments":{}}}}"#,
+    );
+    assert_text(&sibling, "decoy.git");
+    assert!(
+        !response_text(&sibling).contains("target.git"),
+        "{}",
+        response_text(&sibling)
+    );
+
+    // With the selected directory renamed away, dispatch refuses rather than falling back to the
+    // workspace root or answering from whatever else happens to be present.
+    fs::rename(&target, workspace.join("moved-aside")).unwrap();
+    let refused = server.exchange(
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_remote_list","arguments":{}}}}"#,
+    );
+    assert_eq!(refused["result"]["isError"], true);
+    assert_text(&refused, "project_execute refused");
+    assert!(
+        !response_text(&refused).contains("decoy.git"),
+        "{}",
+        response_text(&refused)
+    );
+
+    server.finish();
+}
+
 #[test]
 fn project_surface_selects_exact_child_repositories_within_a_workspace() {
     let workspace = temp_root("project_surface_workspace");

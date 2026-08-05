@@ -46,43 +46,81 @@ pub(crate) fn handle_tool_call(
     let result = match resolved {
         Err(message) => Err(message),
         Ok(ProjectCall::Describe { text, repository }) => {
-            selected_repository(repo_root, repository.as_deref()).map(|_| text)
+            effective_repository(repo_root, repository.as_deref()).map(|_| text)
         }
         Ok(ProjectCall::Execute {
             name,
             arguments,
             repository,
-        }) => match selected_repository(repo_root, repository.as_deref()) {
-            Err(message) => Err(message),
-            Ok(None) => execute_tool(repo_root, surface, &name, &arguments),
-            // The selection is bound for the whole call, so the descriptor that validated the directory
-            // stays open while the tool runs. Revalidating immediately before handing over the path is what
-            // closes the window between validating a selector and using it.
-            Ok(Some(selected)) => selected
-                .revalidate()
-                .map_err(|error| format!("project_execute refused: {error}"))
-                .and_then(|()| execute_tool(selected.path(), surface, &name, &arguments)),
-        },
+        }) => effective_repository(repo_root, repository.as_deref())
+            .and_then(|effective| execute_tool(effective, surface, &name, &arguments)),
     };
 
     bounded_tool_result_response(id, name, result)
 }
 
-/// Resolve a wrapper `repository` selector into a descriptor-anchored selection.
+/// The repository one call operates on.
 ///
-/// Returns `None` when no selector was supplied, in which case the configured root is used directly and
-/// there is nothing to anchor.
-fn selected_repository(
+/// Owning, because a selection holds the directory descriptor that anchors it and that descriptor has to
+/// stay open for as long as the call can still run. Only two accessors are exposed: the logical path, for
+/// messages and for tools not yet migrated, and the typed target, which carries the descriptor when there
+/// is one. Nothing here hands out an optional descriptor, so a caller cannot accidentally treat an
+/// anchored repository as a path-backed one, and nothing here reopens a selected root.
+pub(crate) enum EffectiveRepository {
+    /// No selector was supplied, so the configured root is the target.
+    Configured(std::path::PathBuf),
+    /// A validated workspace selection, holding its descriptor open.
+    #[cfg(unix)]
+    Selected(contextpatch_core::git::SelectedRepository),
+}
+
+impl EffectiveRepository {
+    /// The path for messages, receipts, and tools that still take one.
+    pub(crate) fn logical_path(&self) -> &Path {
+        match self {
+            Self::Configured(path) => path,
+            #[cfg(unix)]
+            Self::Selected(selected) => selected.path(),
+        }
+    }
+
+    /// The typed target for migrated Git policy, descriptor-backed when this is a selection.
+    pub(crate) fn git_repository(&self) -> contextpatch_core::git::GitRepository<'_> {
+        match self {
+            Self::Configured(path) => contextpatch_core::git::GitRepository::from_path(path),
+            #[cfg(unix)]
+            Self::Selected(selected) => selected.repository(),
+        }
+    }
+}
+
+/// Decide which repository a call targets, revalidating a selection before it is handed over.
+fn effective_repository(
     configured_root: &Path,
     repository: Option<&str>,
-) -> Result<Option<contextpatch_core::git::SelectedRepository>, String> {
-    match repository {
-        Some(repository) => {
-            contextpatch_core::git::select_workspace_repository(configured_root, repository)
-                .map(Some)
-                .map_err(|error| format!("project_execute refused: {error}"))
-        }
-        None => Ok(None),
+) -> Result<EffectiveRepository, String> {
+    let Some(repository) = repository else {
+        return Ok(EffectiveRepository::Configured(
+            configured_root.to_path_buf(),
+        ));
+    };
+
+    let selected = contextpatch_core::git::select_workspace_repository(configured_root, repository)
+        .map_err(|error| format!("project_execute refused: {error}"))?;
+    // Reproved immediately before use, so a directory replaced after validation is refused rather than
+    // operated on.
+    selected
+        .revalidate()
+        .map_err(|error| format!("project_execute refused: {error}"))?;
+
+    #[cfg(unix)]
+    {
+        Ok(EffectiveRepository::Selected(selected))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = selected;
+        Err("project_execute refused: repository selection requires descriptor-relative directory access, which is unavailable on this platform".to_string())
     }
 }
 
@@ -160,7 +198,7 @@ fn tool_result(text: String, is_error: bool) -> Value {
 }
 
 fn execute_tool(
-    repo_root: &Path,
+    repository: EffectiveRepository,
     surface: ToolSurface,
     name: &str,
     arguments: &serde_json::Map<String, Value>,
@@ -168,43 +206,51 @@ fn execute_tool(
     tools::schema::validate_internal_action_arguments(name, arguments)?;
     match deadline_for(name) {
         Some(limit) => {
-            let owned_root = repo_root.to_path_buf();
+            // The repository moves into the deadline thread, which is what keeps a selection's descriptor
+            // open for as long as the call can still be running.
             let owned_name = name.to_string();
             let owned_arguments = arguments.clone();
             contextpatch_core::process::deadline::with_deadline(name, limit, move || {
-                call_tool_with_mutation_lock(&owned_root, surface, &owned_name, &owned_arguments)
+                call_tool_with_mutation_lock(&repository, surface, &owned_name, &owned_arguments)
             })
             .into_result()
             .map_err(|error| format!("{name} refused: {error}"))
             .and_then(|result| result)
         }
-        None => call_tool_with_mutation_lock(repo_root, surface, name, arguments),
+        None => call_tool_with_mutation_lock(&repository, surface, name, arguments),
     }
 }
 
 fn call_tool_with_mutation_lock(
-    repo_root: &Path,
+    repository: &EffectiveRepository,
     surface: ToolSurface,
     name: &str,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let _mutation_lock = if serializes_repository_mutation(name) {
         Some(
-            contextpatch_core::fs::mutation_lock::try_repository_mutation_lock(repo_root)
-                .map_err(|error| format!("{name} refused: {error}"))?,
+            // Still keyed by path. Descriptor-anchored locking is deferred to the lock slice, so this
+            // takes the logical path rather than pretending to be anchored.
+            contextpatch_core::fs::mutation_lock::try_repository_mutation_lock(
+                repository.logical_path(),
+            )
+            .map_err(|error| format!("{name} refused: {error}"))?,
         )
     } else {
         None
     };
-    call_tool(repo_root, surface, name, arguments)
+    call_tool(repository, surface, name, arguments)
 }
 
 fn call_tool(
-    repo_root: &Path,
+    repository: &EffectiveRepository,
     surface: ToolSurface,
     name: &str,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
+    // Tools not yet migrated still take a path, and receive the logical path until each one moves to the
+    // typed target. That is what lets this proceed one tool at a time instead of all at once.
+    let repo_root = repository.logical_path();
     match name {
         tools::capability_manifest::NAME => {
             tools::capability::call_capability_manifest(repo_root, arguments, surface)
@@ -315,7 +361,9 @@ fn call_tool(
         tools::delete_generated_prefix::NAME => {
             tools::git::handlers::call_delete_generated_prefix(repo_root, arguments)
         }
-        tools::git_remote_list::NAME => tools::git::handlers::call_git_remote_list(repo_root),
+        tools::git_remote_list::NAME => {
+            tools::git::handlers::call_git_remote_list(repository.git_repository())
+        }
         tools::git_remote_check::NAME => {
             tools::git::handlers::call_git_remote_check(repo_root, arguments)
         }

@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
+use crate::git::repository::GitRepository;
 use crate::git::state;
 
 /// Remote assumed when a caller does not name one.
@@ -181,8 +182,10 @@ pub fn expected_head(raw: &str) -> Result<String, ContextPatchError> {
 }
 
 /// List configured remotes.
-pub fn list_remotes(root: &Path) -> Result<Vec<Remote>, ContextPatchError> {
-    let output = state::stdout(root, &["remote", "-v"])?;
+pub fn list_remotes<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<Vec<Remote>, ContextPatchError> {
+    let output = state::stdout(repository, &["remote", "-v"])?;
     let mut remotes = Vec::new();
     for line in output.lines().filter(|line| !line.trim().is_empty()) {
         let mut fields = line.split_whitespace();
