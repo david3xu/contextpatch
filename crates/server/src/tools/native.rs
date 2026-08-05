@@ -15,8 +15,8 @@ use serde_json::Value;
 use crate::tools;
 use crate::tools::common::{optional_bool, optional_string, optional_u64, required_string};
 
-pub(crate) fn call_native_build_run(
-    repo_root: &Path,
+pub(crate) fn call_native_build_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let action = required_string(arguments, "action")?;
@@ -26,7 +26,7 @@ pub(crate) fn call_native_build_run(
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
 
     let result = native_build_run(
-        repo_root,
+        repository_root,
         cwd.map(Path::new),
         action,
         params,
@@ -61,8 +61,8 @@ fn native_build_params(action: &str, value: Option<&Value>) -> Result<NativeBuil
     }
 }
 
-pub(crate) fn call_native_device_run(
-    repo_root: &Path,
+pub(crate) fn call_native_device_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let action = required_string(arguments, "action")?;
@@ -73,7 +73,7 @@ pub(crate) fn call_native_device_run(
     let confirm = optional_string(arguments, "confirm")?;
 
     let result = native_device_run(
-        repo_root,
+        repository_root,
         cwd.map(Path::new),
         action,
         params,

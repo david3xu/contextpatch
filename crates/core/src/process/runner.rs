@@ -721,34 +721,6 @@ fn normalized_relative_cwd(
     Ok(parts.join("/"))
 }
 
-pub(crate) fn resolve_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf, ContextPatchError> {
-    let cwd = match cwd {
-        Some(path) if path.is_absolute() => path.to_path_buf(),
-        Some(path) => root.join(path),
-        None => root.to_path_buf(),
-    };
-    let resolved = cwd.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve command cwd {}: {error}",
-            cwd.display()
-        ))
-    })?;
-    if !resolved.starts_with(root) {
-        return Err(ContextPatchError::new(format!(
-            "command cwd {} is outside repository root {}",
-            resolved.display(),
-            root.display()
-        )));
-    }
-    if !resolved.is_dir() {
-        return Err(ContextPatchError::new(format!(
-            "command cwd {} is not a directory",
-            resolved.display()
-        )));
-    }
-    Ok(resolved)
-}
-
 pub(crate) fn checked_timeout(timeout_secs: Option<u64>) -> Result<Duration, ContextPatchError> {
     checked_timeout_with_max(timeout_secs, MAX_TIMEOUT_SECS)
 }

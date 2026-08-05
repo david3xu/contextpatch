@@ -2,12 +2,15 @@ use std::path::{Path, PathBuf};
 
 use crate::error::ContextPatchError;
 use crate::process::runner::{
-    checked_timeout, display_command, resolve_cwd, run_no_shell_command,
+    checked_timeout, display_command, resolve_child_cwd, run_no_shell_command,
     validate_common_command_shape,
 };
 use crate::setup::profile::{validate_non_empty_single_line, validate_relative_path_param};
 
 pub const NATIVE_DEVICE_CONFIRMATION: &str = "run native device";
+
+/// The lockfile whose presence selects pnpm over npm.
+const PNPM_LOCKFILE: &str = "pnpm-lock.yaml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeDeviceParams {
@@ -114,8 +117,8 @@ pub struct NativeDeviceExecution {
     pub stderr: String,
 }
 
-pub fn native_device_run(
-    repo_root: &Path,
+pub fn native_device_run<'a>(
+    repository_root: impl Into<crate::git::RepositoryRoot<'a>>,
     cwd: Option<&Path>,
     action: &str,
     params: NativeDeviceParams,
@@ -123,15 +126,13 @@ pub fn native_device_run(
     dry_run: bool,
     confirm: Option<&str>,
 ) -> Result<NativeDeviceResult, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
-    let cwd = resolve_cwd(&root, cwd)?;
+    // Every program this surface runs comes from the tool path rather than from the repository, so nothing
+    // here needs a repository pathname: the working directory is a retained descriptor and the project
+    // inspection that picks a package manager goes through the root's own authority.
+    let root = repository_root.into();
+    let cwd = resolve_child_cwd(root, cwd)?;
     let timeout = checked_timeout(timeout_secs)?;
-    let plan = plan_native_device(&cwd, action, params)?;
+    let plan = plan_native_device(root, cwd.relative(), action, params)?;
 
     if !dry_run && plan.changes_device_state && confirm != Some(NATIVE_DEVICE_CONFIRMATION) {
         return Err(ContextPatchError::new(format!(
@@ -143,7 +144,7 @@ pub fn native_device_run(
         None
     } else {
         let output = run_no_shell_command(
-            &cwd,
+            cwd.command_cwd(),
             &plan.program,
             &plan.args,
             timeout,
@@ -170,7 +171,7 @@ pub fn native_device_run(
     Ok(NativeDeviceResult {
         action: action.to_string(),
         dry_run,
-        cwd,
+        cwd: cwd.logical_path().to_path_buf(),
         plan,
         execution,
         required_confirm_for_device_state: NATIVE_DEVICE_CONFIRMATION,
@@ -178,7 +179,8 @@ pub fn native_device_run(
 }
 
 fn plan_native_device(
-    cwd: &Path,
+    root: crate::git::RepositoryRoot<'_>,
+    cwd_relative: &str,
     action: &str,
     params: NativeDeviceParams,
 ) -> Result<NativeDevicePlan, ContextPatchError> {
@@ -255,7 +257,7 @@ fn plan_native_device(
                 return Err(required(action, "target"));
             };
             validate_device_id("target", &target)?;
-            let package_manager = detect_package_manager(cwd);
+            let package_manager = detect_package_manager(root, cwd_relative)?;
             let mut args = package_manager.cap_exec_args();
             args.extend([
                 "run".to_string(),
@@ -374,11 +376,23 @@ impl PackageManager {
     }
 }
 
-fn detect_package_manager(cwd: &Path) -> PackageManager {
-    if cwd.join("pnpm-lock.yaml").is_file() {
-        PackageManager::Pnpm
+/// Pick the package manager from the project's own lockfile, read through the repository's authority.
+///
+/// Named relative to the root rather than joined onto the working directory's path, so a lockfile decides the
+/// plan only when it is a regular file inside the repository that was selected.
+fn detect_package_manager(
+    root: crate::git::RepositoryRoot<'_>,
+    cwd_relative: &str,
+) -> Result<PackageManager, ContextPatchError> {
+    let lockfile = if cwd_relative.is_empty() {
+        PNPM_LOCKFILE.to_string()
     } else {
-        PackageManager::Npm
+        format!("{cwd_relative}/{PNPM_LOCKFILE}")
+    };
+    if crate::fs::rooted::is_regular_file(root, &lockfile)? {
+        Ok(PackageManager::Pnpm)
+    } else {
+        Ok(PackageManager::Npm)
     }
 }
 

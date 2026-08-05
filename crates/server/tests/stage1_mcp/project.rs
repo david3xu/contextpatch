@@ -2206,3 +2206,94 @@ fn project_dispatch_keeps_artifacts_with_the_selected_repository_identity() {
         "replacement artifact\n"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Native authority
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_refuses_gradle_for_a_selected_repository_and_anchors_the_rest() {
+    let workspace = temp_root("project_native_authority");
+    let target = setup_repo(
+        &workspace,
+        "target",
+        SetupLayout {
+            pnpm: true,
+            podfile: false,
+        },
+    );
+    setup_repo(
+        &workspace,
+        "decoy",
+        SetupLayout {
+            pnpm: false,
+            podfile: false,
+        },
+    );
+    // Present and executable, so the refusal is about authority rather than about a missing wrapper.
+    fs::write(target.join("gradlew"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // Running a program means naming it, and the Gradle wrapper is a repository file. A selection is
+    // refused at plan time and again at execute time, with the same message, so a caller cannot plan
+    // against a selection and then run the plan.
+    for arguments in [
+        r#"{"action":"android_assemble_debug","params":{},"dry_run":true,"timeout_secs":30}"#,
+        r#"{"action":"android_assemble_debug","params":{},"dry_run":false,"timeout_secs":30}"#,
+        r#"{"action":"android_unit_test","params":{},"dry_run":true,"timeout_secs":30}"#,
+    ] {
+        let response = server.exchange(&file_action("target", "native_build_run", arguments));
+        let text = response_text(&response).to_string();
+        assert_eq!(
+            response["result"]["isError"], true,
+            "Gradle must refuse a selected repository: {text}"
+        );
+        assert!(
+            text.contains("Gradle actions are unavailable for a selected repository"),
+            "{text}"
+        );
+        assert!(
+            text.contains("run this action against the configured repository root instead"),
+            "{text}"
+        );
+    }
+
+    // Xcode is unaffected: its program comes from the tool path, so only its arguments name repository
+    // contents and those stay relative.
+    let ios = server.exchange(&file_action(
+        "target",
+        "native_build_run",
+        r#"{"action":"ios_build","params":{"workspace":"ios/App/App.xcworkspace","scheme":"App"},"dry_run":true,"timeout_secs":30}"#,
+    ));
+    assert_ne!(
+        ios["result"]["isError"],
+        true,
+        "{}",
+        response_text(&ios)
+    );
+    assert_text(&ios, "xcodebuild");
+
+    // Device planning reads the selected repository's own lockfile, in both directions.
+    for (selected, expected, other) in [("target", "pnpm", "npm"), ("decoy", "npm", "pnpm")] {
+        let planned = server.exchange(&file_action(
+            selected,
+            "native_device_run",
+            r#"{"action":"ios_cap_run","params":{"target":"00000000-0000-0000-0000-000000000000"},"dry_run":true,"timeout_secs":30}"#,
+        ));
+        let text = response_text(&planned).to_string();
+        assert!(
+            text.contains(&format!("command: {expected} ")),
+            "the selected repository's lockfile chose the package manager: {text}"
+        );
+        assert!(
+            !text.contains(&format!("command: {other} ")),
+            "the sibling's layout must not decide the plan: {text}"
+        );
+    }
+
+    server.finish();
+    // Nothing ran: no Gradle build produced output in either repository.
+    assert!(!target.join("build").exists());
+    assert!(!workspace.join("decoy").join("build").exists());
+}

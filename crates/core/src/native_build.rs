@@ -2,11 +2,30 @@ use std::path::{Path, PathBuf};
 
 use crate::error::ContextPatchError;
 use crate::git::status::status_short;
+use crate::git::RepositoryRoot;
 use crate::process::runner::{
-    checked_timeout, display_command, resolve_cwd, run_no_shell_command,
+    checked_timeout, display_command, resolve_child_cwd, run_no_shell_command,
     validate_common_command_shape,
 };
 use crate::setup::profile::{validate_non_empty_single_line, validate_relative_path_param};
+
+/// The refusal a selected repository receives from the Gradle actions.
+///
+/// Executing a program means handing `exec` a pathname. Every other part of a native build can be anchored:
+/// the working directory is a retained descriptor, and the arguments are repository relative. The Gradle
+/// wrapper cannot, because it is a file *inside* the repository that has to be named to be run, and there is
+/// no descriptor form of a program argument. Naming it would mean resolving a path at exec time, so the
+/// executable the child runs could differ from the file that was verified.
+///
+/// The Xcode actions are unaffected: `xcodebuild` is resolved from the tool path rather than from the
+/// repository, so only its arguments refer to repository contents and those stay relative.
+///
+/// A configured root is unaffected too: it is reached by name already, and its pathname is the authority
+/// rather than a stand-in for one.
+pub const SELECTED_ROOT_GRADLE_REFUSAL: &str =
+    "native_build_run refused: Gradle actions are unavailable for a selected repository because the Gradle \
+     wrapper is a repository file that can only be run by naming it, which would substitute a pathname for \
+     the selected repository's authority; run this action against the configured repository root instead";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeBuildParams {
@@ -88,31 +107,33 @@ pub struct NativeBuildExecution {
     pub source_status_unchanged: bool,
 }
 
-pub fn native_build_run(
-    repo_root: &Path,
+pub fn native_build_run<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     cwd: Option<&Path>,
     action: &str,
     params: NativeBuildParams,
     timeout_secs: Option<u64>,
     dry_run: bool,
 ) -> Result<NativeBuildResult, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
-    let cwd = resolve_cwd(&root, cwd)?;
+    // Planning, the status snapshots that bracket the build, and the child's working directory all derive
+    // from one authority, so a build cannot be planned against one repository and run in another.
+    let root = repository_root.into();
+    let cwd = resolve_child_cwd(root, cwd)?;
     let timeout = checked_timeout(timeout_secs)?;
-    let plan = plan_native_build(&root, action, params)?;
+    let plan = plan_native_build(root, action, params)?;
 
     let execution = if dry_run {
         None
     } else {
-        let status_before = status_short(&root)?;
-        let output =
-            run_no_shell_command(&cwd, &plan.program, &plan.args, timeout, "native_build_run")?;
-        let status_after = status_short(&root)?;
+        let status_before = status_short(root)?;
+        let output = run_no_shell_command(
+            cwd.command_cwd(),
+            &plan.program,
+            &plan.args,
+            timeout,
+            "native_build_run",
+        )?;
+        let status_after = status_short(root)?;
         let source_status_unchanged = status_after == status_before;
         if !source_status_unchanged {
             return Err(ContextPatchError::new(format!(
@@ -146,14 +167,14 @@ pub fn native_build_run(
     Ok(NativeBuildResult {
         action: action.to_string(),
         dry_run,
-        cwd,
+        cwd: cwd.logical_path().to_path_buf(),
         plan,
         execution,
     })
 }
 
 fn plan_native_build(
-    root: &Path,
+    root: RepositoryRoot<'_>,
     action: &str,
     params: NativeBuildParams,
 ) -> Result<NativeBuildPlan, ContextPatchError> {
@@ -236,7 +257,7 @@ fn plan_ios(action: &str, params: NativeBuildParams) -> Result<NativeBuildPlan, 
 }
 
 fn plan_android(
-    root: &Path,
+    root: RepositoryRoot<'_>,
     action: &str,
     params: NativeBuildParams,
 ) -> Result<NativeBuildPlan, ContextPatchError> {
@@ -245,6 +266,9 @@ fn plan_android(
             "native_build_run refused: {action} requires Android params"
         )));
     };
+    // Gated here, during planning, so a selection is refused before any command is built or run and a caller
+    // cannot plan against a selection and then execute the plan.
+    ensure_gradle_root_is_addressable(root)?;
     let gradlew = gradlew.unwrap_or_else(|| "gradlew".to_string());
     validate_relative_path_param("native_build_run", "gradlew", &gradlew)?;
     if !gradlew.ends_with("gradlew") {
@@ -261,7 +285,7 @@ fn plan_android(
     .to_string()];
     Ok(NativeBuildPlan {
         action: action.to_string(),
-        program: executable.display().to_string(),
+        program: executable,
         display_program: format!("./{gradlew}"),
         args,
         repo_validation: true,
@@ -269,22 +293,45 @@ fn plan_android(
     })
 }
 
-fn resolve_repo_relative_executable(
-    root: &Path,
-    relative: &str,
-) -> Result<PathBuf, ContextPatchError> {
-    let candidate = root.join(relative);
-    let resolved = candidate.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "native_build_run refused: failed to resolve executable {relative}: {error}"
-        ))
-    })?;
-    if !resolved.starts_with(root) || !resolved.is_file() {
-        return Err(ContextPatchError::new(
-            "native_build_run refused: executable must be a file inside the repository",
-        ));
+/// Refuse a Gradle action that cannot name its wrapper without substituting a path for authority.
+///
+/// Applied during planning, which is also what a dry run performs, so the refusal is identical whether a
+/// caller plans or executes.
+pub fn ensure_gradle_root_is_addressable(
+    repo_root: RepositoryRoot<'_>,
+) -> Result<(), ContextPatchError> {
+    if repo_root.is_anchored() {
+        return Err(ContextPatchError::new(SELECTED_ROOT_GRADLE_REFUSAL));
     }
-    Ok(resolved)
+    Ok(())
+}
+
+/// Confirm one repository-relative executable and render the pathname `exec` will be given.
+///
+/// The file is confirmed through the root's own authority, so a symlink at any component is refused rather
+/// than followed and the check cannot leave the repository. Only after that is a pathname composed, and only
+/// because a program argument has no descriptor form. A selected root never reaches this point.
+fn resolve_repo_relative_executable(
+    root: RepositoryRoot<'_>,
+    relative: &str,
+) -> Result<String, ContextPatchError> {
+    let inspected = crate::fs::guarded_file::inspect_path_in_root(root, Path::new(relative))
+        .map_err(|error| {
+            ContextPatchError::new(format!(
+                "native_build_run refused: failed to resolve executable {relative}: {error}"
+            ))
+        })?;
+    let executable = inspected
+        .filter(|inspection| {
+            inspection.kind == crate::fs::guarded_file::GuardedPathKind::RegularFile
+        })
+        .ok_or_else(|| {
+            ContextPatchError::new(
+                "native_build_run refused: executable must be a file inside the repository",
+            )
+        })?;
+    let _ = executable;
+    Ok(root.logical_path().join(relative).display().to_string())
 }
 
 fn validate_xcode_value(field: &str, value: &str) -> Result<(), ContextPatchError> {
