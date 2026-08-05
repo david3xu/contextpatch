@@ -417,7 +417,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::bulk_replace_exact::NAME,
-                    "description": "Validate every exact replacement before the first write, then apply per-file atomic replacements in order. Validation refusals leave all files unchanged; interruption or apply failure can leave a prefix applied, recoverable through per-file receipts.",
+                    "description": "Validate every exact replacement before the first write, then apply one atomic write per file. Several entries may target the same file; those hunks resolve against a single snapshot of it and land in its single write. Validation refusals leave all files unchanged; interruption or apply failure can leave a prefix of files applied, recoverable through per-file receipts.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -425,7 +425,7 @@ pub(crate) fn definitions() -> Vec<Value> {
                                 "type": "array",
                                 "minItems": 1,
                                 "maxItems": contextpatch_core::replace::exact::MAX_BULK_REPLACE_ENTRIES,
-                                "description": "Ordered replacements. Paths that resolve to the same filesystem file, including hard-link and case aliases, are refused as duplicates.",
+                                "description": "Replacements to validate together. Repeating one path adds another hunk to that file; two different paths that resolve to the same filesystem file, including hard-link and case aliases, are refused. Hunks in one file must not resolve to the same or intersecting byte ranges, and must not demand different expected_sha256 values.",
                                 "items": {
                                     "type": "object",
                                     "properties": {

@@ -42,16 +42,18 @@ fn stage2_bulk_replace_exact_validates_before_writing_and_applies_per_file() {
         "delta delta\n"
     );
 
-    let duplicated = run_server(
+    let overlapping = run_server(
         &root,
         &[
-            // A duplicate path is refused rather than applied twice against shifting content.
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"beta","new":"BETA"},{"path":"one.txt","old":"gamma","new":"GAMMA"}]}}}"#,
+            // Two hunks may now target one file, but not when they claim the same bytes. Overlap is
+            // refused during validation, before anything is written.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"alpha beta","new":"AB"},{"path":"one.txt","old":"beta gamma","new":"BG"}]}}}"#,
         ],
     );
-    let duplicate = response_text(&duplicated[0]);
-    assert_eq!(duplicated[0]["result"]["isError"], true);
-    assert!(duplicate.contains("duplicate target path"), "{duplicate}");
+    let overlap = response_text(&overlapping[0]);
+    assert_eq!(overlapping[0]["result"]["isError"], true);
+    assert!(overlap.contains("overlaps entry 0"), "{overlap}");
+    assert!(overlap.contains("no file was changed"), "{overlap}");
     assert_eq!(
         fs::read_to_string(root.join("one.txt")).unwrap(),
         "alpha beta gamma\n"
@@ -91,6 +93,118 @@ fn stage2_bulk_replace_exact_validates_before_writing_and_applies_per_file() {
             .count()
             >= 2,
         "each file in a batch needs its own receipt: {journal}"
+    );
+}
+
+#[test]
+fn stage2_bulk_replace_exact_applies_multiple_hunks_to_one_file_in_one_write() {
+    // Several hunks in one file is the common real edit shape. They must resolve against one snapshot,
+    // land in a single atomic write, and still report one result per submitted entry.
+    let root = git_repo("stage2_bulk_replace_exact_multi_hunk");
+    fs::write(root.join("one.txt"), "alpha beta gamma\n").unwrap();
+    fs::write(root.join("two.txt"), "delta\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let applied = run_server(
+        &root,
+        &[
+            // Deliberately interleaved and out of positional order, to show the result does not
+            // depend on submission order.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"gamma","new":"GAMMA"},{"path":"two.txt","old":"delta","new":"DELTA"},{"path":"one.txt","old":"alpha","new":"ALPHA"}]}}}"#,
+        ],
+    );
+    let response: Value = serde_json::from_str(response_text(&applied[0])).unwrap();
+
+    assert_eq!(response["applied"], 3, "one result per entry: {response}");
+    assert_eq!(response["files"], 2, "one write per file: {response}");
+    assert_eq!(response["atomicity"], "per_file");
+
+    // Results are returned in submission order even though plans are grouped and sorted by path.
+    let entries = response["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["entry"], 0);
+    assert_eq!(entries[0]["path"], "one.txt");
+    assert_eq!(entries[1]["entry"], 1);
+    assert_eq!(entries[1]["path"], "two.txt");
+    assert_eq!(entries[2]["entry"], 2);
+    assert_eq!(entries[2]["path"], "one.txt");
+
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "ALPHA beta GAMMA\n"
+    );
+    assert_eq!(fs::read_to_string(root.join("two.txt")).unwrap(), "DELTA\n");
+
+    // Two files were written, so there are two receipts rather than three.
+    let receipts = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_write_receipts","arguments":{"limit":10}}}"#,
+        ],
+    );
+    let journal: Value = serde_json::from_str(response_text(&receipts[0])).unwrap();
+    assert_eq!(
+        journal["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["tool"] == "bulk_replace_exact")
+            .count(),
+        2,
+        "one receipt per written file: {journal}"
+    );
+}
+
+#[test]
+fn stage2_bulk_replace_exact_refuses_contradictory_hunks_for_one_file() {
+    // Two hunks that resolve to the same bytes are a duplicate entry, and two different expected
+    // digests for one file are a contradiction. Both are refusals, not merges.
+    let root = git_repo("stage2_bulk_replace_exact_contradictory_hunks");
+    fs::write(root.join("one.txt"), "alpha beta gamma\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let duplicated = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"beta","new":"BETA"},{"path":"one.txt","old":"beta","new":"OTHER"}]}}}"#,
+        ],
+    );
+    let duplicate = response_text(&duplicated[0]);
+    assert_eq!(duplicated[0]["result"]["isError"], true);
+    assert!(duplicate.contains("duplicates entry 0"), "{duplicate}");
+    assert!(duplicate.contains("no file was changed"), "{duplicate}");
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha beta gamma\n"
+    );
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"alpha beta gamma\n");
+    let current = format!("{:x}", hasher.finalize());
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "bulk_replace_exact",
+            "arguments": {
+                "entries": [
+                    {"path": "one.txt", "old": "alpha", "new": "ALPHA", "expected_sha256": current},
+                    {"path": "one.txt", "old": "gamma", "new": "GAMMA", "expected_sha256": "0".repeat(64)}
+                ]
+            }
+        }
+    })
+    .to_string();
+
+    let conflicting = run_server(&root, &[request.as_str()]);
+    let conflict = response_text(&conflicting[0]);
+    assert_eq!(conflicting[0]["result"]["isError"], true);
+    assert!(conflict.contains("conflicts with"), "{conflict}");
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha beta gamma\n"
     );
 }
 

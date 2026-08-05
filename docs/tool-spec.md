@@ -13,7 +13,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `read_write_receipts` | No | Bounded recent receipt query under the repository-specific scratch root |
 | `diff_preview` | No | Proposed edit input |
 | `replace_exact` | Yes | Old text must match exactly once; optional complete-file SHA-256 guard |
-| `bulk_replace_exact` | Yes | Validates the full batch before writing; per-file atomic apply may leave a prefix after interruption or apply failure |
+| `bulk_replace_exact` | Yes | Validates the full batch before writing; several hunks may target one file and land in its single atomic write; per-file apply may leave a prefix after interruption or apply failure |
 | `move_tracked` | Yes | Clean tracked regular source, absent destination, clean index, dry-run and confirmation |
 | `status_guard` | No | Repository status inspection |
 | `write_new_file` | Yes | Destination must not exist |
@@ -299,7 +299,9 @@ Rules:
 
 ### `bulk_replace_exact`
 
-Validates many exact replacements together, then applies them in order with per-file atomic writes.
+Validates many exact replacements together, then applies them with one atomic write per file. Several
+entries may target the same file; those are hunks, resolved against a single snapshot of that file and
+carried by its single write.
 
 Exists because a single logical change often spans several files. Registering one tool in this
 repository touches six: name, handler, dispatch arm, schema, module export, capability entry. Six
@@ -309,31 +311,52 @@ leaves a half-wired change that still compiles.
 Required inputs:
 
 - `entries`, a non-empty array of `{ path, old, new }` objects, each optionally carrying
-  `expected_sha256`
+  `expected_sha256`. More than one entry may name the same path; each such entry is one hunk within
+  that file.
 
 Rules:
 
-- Refuse if `entries` is empty or exceeds 64 entries. The ceiling is deliberately lower than the bulk
-  import limit: a batch of edits is one logical change, and a caller sending hundreds has more likely
-  built the list by mistake than by intent.
-- Refuse if two paths identify the same filesystem file, including case aliases and hard links. The
-  second replacement would otherwise be planned against content the first already changed, so the
-  result would depend on an ordering the caller never specified.
-- Validate every entry, and compute its resulting content, before writing anything. Each entry is subject
-  to the same rules as `replace_exact`, including the exactly-once match requirement and the optional
-  complete-file digest guard.
+- Refuse if `entries` is empty or exceeds 64 entries. The ceiling counts entries rather than files, and
+  is deliberately lower than the bulk import limit: a batch of edits is one logical change, and a caller
+  sending hundreds has more likely built the list by mistake than by intent.
+- Group entries by normalized path. Resolve every hunk for one file against a single captured snapshot
+  of that file, never against text an earlier hunk already rewrote, so a hunk's validity never depends
+  on the order its siblings would have been applied in.
+- Refuse if two *different* paths identify the same filesystem file, including case aliases and hard
+  links. Grouping is by path, so an alias would otherwise produce two independent snapshots of the same
+  bytes and the second write would silently discard the first. Repeating one path is a hunk; spelling
+  one file two ways is an error.
+- Refuse two hunks in one file that resolve to the same byte range. That is a duplicate entry rather
+  than two edits, and applying either silently would discard the other.
+- Refuse two hunks in one file whose byte ranges intersect. Both entries claim the same bytes, so no
+  ordering satisfies them.
+- Refuse two entries for one file that carry different `expected_sha256` values. One file cannot have
+  two current digests, and letting whichever entry is checked first decide would make the guard depend
+  on submission order.
+- Validate every entry, and compute each file's resulting content, before writing anything. Each entry
+  is subject to the same rules as `replace_exact`, including the exactly-once match requirement and the
+  optional complete-file digest guard.
 - If any entry fails validation, refuse before the first write and leave every target unchanged. The
-  refusal names the offending entry.
+  refusal names the offending entry by its position in the caller's list, not its position after
+  grouping.
+- Order plans by normalized path, so grouping, lock acquisition, and refusal reporting stay
+  deterministic regardless of the order entries were submitted in.
+- Apply every hunk for one file in that file's single atomic write, so no file is observed partially
+  edited.
+- Return one result per submitted entry, in submission order, each naming its entry index and the byte
+  range that entry resolved to, together with the number of files written. `bytes_written` is the size
+  of the single write that carried every hunk for that file.
 - Before applying each plan, re-read the target under its mutation lock and compare the exact bytes
   captured during validation. Refuse that entry if the file changed, even when no caller-supplied
   `expected_sha256` was provided.
 - Bind every plan to the canonical repository root used during validation. Refuse applying it under a
   different root even when that root contains a hard link to the same target inode.
 - Each file replacement is atomic, but the batch is not a cross-file transaction and is not rolled
-  back. An interruption or apply-phase failure can leave an applied prefix, and the current entry's
-  outcome can be unknown if receipt settlement or transport fails.
-- Journal every apply attempt separately. After an interrupted or failed apply phase, inspect
-  `read_write_receipts` and current file state before retrying.
+  back. An interruption or apply-phase failure can leave an applied prefix of files, and the current
+  file's outcome can be unknown if receipt settlement or transport fails.
+- Journal one apply attempt per file. Entries that share a file share its receipt, because they share
+  its write. After an interrupted or failed apply phase, inspect `read_write_receipts` and current file
+  state before retrying.
 - Reserve receipt-journal capacity for the bounded batch before the first write and suppress rotation
   between entries, so a later interrupted receipt cannot evict the settled prefix.
 - File locks use filesystem identity in one user-wide ContextPatch lock namespace, so hard-link,

@@ -104,13 +104,22 @@ through a directory descriptor, so a privileged external process that renames th
 the final identity check remains outside the cooperative-writer guarantee. Callers must use current
 hash/state checks when unrelated external programs may mutate the same tree.
 
-For `bulk_replace_exact`, validation is batch-wide but application is deliberately per-file. A
-validation refusal occurs before the first write and leaves all targets unchanged. Apply compares each
+For `bulk_replace_exact`, validation is batch-wide but application is deliberately per-file. Entries are
+grouped by normalized path, and every hunk for one file is resolved against a single captured snapshot of
+that file rather than against text an earlier hunk already rewrote, so a hunk's validity never depends on
+the order its siblings would have been applied in. Hunks that resolve to the same byte range, hunks whose
+ranges intersect, and entries demanding different digests for one file are all refused during validation.
+Two different paths that resolve to one file remain refused, because grouping is by path and an alias
+would otherwise yield two snapshots of the same bytes whose second write discards the first.
+
+A validation refusal occurs before the first write and leaves all targets unchanged. Apply compares each
 target's exact captured bytes while holding its mutation lock, verifies that the plan is being applied
 under the same canonical repository root where it was created, then uses the normal atomic replacement
-path. A hard link in another repository therefore cannot reuse a validated plan. There is no cross-file
+path, so every hunk for a file lands in one write and no file is observed partially edited. Permission
+bits are preserved by that path, so editing an executable file does not silently clear its execute bit.
+A hard link in another repository therefore cannot reuse a validated plan. There is no cross-file
 transaction or rollback: an apply failure, process interruption, or reply timeout can leave an applied
-prefix, and recovery must use per-file receipts plus current file state.
+prefix of files, and recovery must use per-file receipts plus current file state.
 
 ## Reply deadlines and mutation receipts
 

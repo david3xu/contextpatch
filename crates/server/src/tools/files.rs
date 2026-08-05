@@ -989,51 +989,62 @@ pub(crate) fn call_bulk_replace_exact(
         format!("{tool_name} refused during validation: {error}; no file was changed")
     })?;
 
-    let receipt_paths = parsed
+    // One receipt per file, matching the one atomic write per file that follows. Entries that share a
+    // file share its receipt, because they share its write.
+    let receipt_paths = planned
         .iter()
-        .map(|entry| entry.path.clone())
+        .map(|plan| plan.relative_path().to_string_lossy().to_string())
         .collect::<Vec<_>>();
     let mut receipt_batch =
         crate::tools::journal::begin_file_batch(repo_root, tool_name, &receipt_paths).map_err(
             |error| format!("{error}; receipt capacity was not reserved, so no file was changed"),
         )?;
 
-    let mut applied = Vec::with_capacity(planned.len());
-    for (index, (entry, plan)) in parsed.iter().zip(&planned).enumerate() {
+    let mut applied: Vec<Value> = Vec::with_capacity(parsed.len());
+    for (index, plan) in planned.iter().enumerate() {
+        let path = plan.relative_path().to_string_lossy().to_string();
         let result = crate::tools::journal::recorded_in_batch(
             &mut receipt_batch,
             repo_root,
             tool_name,
-            &entry.path,
+            &path,
             || {
                 contextpatch_core::replace::exact::apply_planned_replacement(repo_root, plan)
-                    .map_err(|error| format!("{tool_name} refused for `{}`: {error}", entry.path))
+                    .map_err(|error| format!("{tool_name} refused for `{path}`: {error}"))
             },
         );
         let summary = match result {
             Ok(summary) => summary,
             Err(error) => {
                 return Err(format!(
-                    "{tool_name} apply phase stopped at entry {index} (`{}`) after {} confirmed \
-                     entries: {error}. The batch is not rolled back; an applied prefix may remain \
-                     and the current entry's outcome may be unknown. Inspect read_write_receipts \
+                    "{tool_name} apply phase stopped at file {index} (`{path}`) after {} confirmed \
+                     files: {error}. The batch is not rolled back; an applied prefix may remain \
+                     and the current file's outcome may be unknown. Inspect read_write_receipts \
                      and file_info before retrying",
-                    entry.path,
-                    applied.len()
+                    index
                 ));
             }
         };
-        applied.push(json!({
-            "path": entry.path,
-            "start_byte": summary.start_byte,
-            "end_byte": summary.end_byte,
-            "bytes_written": summary.bytes_written
-        }));
+        // One result per submitted entry, so a caller always learns where its own anchor landed.
+        // `bytes_written` is the size of the single write that carried every hunk for this file.
+        for hunk in &summary.hunks {
+            applied.push(json!({
+                "entry": hunk.entry_index,
+                "path": path,
+                "start_byte": hunk.start_byte,
+                "end_byte": hunk.end_byte,
+                "bytes_written": summary.bytes_written
+            }));
+        }
     }
+
+    // Restore submission order, because plans are grouped and sorted by path.
+    applied.sort_by_key(|entry| entry.get("entry").and_then(Value::as_u64).unwrap_or_default());
 
     serde_json::to_string_pretty(&json!({
         "tool": tool_name,
         "applied": applied.len(),
+        "files": planned.len(),
         "atomicity": "per_file",
         "entries": applied
     }))
