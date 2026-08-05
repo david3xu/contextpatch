@@ -108,8 +108,8 @@ impl BackgroundJobOutcome {
     }
 }
 
-pub(crate) fn call_run_guarded_command(
-    repo_root: &Path,
+pub(crate) fn call_run_guarded_command<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let program = required_string(arguments, "program")?;
@@ -124,7 +124,13 @@ pub(crate) fn call_run_guarded_command(
                 .to_string(),
         );
     }
-    let output = run_guarded_command(repo_root, cwd.map(Path::new), program, &args, timeout_secs)
+    let output = run_guarded_command(
+        repository_root.into(),
+        cwd.map(Path::new),
+        program,
+        &args,
+        timeout_secs,
+    )
         .map_err(|error| format!("run_guarded_command refused: {error}"))?;
     let log_id = write_command_log(&output)
         .map_err(|error| format!("run_guarded_command log write failed: {error}"))?;

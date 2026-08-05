@@ -157,8 +157,8 @@ fn validate_occurrences(arg: &str) -> Result<(), ContextPatchError> {
 /// the subprocess is about to write there, and a missing parent directory is the most common way that
 /// fails. Substitution is whole-token and textual, so an argument may embed the token mid-string
 /// (`--output-dir={scratch}/run-1`) as callers naturally write it.
-pub fn expand_scratch_tokens(
-    repo_root: &Path,
+pub fn expand_scratch_tokens<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     args: &[String],
 ) -> Result<Vec<String>, ContextPatchError> {
     if !references_scratch(args) {

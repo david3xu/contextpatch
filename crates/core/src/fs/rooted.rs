@@ -349,6 +349,32 @@ pub fn read_dir(
     }
 }
 
+/// Open one directory beneath the root, reached through the root's authority.
+///
+/// Returned as an owned descriptor so a caller can hold it past the borrow of the authority — a child
+/// process working directory, for instance, which must stay valid until the child has been spawned.
+pub fn open_directory(
+    root: RepositoryRoot<'_>,
+    relative: &str,
+) -> Result<std::fs::File, ContextPatchError> {
+    #[cfg(unix)]
+    {
+        let handle = root_handle(root)?;
+        if relative.is_empty() || relative == "." {
+            return handle.as_file().try_clone().map_err(|error| {
+                ContextPatchError::new(format!("failed to retain repository root: {error}"))
+            });
+        }
+        open_directory_at(handle.as_file(), relative)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative);
+        Err(unsupported_rooted_filesystem())
+    }
+}
+
 /// Whether one directory holds no entries.
 pub fn directory_is_empty(
     root: RepositoryRoot<'_>,
@@ -448,6 +474,35 @@ fn open_parent(directory: &File, relative: &str) -> Result<Option<File>, Context
         current = unsafe { File::from_raw_fd(opened) };
     }
     Ok(Some(current))
+}
+
+/// Open the directory named by a full relative path, walking from a root descriptor.
+///
+/// Unlike `open_parent`, the leaf is opened too, and every component including the leaf is refused if it is
+/// a symlink.
+#[cfg(unix)]
+fn open_directory_at(root_directory: &File, relative: &str) -> Result<File, ContextPatchError> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let parent = open_parent(root_directory, relative)?.ok_or_else(|| {
+        ContextPatchError::new(format!(
+            "failed to resolve directory `{relative}`: missing directory"
+        ))
+    })?;
+    let leaf = leaf_name(relative)?;
+    let opened = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if opened < 0 {
+        let error = std::io::Error::last_os_error();
+        let walked = Path::new(relative).to_path_buf();
+        return Err(component_failure(&parent, &leaf, relative, &walked, error));
+    }
+    Ok(unsafe { File::from_raw_fd(opened) })
 }
 
 /// Explain why one descriptor-relative open failed, without leaving the parent descriptor.

@@ -2,43 +2,50 @@ use std::path::Path;
 
 use crate::error::ContextPatchError;
 use crate::process::runner::{
-    checked_timeout_with_max, display_command, resolve_cwd, resolve_program, run_no_shell_command,
-    validate_common_command_shape,
+    checked_timeout_with_max, display_command, resolve_child_cwd, resolve_program,
+    run_bounded_command, validate_common_command_shape,
 };
 
 const DEFAULT_MAX_TIMEOUT_SECS: u64 = 600;
 const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
 
-pub fn run_guarded_command(
-    repo_root: &Path,
+/// Run one allowlisted command inside the repository, through the repository's own authority.
+///
+/// The working directory is opened relative to the root descriptor and held open until the child has been
+/// spawned, so the directory the child changes into is the directory that was checked. Scratch token
+/// expansion still resolves to a path, because a child process receives argv strings and there is no
+/// descriptor to hand it; that path is derived from repository identity rather than from the root's name.
+pub fn run_guarded_command<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     cwd: Option<&Path>,
     program: &str,
     args: &[String],
     timeout_secs: Option<u64>,
 ) -> Result<String, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
-    let cwd = resolve_cwd(&root, cwd)?;
+    let root = repo_root.into();
+    let cwd = resolve_child_cwd(root, cwd)?;
 
     validate_command(program, args)?;
     let timeout = checked_command_timeout(program, args, timeout_secs)?;
-    let expanded_args = crate::fs::scratch::expand_scratch_tokens(&root, args)?;
-    let output = run_no_shell_command(&cwd, program, &expanded_args, timeout, "guarded command")?;
+    let expanded_args = crate::fs::scratch::expand_scratch_tokens(root, args)?;
+    let output = run_bounded_command(
+        cwd.command_cwd(),
+        program,
+        &expanded_args,
+        timeout,
+        "guarded command",
+    )?;
 
     Ok(format!(
         "command: {}\ncwd: {}\nallowlist: {}\nexit_code: {}\ntimed_out: {}\nduration_ms: {}\nstdout:\n{}\nstderr:\n{}",
         display_command(program, &expanded_args),
-        output.cwd.display(),
+        cwd.logical_path().display(),
         allowlist_label(program, args),
         output.exit_code,
         output.timed_out,
         output.duration_ms,
-        output.stdout,
-        output.stderr
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     ))
 }
 

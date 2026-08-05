@@ -20,7 +20,6 @@ const STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const STREAM_CANCEL_DRAIN_LIMIT: Duration = Duration::from_millis(100);
 
 pub(crate) struct ProcessOutput {
-    pub(crate) cwd: PathBuf,
     pub(crate) exit_code: i32,
     pub(crate) timed_out: bool,
     pub(crate) duration_ms: u128,
@@ -59,7 +58,6 @@ pub(crate) fn run_no_shell_command(
 ) -> Result<ProcessOutput, ContextPatchError> {
     let output = run_bounded_command(cwd, program, args, timeout, operation_label)?;
     Ok(ProcessOutput {
-        cwd: output.cwd,
         exit_code: output.exit_code,
         timed_out: output.timed_out,
         duration_ms: output.duration_ms,
@@ -599,6 +597,113 @@ fn configured_tool_paths() -> Vec<PathBuf> {
         paths.extend(std::env::split_paths(&path));
     }
     paths
+}
+
+/// A child process working directory, held open until the child has been spawned.
+///
+/// Owning the descriptor is the point. A resolved *path* can be replaced between the check that it lies
+/// inside the repository and the moment the child changes into it; a descriptor cannot.
+pub(crate) struct ChildCwd {
+    #[cfg(unix)]
+    directory: std::fs::File,
+    logical_path: PathBuf,
+}
+
+impl ChildCwd {
+    /// The working directory to hand the runner.
+    pub(crate) fn command_cwd(&self) -> CommandCwd<'_> {
+        #[cfg(unix)]
+        {
+            CommandCwd::Anchored {
+                directory: &self.directory,
+                logical_path: &self.logical_path,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            CommandCwd::Path(&self.logical_path)
+        }
+    }
+
+    /// The name to report, never used to reach the directory.
+    pub(crate) fn logical_path(&self) -> &Path {
+        &self.logical_path
+    }
+}
+
+/// Resolve a caller-named working directory through the repository's own authority.
+///
+/// The directory is opened relative to the root descriptor with no-follow at every component, so it cannot
+/// escape the repository and cannot be substituted before the child starts. An absolute argument is
+/// accepted, as it always has been, by reducing it against the root's label first; the reduction decides
+/// only which components to walk, never how to reach them.
+pub(crate) fn resolve_child_cwd(
+    root: crate::git::RepositoryRoot<'_>,
+    cwd: Option<&Path>,
+) -> Result<ChildCwd, ContextPatchError> {
+    let label = crate::fs::rooted::canonical_label(root)?;
+    let relative = match cwd {
+        None => String::new(),
+        Some(path) if path.as_os_str().is_empty() => String::new(),
+        Some(path) if path.is_absolute() => {
+            let reduced = path.strip_prefix(&label).map_err(|_| {
+                ContextPatchError::new(format!(
+                    "command cwd {} is outside repository root {}",
+                    path.display(),
+                    label.display()
+                ))
+            })?;
+            normalized_relative_cwd(reduced, path, &label)?
+        }
+        Some(path) => normalized_relative_cwd(path, path, &label)?,
+    };
+
+    #[cfg(unix)]
+    {
+        let directory = crate::fs::rooted::open_directory(root, &relative)?;
+        let logical_path = if relative.is_empty() {
+            label
+        } else {
+            label.join(&relative)
+        };
+        Ok(ChildCwd {
+            directory,
+            logical_path,
+        })
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = relative;
+        Err(ContextPatchError::new(
+            "guarded command working directories require descriptor-relative operations",
+        ))
+    }
+}
+
+/// Reduce a caller-named working directory to normal components, refusing anything that could escape.
+fn normalized_relative_cwd(
+    candidate: &Path,
+    reported: &Path,
+    root: &Path,
+) -> Result<String, ContextPatchError> {
+    let mut parts = Vec::new();
+    for component in candidate.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                parts.push(part.to_string_lossy().to_string());
+            }
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(ContextPatchError::new(format!(
+                    "command cwd {} is outside repository root {}",
+                    reported.display(),
+                    root.display()
+                )));
+            }
+        }
+    }
+    Ok(parts.join("/"))
 }
 
 pub(crate) fn resolve_cwd(root: &Path, cwd: Option<&Path>) -> Result<PathBuf, ContextPatchError> {

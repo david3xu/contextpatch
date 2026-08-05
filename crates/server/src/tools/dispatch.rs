@@ -313,7 +313,7 @@ fn call_tool(
             tools::files::call_create_directory(repository.root(), arguments)
         }
         tools::run_guarded_command::NAME => {
-            tools::process::call_run_guarded_command(repo_root, arguments)
+            tools::process::call_run_guarded_command(repository.root(), arguments)
         }
         tools::fixture_generator_run::NAME => {
             tools::fixtures::call_fixture_generator_run(repo_root, arguments)
