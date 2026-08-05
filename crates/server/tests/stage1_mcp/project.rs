@@ -2398,3 +2398,133 @@ fn project_dispatch_describes_and_targets_only_the_selected_repository() {
     assert!(decoy.join("decoy-dirty.txt").is_file());
     assert!(!decoy.join("gradlew").exists());
 }
+
+// ---------------------------------------------------------------------------
+// Asynchronous process authority
+// ---------------------------------------------------------------------------
+
+const HARBOR_PROJECT: &str = "task";
+const HARBOR_STARTED_MARKER: &str = "harbor-started";
+const HARBOR_RELEASE_MARKER: &str = "harbor-release";
+const HARBOR_RESULT: &str = "jobs/fake-job/result.json";
+const HARBOR_REWARD: &str = "jobs/fake-job/task__trial/verifier/reward.txt";
+
+/// A fake Harbor that announces it has started, waits to be released, then writes job evidence.
+///
+/// The two markers hand the run's timing to the test, so it never waits a fixed duration for work it cannot
+/// observe. Every path the script touches is relative, which makes the directory the child was anchored to
+/// directly observable afterwards.
+fn fake_harbor(bin: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let harbor = bin.join("harbor");
+    fs::write(
+        &harbor,
+        r#"#!/bin/sh
+set -eu
+: > harbor-started
+while [ ! -f harbor-release ]; do
+  sleep 0.05
+done
+mkdir -p jobs/fake-job/task__trial/verifier
+printf '%s\n' '{"stats":{"evals":{"task":{"reward_stats":{"reward":{"1.0":["task__trial"]}}}}}}' > jobs/fake-job/result.json
+printf '%s\n' '{"agent_info":{"name":"oracle"},"started_at":"2026-01-01T00:00:00Z","finished_at":"2026-01-01T00:00:01Z","exception_info":null}' > jobs/fake-job/task__trial/result.json
+printf '%s\n' '1.0' > jobs/fake-job/task__trial/verifier/reward.txt
+printf '%s\n' 'Results written to jobs/fake-job/result.json'
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&harbor).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&harbor, permissions).unwrap();
+}
+
+/// Wait for a state the running job is expected to reach.
+///
+/// A bounded condition wait rather than a fixed delay: it returns as soon as the state exists, and panics
+/// rather than continuing if the job never reaches it.
+fn await_condition(label: &str, mut reached: impl FnMut() -> bool) {
+    for _ in 0..600 {
+        if reached() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("{label} was never reached");
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_keeps_harbor_authority_across_a_rename_and_a_replacement() {
+    let workspace = temp_root("project_harbor_authority");
+    let target = file_repo(&workspace, "target");
+    fs::create_dir_all(target.join(HARBOR_PROJECT)).unwrap();
+    let bin = temp_root("project_harbor_authority_bin");
+    fake_harbor(&bin);
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let envs = [
+        (
+            "CONTEXTPATCH_VALIDATION_PATHS",
+            bin.to_str().unwrap().to_string(),
+        ),
+        ("PATH", format!("{}:{original_path}", bin.display())),
+    ];
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &envs);
+
+    let started = server.exchange(&file_action(
+        "target",
+        "harbor_run_start",
+        &format!(r#"{{"project":"{HARBOR_PROJECT}","agent":"oracle","timeout_secs":120}}"#),
+    ));
+    assert_text(&started, "\"status\": \"running\"");
+    let log_id = started_log_id(&started);
+
+    // The job is running in the selected repository. Wait for it to say so rather than assuming.
+    await_condition("harbor start", || {
+        target.join(HARBOR_STARTED_MARKER).is_file()
+    });
+
+    // Move the repository aside and give its old name to a different worktree. The worker holds a
+    // descriptor, so neither of these can redirect it.
+    let moved = workspace.join("moved");
+    fs::rename(&target, &moved).unwrap();
+    let replacement = file_repo(&workspace, "target");
+    fs::create_dir_all(replacement.join(HARBOR_PROJECT)).unwrap();
+
+    // Release the job through the directory it is actually running in.
+    fs::write(moved.join(HARBOR_RELEASE_MARKER), "").unwrap();
+
+    // The log is reachable under the repository's new name, because it is keyed by identity.
+    let finished = poll_project_command_log(&mut server, "moved", &log_id, 90);
+    server.finish();
+    let text = response_text(&finished).to_string();
+    assert!(text.contains("status: completed"), "{text}");
+
+    // Every artefact landed in the directory that was selected, under its new name.
+    assert!(moved.join(HARBOR_RESULT).is_file());
+    assert!(moved.join(HARBOR_REWARD).is_file());
+
+    // The replacement that took over the old name was never run in, written to, or read from.
+    assert!(
+        !replacement.join("jobs").exists(),
+        "a replacement at the old name must not receive the job's output"
+    );
+    assert!(!replacement.join(HARBOR_STARTED_MARKER).exists());
+
+    // Rewards and structured evidence were read through the retained authority, so they describe the run
+    // rather than reporting the replacement's empty tree as absent evidence. Asserted positively: an
+    // optional artefact this fake never writes is legitimately reported absent, so the absence of any
+    // evidence error would be the wrong thing to require.
+    let document: Value = serde_json::from_str(text.split_once('{').map(|(_, rest)| format!("{{{rest}")).unwrap().as_str()).unwrap();
+    let harbor = &document["harbor"];
+    assert_eq!(harbor["available"], true, "{text}");
+    assert_eq!(harbor["rewards"][0], 1.0, "{text}");
+    assert_eq!(harbor["result_path"], HARBOR_RESULT, "{text}");
+    let verifier_reward = &harbor["trials"][0]["verifier"]["reward"];
+    assert_eq!(
+        verifier_reward["available"], true,
+        "the verifier artefact was read through the retained authority: {text}"
+    );
+    assert_eq!(verifier_reward["text"], "1.0", "{text}");
+}
