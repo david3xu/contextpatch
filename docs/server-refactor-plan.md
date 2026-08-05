@@ -66,7 +66,8 @@ Avoid one-file-per-tool modules when those files only contain constants or tiny 
   adapter supplies the `"<tool> refused: "` prefix. That keeps every public refusal string byte-identical
   while the policy relocates, and it is what makes each slice behavior-neutral and separately reviewable.
   Request validation moved first, under `core::git::validate`, followed by Git invocation and state
-  queries under `core::git::state`, then restore and delete planning under `core::git::restore`.
+  queries under `core::git::state`, then restore and delete planning under `core::git::restore`, then
+  commit and staging planning under `core::git::commit`.
 - Keep the directory tree balanced. Do not move all code from `main.rs` into a crowded `tools/` root; split by domain and promote shared runtime/protocol code out of `tools/`.
 - Update public docs only if public behavior changes. Pure module movement should not require tool-spec updates.
 

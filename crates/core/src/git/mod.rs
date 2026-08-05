@@ -1,3 +1,4 @@
+pub mod commit;
 pub mod delete_guarded;
 mod guarded_path;
 pub mod restore;

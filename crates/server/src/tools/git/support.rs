@@ -32,13 +32,6 @@ pub(crate) fn normalize_git_prefixes(
         .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
-pub(crate) fn paths_under_prefixes(
-    paths: &BTreeSet<String>,
-    prefixes: &[String],
-) -> BTreeSet<String> {
-    contextpatch_core::git::validate::paths_under_prefixes(paths, prefixes)
-}
-
 pub(crate) fn normalize_git_path(
     tool_name: &str,
     root: &Path,
@@ -56,26 +49,11 @@ fn refused(tool_name: &str, error: contextpatch_core::error::ContextPatchError) 
     format!("{tool_name} refused: {error}")
 }
 
-pub(crate) fn git_status_paths(root: &Path) -> Result<BTreeSet<String>, String> {
-    git_status_paths_for_tool(tools::git_commit_exact::NAME, root)
-}
-
 pub(crate) fn git_status_paths_for_tool(
     tool_name: &str,
     root: &Path,
 ) -> Result<BTreeSet<String>, String> {
     git_state::status_paths(root).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
-    git_cached_paths_for_tool(tools::git_commit_exact::NAME, root)
-}
-
-pub(crate) fn git_cached_paths_for_tool(
-    tool_name: &str,
-    root: &Path,
-) -> Result<BTreeSet<String>, String> {
-    git_state::cached_paths(root).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn parse_nul_paths_for_tool(
@@ -84,21 +62,6 @@ pub(crate) fn parse_nul_paths_for_tool(
     label: &str,
 ) -> Result<BTreeSet<String>, String> {
     git_state::parse_nul_paths(bytes, label).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn git_args(subcommand: &str, paths: &[String]) -> Vec<String> {
-    std::iter::once(subcommand.to_string())
-        .chain(std::iter::once("--".to_string()))
-        .chain(paths.iter().cloned())
-        .collect()
-}
-
-pub(crate) fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
-    git_stdout_for_tool(tools::git_commit_exact::NAME, root, args)
-}
-
-pub(crate) fn git_success(root: &Path, args: Vec<String>) -> Result<(), String> {
-    git_success_for_tool(tools::git_commit_exact::NAME, root, args)
 }
 
 /// How strictly an action must verify its configured repository root.
@@ -497,7 +460,8 @@ mod tests {
             "{error}"
         );
 
-        let error = git_status_paths(&outside_any_repository).unwrap_err();
+        let error = git_status_paths_for_tool("git_commit_exact", &outside_any_repository)
+            .unwrap_err();
         assert!(error.starts_with("git_commit_exact refused: git status"), "{error}");
 
         let error = current_branch("git_push_exact", &outside_any_repository).unwrap_err();

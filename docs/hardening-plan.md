@@ -225,8 +225,26 @@ Slices, each its own behavior-neutral commit:
    collapses a directory in an ignored listing when it holds nothing tracked, which means the
    tracked-path refusal inside that walk guards a race rather than a routine case. That is now stated at
    the function rather than covered by a test that cannot reach it.
-4. **`commit` planning — open.** Dirty-set matching, staged-scope policy, and prefix expansion behind the
-   five commit and stage actions.
+4. **`commit` planning — done.** `core::git::commit` owns the three selection shapes and their differing
+   claims. `exact` asserts the caller knows the entire dirty set, so an inexact list is a stale view and is
+   refused rather than narrowed, and it needs no clean-index gate because the exact set already accounts
+   for everything dirty. `scoped` and `prefix` claim only a subset, so they additionally require a clean
+   index to prove no unrelated staged work is swept in. All three verify after staging that the index holds
+   exactly what was planned, and `exact` additionally re-checks that the dirty set has not moved. Staging,
+   committing, and verification are separate functions because each refusal is addressed differently, as
+   `refused`, `refused after staging`, or `refused after commit`, and because the adapter opens its Git
+   receipt around the mutation.
+
+   Thirteen core tests cover the shapes against real temporary repositories, including that an exact commit
+   tolerates a pre-staged index while a partial commit does not, that a scoped commit leaves unrelated
+   dirty paths behind, that exactly one commit is produced, that a staging request produces none, and that
+   planning stages and commits nothing. Server regressions pin the assembled prefixes and the adapter-side
+   limits, confirmations, and message validation ordering.
+
+   One pre-existing defect was preserved rather than fixed: in the exact-set mismatch refusal the
+   `expected_paths` and `actual_dirty_paths` labels are swapped relative to the sets they print. Correcting
+   them would change public refusal text, which this behavior-neutral migration must not do. It is now
+   recorded as C34 and marked at the code.
 5. **`sync` planning — open.** Branch preparation planning, merge readiness, and push divergence checks.
 
 JSON parsing, MCP schemas, receipts, and response formatting stay in `server` throughout. C11 helper
@@ -506,3 +524,4 @@ Phase-specific checks:
 | C31 | Validation profile omits linting | 7.5 | Open |
 | C32 | Formatting command is not allowlisted, so the gate is partial | 7.5 | Open |
 | C33 | Surface consolidation has no versioned design proposal | 5.0 | Open |
+| C34 | Exact-commit mismatch refusal swaps its `expected_paths` and `actual_dirty_paths` labels | unscheduled | Open |
