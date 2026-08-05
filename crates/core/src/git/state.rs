@@ -13,7 +13,6 @@
 //! subprocess timeout.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use crate::error::ContextPatchError;
 use crate::git::repository::GitRepository;
@@ -217,27 +216,33 @@ fn porcelain_entry_path(entry: &[u8], label: &str) -> Result<String, ContextPatc
 }
 
 /// Every path Git reports as changed, including untracked files.
-pub fn status_paths(root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
+pub fn status_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
     let output = output(
-        root,
+        repository,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
     parse_porcelain_paths(&output.stdout, STATUS_LABEL)
 }
 
 /// Only the untracked paths Git reports.
-pub fn untracked_paths(root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
+pub fn untracked_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
     let output = output(
-        root,
+        repository,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
     parse_untracked_porcelain_paths(&output.stdout, STATUS_LABEL)
 }
 
 /// The untracked and ignored paths Git reports.
-pub fn untracked_and_ignored_paths(root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
+pub fn untracked_and_ignored_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
     let output = output(
-        root,
+        repository,
         &[
             "status",
             "--porcelain=v1",
@@ -250,22 +255,31 @@ pub fn untracked_and_ignored_paths(root: &Path) -> Result<BTreeSet<String>, Cont
 }
 
 /// The paths currently staged in the index.
-pub fn cached_paths(root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
-    let output = output(root, &["diff", "--cached", "--name-only", "-z"])?;
+pub fn cached_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let output = output(repository, &["diff", "--cached", "--name-only", "-z"])?;
     parse_nul_paths(&output.stdout, CACHED_DIFF_LABEL)
 }
 
 /// Short-format status text, including untracked files.
-pub fn status_short(root: &Path) -> Result<String, ContextPatchError> {
-    stdout(root, &["status", "--short", "--untracked-files=all"])
+pub fn status_short<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<String, ContextPatchError> {
+    stdout(
+        repository,
+        &["status", "--short", "--untracked-files=all"],
+    )
 }
 
 /// The current head commit, or [`UNBORN_HEAD`] when the repository has no commits.
 ///
 /// A failing `rev-parse` is only treated as an unborn head when the repository genuinely has no
 /// revisions, so a real failure is still reported rather than disguised as an empty repository.
-pub fn head(root: &Path) -> Result<String, ContextPatchError> {
-    let probe = run(root, &["rev-parse", "--verify", "HEAD"])?;
+pub fn head<'a>(repository: impl Into<GitRepository<'a>>) -> Result<String, ContextPatchError> {
+    // Converted once and reused, which the copyable target makes free.
+    let repository = repository.into();
+    let probe = run(repository, &["rev-parse", "--verify", "HEAD"])?;
     if probe.success() {
         return String::from_utf8(probe.stdout)
             .map(|head| head.trim().to_string())
@@ -274,7 +288,7 @@ pub fn head(root: &Path) -> Result<String, ContextPatchError> {
             });
     }
 
-    let revision_count = stdout(root, &["rev-list", "--all", "--count"])?;
+    let revision_count = stdout(repository, &["rev-list", "--all", "--count"])?;
     if revision_count.trim() == "0" {
         Ok(UNBORN_HEAD.to_string())
     } else {
@@ -286,8 +300,10 @@ pub fn head(root: &Path) -> Result<String, ContextPatchError> {
 }
 
 /// The checked-out branch, refusing a detached head.
-pub fn current_branch(root: &Path) -> Result<String, ContextPatchError> {
-    let branch = stdout(root, &["branch", "--show-current"])?;
+pub fn current_branch<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<String, ContextPatchError> {
+    let branch = stdout(repository, &["branch", "--show-current"])?;
     let branch = branch.trim();
     if branch.is_empty() {
         Err(ContextPatchError::new(
@@ -302,9 +318,12 @@ pub fn current_branch(root: &Path) -> Result<String, ContextPatchError> {
 ///
 /// `show-ref --verify --quiet` answers with an exit code rather than output, so absence is a normal
 /// answer and only an unexpected code is a refusal.
-pub fn local_branch_exists(root: &Path, branch: &str) -> Result<bool, ContextPatchError> {
+pub fn local_branch_exists<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    branch: &str,
+) -> Result<bool, ContextPatchError> {
     let branch_ref = format!("refs/heads/{branch}");
-    match exit_code(root, &["show-ref", "--verify", "--quiet", &branch_ref])? {
+    match exit_code(repository, &["show-ref", "--verify", "--quiet", &branch_ref])? {
         0 => Ok(true),
         1 => Ok(false),
         code => Err(ContextPatchError::new(format!(
@@ -314,8 +333,11 @@ pub fn local_branch_exists(root: &Path, branch: &str) -> Result<bool, ContextPat
 }
 
 /// Count the revisions in a range.
-pub fn rev_count(root: &Path, range: &str) -> Result<u64, ContextPatchError> {
-    let counted = stdout(root, &["rev-list", "--count", range])?;
+pub fn rev_count<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    range: &str,
+) -> Result<u64, ContextPatchError> {
+    let counted = stdout(repository, &["rev-list", "--count", range])?;
     counted.trim().parse::<u64>().map_err(|error| {
         ContextPatchError::new(format!(
             "failed to parse revision count `{}`: {error}",
@@ -325,8 +347,11 @@ pub fn rev_count(root: &Path, range: &str) -> Result<u64, ContextPatchError> {
 }
 
 /// Require that a remote is configured.
-pub fn ensure_remote_exists(root: &Path, remote: &str) -> Result<(), ContextPatchError> {
-    let remotes = stdout(root, &["remote"])?;
+pub fn ensure_remote_exists<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    remote: &str,
+) -> Result<(), ContextPatchError> {
+    let remotes = stdout(repository, &["remote"])?;
     if remotes.lines().any(|line| line == remote) {
         Ok(())
     } else {
@@ -337,9 +362,12 @@ pub fn ensure_remote_exists(root: &Path, remote: &str) -> Result<(), ContextPatc
 }
 
 /// Resolve a ref to the commit it names.
-pub fn resolve_commit(root: &Path, ref_name: &str) -> Result<String, ContextPatchError> {
+pub fn resolve_commit<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    ref_name: &str,
+) -> Result<String, ContextPatchError> {
     let commit_ref = format!("{ref_name}^{{commit}}");
-    let commit = stdout(root, &["rev-parse", "--verify", &commit_ref])?;
+    let commit = stdout(repository, &["rev-parse", "--verify", &commit_ref])?;
     Ok(commit.trim().to_string())
 }
 
@@ -347,7 +375,7 @@ pub fn resolve_commit(root: &Path, ref_name: &str) -> Result<String, ContextPatc
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -49,7 +49,7 @@ pub(crate) fn call_git_remote_list(
 }
 
 pub(crate) fn call_git_remote_check(
-    repo_root: &Path,
+    repository: contextpatch_core::git::GitRepository<'_>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const TOOL: &str = tools::git_remote_check::NAME;
@@ -58,23 +58,24 @@ pub(crate) fn call_git_remote_check(
         optional_string(arguments, "remote")?.unwrap_or(core_sync::DEFAULT_REMOTE),
     )?;
     let branch = validate_git_branch(required_string(arguments, "branch")?)?;
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    ensure_remote_exists(TOOL, &root, &remote)?;
-    let source_status_before = git_status_short(&root)?;
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let root = policy.bind(repository);
+    ensure_remote_exists(TOOL, root, &remote)?;
+    let source_status_before = git_status_short(root)?;
 
     core_sync::fetch(
-        &root,
+        root,
         vec!["fetch".to_string(), remote.clone(), branch.clone()],
     )
     .map_err(|error| refused(TOOL, error))?;
 
-    let source_status_after = git_status_short(&root)?;
+    let source_status_after = git_status_short(root)?;
     core_sync::ensure_status_unchanged(&source_status_before, &source_status_after)
         .map_err(|error| refused(TOOL, error))?;
 
     let remote_ref = core_sync::remote_tracking_ref(&remote, &branch);
     let divergence =
-        core_sync::divergence(&root, &remote_ref).map_err(|error| refused(TOOL, error))?;
+        core_sync::divergence(root, &remote_ref).map_err(|error| refused(TOOL, error))?;
 
     serde_json::to_string_pretty(&json!({
         "tool": TOOL,
@@ -257,7 +258,7 @@ pub(crate) fn call_git_branch_prepare(
 }
 
 pub(crate) fn call_git_merge_readiness(
-    repo_root: &Path,
+    repository: contextpatch_core::git::GitRepository<'_>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const TOOL: &str = tools::git_merge_readiness::NAME;
@@ -265,8 +266,9 @@ pub(crate) fn call_git_merge_readiness(
     let base_ref = validate_git_ref_expression(required_string(arguments, "base_ref")?)?;
     let target_ref = validate_git_ref_expression(required_string(arguments, "target_ref")?)?;
     let fetch = optional_bool(arguments, "fetch")?.unwrap_or(false);
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let source_status_before = git_status_short(&root)?;
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let root = policy.bind(repository);
+    let source_status_before = git_status_short(root)?;
 
     let mut fetched_remote = None;
     let mut fetched_branch = None;
@@ -274,7 +276,7 @@ pub(crate) fn call_git_merge_readiness(
         let remote = validate_git_remote(
             optional_string(arguments, "remote")?.unwrap_or(core_sync::DEFAULT_REMOTE),
         )?;
-        ensure_remote_exists(TOOL, &root, &remote)?;
+        ensure_remote_exists(TOOL, root, &remote)?;
         let branch = match optional_string(arguments, "target_branch")? {
             Some(branch) => validate_git_branch(branch)?,
             None => core_sync::infer_fetch_branch(&remote, &target_ref)
@@ -282,7 +284,7 @@ pub(crate) fn call_git_merge_readiness(
         };
 
         core_sync::fetch(
-            &root,
+            root,
             vec![
                 "fetch".to_string(),
                 remote.clone(),
@@ -291,7 +293,7 @@ pub(crate) fn call_git_merge_readiness(
         )
         .map_err(|error| refused(TOOL, error))?;
 
-        let source_status_after_fetch = git_status_short(&root)?;
+        let source_status_after_fetch = git_status_short(root)?;
         core_sync::ensure_status_unchanged(&source_status_before, &source_status_after_fetch)
             .map_err(|error| refused(TOOL, error))?;
 
@@ -306,23 +308,23 @@ pub(crate) fn call_git_merge_readiness(
         validate_git_remote(remote)?;
     }
 
-    let base_commit = resolve_commit(TOOL, &root, &base_ref)?;
-    let target_commit = resolve_commit(TOOL, &root, &target_ref)?;
-    let merge_base = git_stdout_for_tool(TOOL, &root, &["merge-base", &base_commit, &target_commit])?;
+    let base_commit = resolve_commit(TOOL, root, &base_ref)?;
+    let target_commit = resolve_commit(TOOL, root, &target_ref)?;
+    let merge_base = git_stdout_for_tool(TOOL, root, &["merge-base", &base_commit, &target_commit])?;
     let merge_base = merge_base.trim().to_string();
 
-    let base_ahead_count = rev_count_for_tool(TOOL, &root, &format!("{merge_base}..{base_commit}"))?;
+    let base_ahead_count = rev_count_for_tool(TOOL, root, &format!("{merge_base}..{base_commit}"))?;
     let target_ahead_count =
-        rev_count_for_tool(TOOL, &root, &format!("{merge_base}..{target_commit}"))?;
-    let base_changed_files = core_sync::changed_files_between(&root, &merge_base, &base_commit)
+        rev_count_for_tool(TOOL, root, &format!("{merge_base}..{target_commit}"))?;
+    let base_changed_files = core_sync::changed_files_between(root, &merge_base, &base_commit)
         .map_err(|error| refused(TOOL, error))?;
-    let target_changed_files = core_sync::changed_files_between(&root, &merge_base, &target_commit)
+    let target_changed_files = core_sync::changed_files_between(root, &merge_base, &target_commit)
         .map_err(|error| refused(TOOL, error))?;
     let changed_on_both_sides: BTreeSet<String> = base_changed_files
         .intersection(&target_changed_files)
         .cloned()
         .collect();
-    let source_status_after = git_status_short(&root)?;
+    let source_status_after = git_status_short(root)?;
 
     serde_json::to_string_pretty(&json!({
         "tool": TOOL,
@@ -352,7 +354,7 @@ pub(crate) fn call_git_merge_readiness(
 }
 
 pub(crate) fn call_git_push_exact(
-    repo_root: &Path,
+    repository: contextpatch_core::git::GitRepository<'_>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "push exact commit";
@@ -369,13 +371,14 @@ pub(crate) fn call_git_push_exact(
         ));
     }
 
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ExactWorktreeRoot)?;
-    ensure_remote_exists(TOOL, &root, &remote)?;
-    let status = git_status_short(&root)?;
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ExactWorktreeRoot)?;
+    let root = policy.bind(repository);
+    ensure_remote_exists(TOOL, root, &remote)?;
+    let status = git_status_short(root)?;
     core_sync::ensure_worktree_clean(&status, "worktree must be clean before push")
         .map_err(|error| refused(TOOL, error))?;
 
-    let current_branch = git_stdout_for_tool(TOOL, &root, &["branch", "--show-current"])?;
+    let current_branch = git_stdout_for_tool(TOOL, root, &["branch", "--show-current"])?;
     let current_branch = current_branch.trim();
     if current_branch != branch {
         return Err(format!(
@@ -383,7 +386,7 @@ pub(crate) fn call_git_push_exact(
         ));
     }
 
-    let head = git_stdout_for_tool(TOOL, &root, &["rev-parse", "HEAD"])?;
+    let head = git_stdout_for_tool(TOOL, root, &["rev-parse", "HEAD"])?;
     let head = head.trim().to_string();
     if !head.starts_with(&expected_head) {
         return Err(format!(
@@ -392,17 +395,17 @@ pub(crate) fn call_git_push_exact(
     }
 
     core_sync::fetch(
-        &root,
+        root,
         vec!["fetch".to_string(), remote.clone(), branch.clone()],
     )
     .map_err(|error| refused(TOOL, error))?;
-    let status_after_fetch = git_status_short(&root)?;
+    let status_after_fetch = git_status_short(root)?;
     core_sync::ensure_worktree_clean(&status_after_fetch, "worktree changed during fetch")
         .map_err(|error| refused(TOOL, error))?;
 
     let remote_ref = core_sync::remote_tracking_ref(&remote, &branch);
     let divergence =
-        core_sync::divergence(&root, &remote_ref).map_err(|error| refused(TOOL, error))?;
+        core_sync::divergence(root, &remote_ref).map_err(|error| refused(TOOL, error))?;
     if divergence.remote_ahead_count != 0 {
         return Err(format!(
             "git_push_exact refused: remote `{remote_ref}` is ahead of HEAD by {} commit(s)",
@@ -417,7 +420,7 @@ pub(crate) fn call_git_push_exact(
 
     git_success_for_tool(
         TOOL,
-        &root,
+        root,
         vec![
             "push".to_string(),
             remote.clone(),
@@ -434,7 +437,7 @@ pub(crate) fn call_git_push_exact(
         "previous_remote_head": divergence.remote_head,
         "force": false,
         "refspec": format!("HEAD:refs/heads/{branch}"),
-        "status_short": git_status_short(&root)?
+        "status_short": git_status_short(root)?
     }))
     .map_err(|error| format!("git_push_exact refused: {error}"))
 }
@@ -455,7 +458,7 @@ mod tests {
 
         assert_eq!(
             call_git_push_exact(
-                &root,
+                (&root).into(),
                 &arguments(json!({
                     "remote": "origin",
                     "branch": "main",
@@ -468,7 +471,7 @@ mod tests {
         );
         assert_eq!(
             call_git_push_exact(
-                &root,
+                (&root).into(),
                 &arguments(json!({
                     "remote": "origin",
                     "branch": "main",
@@ -500,7 +503,7 @@ mod tests {
 
         assert_eq!(
             call_git_push_exact(
-                &root,
+                (&root).into(),
                 &arguments(json!({
                     "remote": "origin",
                     "branch": "main",

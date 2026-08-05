@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::tools;
 use contextpatch_core::git::state as git_state;
+use contextpatch_core::git::GitRepository;
 pub(crate) fn validate_commit_subject(subject: &str) -> Result<String, String> {
     contextpatch_core::git::validate::commit_subject(subject)
         .map_err(|error| format!("{} refused: {error}", tools::git_commit_exact::NAME))
@@ -48,11 +49,43 @@ fn refused(tool_name: &str, error: contextpatch_core::error::ContextPatchError) 
     format!("{tool_name} refused: {error}")
 }
 
-pub(crate) fn git_status_paths_for_tool(
+pub(crate) fn git_status_paths_for_tool<'a>(
     tool_name: &str,
-    root: &Path,
+    repository: impl Into<GitRepository<'a>>,
 ) -> Result<BTreeSet<String>, String> {
-    git_state::status_paths(root).map_err(|error| refused(tool_name, error))
+    git_state::status_paths(repository).map_err(|error| refused(tool_name, error))
+}
+
+/// A repository target resolved under one action's root policy.
+///
+/// An anchored selection was already resolved when it was selected, and for the strict policy it was
+/// already verified as a worktree root, so re-resolving it here would be exactly the reopen this phase
+/// removes. A path-backed target still goes through the full existing check. Owning the resolved path is
+/// what lets the borrowed target outlive it.
+pub(crate) enum PolicyTarget {
+    Anchored,
+    Resolved(PathBuf),
+}
+
+impl PolicyTarget {
+    pub(crate) fn bind<'a>(&'a self, original: GitRepository<'a>) -> GitRepository<'a> {
+        match self {
+            Self::Anchored => original,
+            Self::Resolved(path) => GitRepository::from_path(path),
+        }
+    }
+}
+
+/// Apply an action's root policy to a repository target.
+pub(crate) fn repository_under_policy(
+    repository: GitRepository<'_>,
+    tool_name: &str,
+    policy: WorktreeRootPolicy,
+) -> Result<PolicyTarget, String> {
+    if repository.is_anchored() {
+        return Ok(PolicyTarget::Anchored);
+    }
+    repo_root_for_policy(repository.path(), tool_name, policy).map(PolicyTarget::Resolved)
 }
 
 /// How strictly an action must verify its configured repository root.
@@ -105,40 +138,49 @@ pub(crate) fn resolved_repo_root(repo_root: &Path, tool_name: &str) -> Result<Pa
         .map_err(|error| format!("{tool_name} refused: failed to resolve repo root: {error}"))
 }
 
-pub(crate) fn git_status_short(root: &Path) -> Result<String, String> {
-    git_state::status_short(root).map_err(|error| refused("git_status_short", error))
+pub(crate) fn git_status_short<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<String, String> {
+    git_state::status_short(repository).map_err(|error| refused("git_status_short", error))
 }
 
-pub(crate) fn git_stdout_for_tool(
+pub(crate) fn git_stdout_for_tool<'a>(
     tool_name: &str,
-    root: &Path,
+    repository: impl Into<GitRepository<'a>>,
     args: &[&str],
 ) -> Result<String, String> {
-    git_state::stdout(root, args).map_err(|error| refused(tool_name, error))
+    git_state::stdout(repository, args).map_err(|error| refused(tool_name, error))
 }
 
-pub(crate) fn git_head_for_tool(tool_name: &str, root: &Path) -> Result<String, String> {
-    git_state::head(root).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn git_success_for_tool(
+pub(crate) fn git_head_for_tool<'a>(
     tool_name: &str,
-    root: &Path,
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<String, String> {
+    git_state::head(repository).map_err(|error| refused(tool_name, error))
+}
+
+pub(crate) fn git_success_for_tool<'a>(
+    tool_name: &str,
+    repository: impl Into<GitRepository<'a>>,
     args: Vec<String>,
 ) -> Result<(), String> {
-    git_state::success(root, &args).map_err(|error| refused(tool_name, error))
+    git_state::success(repository, &args).map_err(|error| refused(tool_name, error))
 }
 
-pub(crate) fn rev_count_for_tool(tool_name: &str, root: &Path, range: &str) -> Result<u64, String> {
-    git_state::rev_count(root, range).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn ensure_remote_exists(
+pub(crate) fn rev_count_for_tool<'a>(
     tool_name: &str,
-    root: &Path,
+    repository: impl Into<GitRepository<'a>>,
+    range: &str,
+) -> Result<u64, String> {
+    git_state::rev_count(repository, range).map_err(|error| refused(tool_name, error))
+}
+
+pub(crate) fn ensure_remote_exists<'a>(
+    tool_name: &str,
+    repository: impl Into<GitRepository<'a>>,
     remote: &str,
 ) -> Result<(), String> {
-    git_state::ensure_remote_exists(root, remote).map_err(|error| refused(tool_name, error))
+    git_state::ensure_remote_exists(repository, remote).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn validate_git_remote(remote: &str) -> Result<String, String> {
@@ -146,12 +188,19 @@ pub(crate) fn validate_git_remote(remote: &str) -> Result<String, String> {
     Ok(remote.to_string())
 }
 
-pub(crate) fn current_branch(tool_name: &str, root: &Path) -> Result<String, String> {
-    git_state::current_branch(root).map_err(|error| refused(tool_name, error))
+pub(crate) fn current_branch<'a>(
+    tool_name: &str,
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<String, String> {
+    git_state::current_branch(repository).map_err(|error| refused(tool_name, error))
 }
 
-pub(crate) fn local_branch_exists(root: &Path, branch: &str) -> Result<bool, String> {
-    git_state::local_branch_exists(root, branch).map_err(|error| refused("git workflow", error))
+pub(crate) fn local_branch_exists<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    branch: &str,
+) -> Result<bool, String> {
+    git_state::local_branch_exists(repository, branch)
+        .map_err(|error| refused("git workflow", error))
 }
 
 pub(crate) fn validate_git_branch(branch: &str) -> Result<String, String> {
@@ -223,12 +272,12 @@ pub(crate) fn validate_git_ref_component(label: &str, value: &str) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn resolve_commit(
+pub(crate) fn resolve_commit<'a>(
     tool_name: &str,
-    root: &Path,
+    repository: impl Into<GitRepository<'a>>,
     ref_name: &str,
 ) -> Result<String, String> {
-    git_state::resolve_commit(root, ref_name).map_err(|error| refused(tool_name, error))
+    git_state::resolve_commit(repository, ref_name).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn format_set(paths: &BTreeSet<String>) -> String {

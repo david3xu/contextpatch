@@ -365,16 +365,16 @@ fn call_tool(
             tools::git::handlers::call_git_remote_list(repository.git_repository())
         }
         tools::git_remote_check::NAME => {
-            tools::git::handlers::call_git_remote_check(repo_root, arguments)
+            tools::git::handlers::call_git_remote_check(repository.git_repository(), arguments)
         }
         tools::git_branch_prepare::NAME => {
             tools::git::handlers::call_git_branch_prepare(repo_root, arguments)
         }
         tools::git_merge_readiness::NAME => {
-            tools::git::handlers::call_git_merge_readiness(repo_root, arguments)
+            tools::git::handlers::call_git_merge_readiness(repository.git_repository(), arguments)
         }
         tools::git_push_exact::NAME => {
-            tools::git::handlers::call_git_push_exact(repo_root, arguments)
+            tools::git::handlers::call_git_push_exact(repository.git_repository(), arguments)
         }
         tools::github_pr_run::NAME => tools::github::call_github_pr_run(repo_root, arguments),
         tools::github_fork_prepare::NAME => {

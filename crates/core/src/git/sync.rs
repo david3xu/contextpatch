@@ -206,8 +206,11 @@ pub fn list_remotes<'a>(
 }
 
 /// Fetch exactly one refspec.
-pub fn fetch(root: &Path, args: Vec<String>) -> Result<(), ContextPatchError> {
-    state::success(root, &args)
+pub fn fetch<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    args: Vec<String>,
+) -> Result<(), ContextPatchError> {
+    state::success(repository, &args)
 }
 
 /// Refuse when a fetch disturbed the worktree.
@@ -226,32 +229,46 @@ pub fn ensure_status_unchanged(before: &str, after: &str) -> Result<(), ContextP
 }
 
 /// Whether one ref is an ancestor of another.
-pub fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> Result<bool, ContextPatchError> {
-    Ok(state::exit_code(root, &["merge-base", "--is-ancestor", ancestor, descendant])? == 0)
+pub fn is_ancestor<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<bool, ContextPatchError> {
+    Ok(state::exit_code(
+        repository,
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+    )? == 0)
 }
 
 /// Compute how HEAD and a remote-tracking ref relate.
-pub fn divergence(root: &Path, remote_ref: &str) -> Result<Divergence, ContextPatchError> {
+pub fn divergence<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    remote_ref: &str,
+) -> Result<Divergence, ContextPatchError> {
+    // Converted once and reused across all six queries, which the copyable target makes free.
+    let repository = repository.into();
     Ok(Divergence {
-        head: state::stdout(root, &["rev-parse", "HEAD"])?.trim().to_string(),
-        remote_head: state::stdout(root, &["rev-parse", remote_ref])?
+        head: state::stdout(repository, &["rev-parse", "HEAD"])?
             .trim()
             .to_string(),
-        remote_ahead_count: state::rev_count(root, &format!("HEAD..{remote_ref}"))?,
-        local_ahead_count: state::rev_count(root, &format!("{remote_ref}..HEAD"))?,
-        remote_is_ancestor_of_head: is_ancestor(root, remote_ref, "HEAD")?,
-        head_is_ancestor_of_remote: is_ancestor(root, "HEAD", remote_ref)?,
+        remote_head: state::stdout(repository, &["rev-parse", remote_ref])?
+            .trim()
+            .to_string(),
+        remote_ahead_count: state::rev_count(repository, &format!("HEAD..{remote_ref}"))?,
+        local_ahead_count: state::rev_count(repository, &format!("{remote_ref}..HEAD"))?,
+        remote_is_ancestor_of_head: is_ancestor(repository, remote_ref, "HEAD")?,
+        head_is_ancestor_of_remote: is_ancestor(repository, "HEAD", remote_ref)?,
     })
 }
 
 /// Files that differ between two refs.
-pub fn changed_files_between(
-    root: &Path,
+pub fn changed_files_between<'a>(
+    repository: impl Into<GitRepository<'a>>,
     from_ref: &str,
     to_ref: &str,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
     let output = state::output(
-        root,
+        repository,
         &["diff", "--name-only", "-z", from_ref, to_ref, "--"],
     )?;
     state::parse_nul_paths(&output.stdout, DIFF_LABEL)
@@ -303,18 +320,19 @@ pub fn required_file_path_syntax(raw: &str) -> Result<(), ContextPatchError> {
 ///
 /// Checked against the ref rather than the worktree so a preparation that would land on a branch missing
 /// a required file refuses before the switch, not after.
-pub fn required_files_in_ref(
-    root: &Path,
+pub fn required_files_in_ref<'a>(
+    repository: impl Into<GitRepository<'a>>,
     ref_name: &str,
     paths: &[String],
 ) -> Result<Vec<String>, ContextPatchError> {
+    let repository = repository.into();
     paths
         .iter()
         .map(|path| {
             required_file_path_syntax(path)?;
             let object = format!("{ref_name}:{path}");
             let object_type =
-                state::stdout(root, &["cat-file", "-t", &object]).map_err(|_| {
+                state::stdout(repository, &["cat-file", "-t", &object]).map_err(|_| {
                     ContextPatchError::new(format!(
                         "required file `{path}` is missing from `{ref_name}`"
                     ))
