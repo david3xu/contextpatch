@@ -177,7 +177,31 @@ absolute paths, and pathspec metacharacters. The tools that take no paths are th
 pushing are not bounded by the configured root. Write this decision down before moving any code, so
 the migration has a specification to preserve.
 
-### 3.2 Migrate Git policy into `core` (C10)
+### 3.2 Migrate Git policy into `core` (C10) — in progress
+
+The migration pattern is settled and proven on the first slice: `core` returns the refusal detail only
+and the server adapter supplies the `"<tool> refused: "` prefix, so every public refusal string stays
+byte-identical while policy relocates. A server-side regression pins those assembled strings, which makes
+a detail reworded in `core` a test failure rather than a silent public change.
+
+Slices, each its own behavior-neutral commit:
+
+1. **Request validation — done.** `core::git::validate` owns path confinement, pathspec rejection, prefix
+   normalization, prefix boundary matching, and commit subject/body limits. The server functions are thin
+   adapters. This slice covers the guard that bounds every path-taking action, which is the same reason
+   those actions do not need an exact worktree root under 3.1.
+2. **Git-executing state guards — open.** Status, cached, untracked, and ignored path queries; remote and
+   branch existence; ref resolution; rev counts; required-file checks in a ref. These wrap the Git
+   subprocess, so the typed API must carry the timeout and bounded-output contract rather than leaving it
+   in the adapter.
+3. **`restore` planning — open.** Untracked collection, empty-directory collection, and the tracked-path
+   guard behind the three restore and delete actions.
+4. **`commit` planning — open.** Dirty-set matching, staged-scope policy, and prefix expansion behind the
+   five commit and stage actions.
+5. **`sync` planning — open.** Branch preparation planning, merge readiness, and push divergence checks.
+
+JSON parsing, MCP schemas, receipts, and response formatting stay in `server` throughout. C11 helper
+deduplication and C13 descriptor-based selection remain out of scope for this phase.
 
 The refactor plan's guardrail keeps filesystem, Git, process, setup, and native policy in `core`,
 with server modules adapting JSON to typed core calls. Tracked move and guarded delete follow that
@@ -429,7 +453,7 @@ Phase-specific checks:
 | C07 | Mutating responses omit the resulting digest | 2.2 | Complete |
 | C08 | Batch validation refusals leave no receipt | 2.3 | Complete |
 | C09 | Cheap discovery projections are undocumented; meta action unlisted | 2.4 | Complete |
-| C10 | Git policy lives in the server crate against the stated boundary | 3.2 | Open |
+| C10 | Git policy lives in the server crate against the stated boundary | 3.2 | In progress |
 | C11 | Three helpers share one name with two semantics | 3.3 | Open |
 | C12 | Worktree-root requirement is inconsistent across tools | 3.1 | Complete |
 | C13 | Workspace selector validates by path, not by descriptor | 3.4 | Open |

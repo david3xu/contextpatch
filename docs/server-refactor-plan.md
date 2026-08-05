@@ -62,6 +62,10 @@ Avoid one-file-per-tool modules when those files only contain constants or tiny 
 - Keep MCP schema and response formatting in `server`; do not move protocol details into `core`.
 - Keep filesystem, Git guard, process guard, setup, and native policy in `core`; server modules only adapt JSON requests to typed core APIs.
 - Treat `tools/git/support.rs` as transitional: helpers that encode reusable Git safety semantics should migrate to `core::git` when CLI or other adapters need them. MCP-only request shaping and response formatting should stay in `server`.
+- The migration pattern for that move is settled: `core` returns the refusal *detail* only, and the server
+  adapter supplies the `"<tool> refused: "` prefix. That keeps every public refusal string byte-identical
+  while the policy relocates, and it is what makes each slice behavior-neutral and separately reviewable.
+  Request validation moved first, under `core::git::validate`.
 - Keep the directory tree balanced. Do not move all code from `main.rs` into a crowded `tools/` root; split by domain and promote shared runtime/protocol code out of `tools/`.
 - Update public docs only if public behavior changes. Pure module movement should not require tool-spec updates.
 

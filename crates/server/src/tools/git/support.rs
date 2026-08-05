@@ -5,29 +5,13 @@ use crate::tools;
 use contextpatch_core::process::runner::{run_bounded_command, BoundedProcessOutput};
 use contextpatch_core::process::GIT_SUBPROCESS_TIMEOUT;
 pub(crate) fn validate_commit_subject(subject: &str) -> Result<String, String> {
-    let trimmed = subject.trim();
-    if trimmed.is_empty() {
-        return Err("git_commit_exact refused: subject must not be empty".to_string());
-    }
-    if trimmed.len() > 200 {
-        return Err("git_commit_exact refused: subject must be at most 200 bytes".to_string());
-    }
-    if subject.contains('\n') || subject.contains('\r') || subject.contains('\0') {
-        return Err(
-            "git_commit_exact refused: subject must be a single line without NUL bytes".to_string(),
-        );
-    }
-    Ok(trimmed.to_string())
+    contextpatch_core::git::validate::commit_subject(subject)
+        .map_err(|error| format!("{} refused: {error}", tools::git_commit_exact::NAME))
 }
 
 pub(crate) fn validate_commit_body(body: &str) -> Result<String, String> {
-    if body.contains('\0') {
-        return Err("git_commit_exact refused: body must not contain NUL bytes".to_string());
-    }
-    if body.len() > 20_000 {
-        return Err("git_commit_exact refused: body must be at most 20000 bytes".to_string());
-    }
-    Ok(body.trim().to_string())
+    contextpatch_core::git::validate::commit_body(body)
+        .map_err(|error| format!("{} refused: {error}", tools::git_commit_exact::NAME))
 }
 
 pub(crate) fn normalize_git_paths(
@@ -35,10 +19,8 @@ pub(crate) fn normalize_git_paths(
     root: &Path,
     paths: &[String],
 ) -> Result<Vec<String>, String> {
-    paths
-        .iter()
-        .map(|path| normalize_git_path(tool_name, root, path))
-        .collect()
+    contextpatch_core::git::validate::git_paths(root, paths)
+        .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
 pub(crate) fn normalize_git_prefixes(
@@ -46,31 +28,15 @@ pub(crate) fn normalize_git_prefixes(
     root: &Path,
     prefixes: &[String],
 ) -> Result<Vec<String>, String> {
-    prefixes
-        .iter()
-        .map(|prefix| {
-            let trimmed = prefix.trim_end_matches('/');
-            if trimmed.is_empty() {
-                return Err(format!("{tool_name} refused: prefixes must not be empty"));
-            }
-            normalize_git_path(tool_name, root, trimmed)
-        })
-        .collect()
+    contextpatch_core::git::validate::git_prefixes(root, prefixes)
+        .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
 pub(crate) fn paths_under_prefixes(
     paths: &BTreeSet<String>,
     prefixes: &[String],
 ) -> BTreeSet<String> {
-    paths
-        .iter()
-        .filter(|path| {
-            prefixes
-                .iter()
-                .any(|prefix| *path == prefix || path.starts_with(&format!("{prefix}/")))
-        })
-        .cloned()
-        .collect()
+    contextpatch_core::git::validate::paths_under_prefixes(paths, prefixes)
 }
 
 pub(crate) fn normalize_git_path(
@@ -78,59 +44,8 @@ pub(crate) fn normalize_git_path(
     root: &Path,
     raw: &str,
 ) -> Result<String, String> {
-    if raw.is_empty() || raw.contains('\0') {
-        return Err(format!(
-            "{tool_name} refused: path must not be empty or contain NUL"
-        ));
-    }
-    if raw.starts_with(':') || raw.contains('*') || raw.contains('?') || raw.contains('[') {
-        return Err(format!(
-            "{tool_name} refused: path `{raw}` contains Git pathspec metacharacters"
-        ));
-    }
-
-    let path = Path::new(raw);
-    if path.is_absolute() {
-        return Err(format!(
-            "{tool_name} refused: path `{raw}` must be repository-relative"
-        ));
-    }
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(_) => {}
-            _ => {
-                return Err(format!(
-                    "{tool_name} refused: path `{raw}` must be a normalized relative path"
-                ))
-            }
-        }
-    }
-
-    let candidate = root.join(path);
-    let resolved = if candidate.exists() {
-        candidate.canonicalize().map_err(|error| {
-            format!("{tool_name} refused: failed to resolve path `{raw}`: {error}")
-        })?
-    } else {
-        let parent = candidate
-            .parent()
-            .ok_or_else(|| format!("{tool_name} refused: path `{raw}` has no parent"))?;
-        let parent = parent.canonicalize().map_err(|error| {
-            format!("{tool_name} refused: failed to resolve parent for `{raw}`: {error}")
-        })?;
-        let file_name = candidate
-            .file_name()
-            .ok_or_else(|| format!("{tool_name} refused: path `{raw}` has no file name"))?;
-        parent.join(file_name)
-    };
-
-    if !resolved.starts_with(root) {
-        return Err(format!(
-            "{tool_name} refused: path `{raw}` resolves outside repository root"
-        ));
-    }
-
-    Ok(raw.to_string())
+    contextpatch_core::git::validate::git_path(root, raw)
+        .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
 pub(crate) fn git_status_paths(root: &Path) -> Result<BTreeSet<String>, String> {
@@ -768,6 +683,63 @@ pub(crate) fn format_set(paths: &BTreeSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moved_validation_keeps_its_refusal_strings_addressed_to_the_calling_tool() {
+        // The validation policy now lives in core, which returns the detail only. These assertions pin
+        // the strings a caller actually sees, so a detail reworded in core cannot silently change the
+        // public refusal text.
+        let root = std::env::temp_dir();
+
+        assert_eq!(
+            normalize_git_path("git_commit_scoped", &root, "../escape.txt").unwrap_err(),
+            "git_commit_scoped refused: path `../escape.txt` must be a normalized relative path"
+        );
+        assert_eq!(
+            normalize_git_path("git_stage_exact", &root, "src/*.rs").unwrap_err(),
+            "git_stage_exact refused: path `src/*.rs` contains Git pathspec metacharacters"
+        );
+        assert_eq!(
+            normalize_git_path("delete_untracked_exact", &root, "").unwrap_err(),
+            "delete_untracked_exact refused: path must not be empty or contain NUL"
+        );
+        assert_eq!(
+            normalize_git_path("git_restore_exact", &root, "/etc/hosts").unwrap_err(),
+            "git_restore_exact refused: path `/etc/hosts` must be repository-relative"
+        );
+        assert_eq!(
+            normalize_git_prefixes("delete_generated_prefix", &root, &["/".to_string()])
+                .unwrap_err(),
+            "delete_generated_prefix refused: prefixes must not be empty"
+        );
+
+        // Commit message refusals stay addressed to git_commit_exact even when another commit tool
+        // validated the message, because that is the string callers have always received.
+        assert_eq!(
+            validate_commit_subject("   ").unwrap_err(),
+            "git_commit_exact refused: subject must not be empty"
+        );
+        assert_eq!(
+            validate_commit_subject("first\nsecond").unwrap_err(),
+            "git_commit_exact refused: subject must be a single line without NUL bytes"
+        );
+        assert_eq!(
+            validate_commit_subject(&"a".repeat(201)).unwrap_err(),
+            "git_commit_exact refused: subject must be at most 200 bytes"
+        );
+        assert_eq!(
+            validate_commit_body("has\0nul").unwrap_err(),
+            "git_commit_exact refused: body must not contain NUL bytes"
+        );
+        assert_eq!(
+            validate_commit_body(&"a".repeat(20_001)).unwrap_err(),
+            "git_commit_exact refused: body must be at most 20000 bytes"
+        );
+
+        // Accepted values still round-trip unchanged.
+        assert_eq!(validate_commit_subject("  Fix  ").unwrap(), "Fix");
+        assert_eq!(validate_commit_body("  why  ").unwrap(), "why");
+    }
 
     #[test]
     fn refuses_truncated_git_output_before_parsing() {
