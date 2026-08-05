@@ -1,5 +1,3 @@
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::ContextPatchError;
@@ -89,134 +87,56 @@ fn worktree_root(
 
 /// Confine one existing regular file, returning its repository-relative spelling.
 ///
-/// An anchored root establishes containment through its descriptor walk, which refuses a symlink at any
-/// component, so there is no second resolution to compare against a prefix. A path-backed root keeps the
-/// resolve-and-compare form, so its refusals are unchanged. The resolved absolute path is deliberately not
-/// returned: callers act through the root's authority and the relative spelling, which is what stops a
-/// path being checked here and then used against a different directory.
+/// Containment comes from the descriptor walk under either authority, which refuses a symlink at any
+/// component, so there is no second resolution to compare against a prefix. The resolved absolute path is
+/// deliberately not returned: callers act through the root's authority and the relative spelling, which is
+/// what stops a path being checked here and then used against a different directory.
 pub(crate) fn resolve_existing_regular_file(
     root: RepositoryRoot<'_>,
     path: &Path,
 ) -> Result<String, ContextPatchError> {
     let relative = normalize_relative_path(path)?;
 
-    #[cfg(unix)]
-    if root.is_anchored() {
-        return match rooted::entry_kind(root, &relative)? {
-            None => Err(ContextPatchError::new(format!(
-                "source file `{relative}` does not exist"
-            ))),
-            Some(RootedEntryKind::Symlink) => Err(ContextPatchError::new(format!(
-                "source file `{relative}` must not be a symlink"
-            ))),
-            Some(RootedEntryKind::RegularFile) => Ok(relative),
-            Some(_) => Err(ContextPatchError::new(format!(
-                "source path `{relative}` is not a regular file"
-            ))),
-        };
-    }
-
-    let root = root.logical_path();
-    ensure_no_symlink_components(root, &relative, false)?;
-    let target = root.join(&relative);
-    let metadata = fs::symlink_metadata(&target).map_err(|error| {
-        if error.kind() == ErrorKind::NotFound {
-            ContextPatchError::new(format!("source file `{relative}` does not exist"))
-        } else {
-            ContextPatchError::new(format!(
-                "failed to inspect source file `{relative}`: {error}"
-            ))
-        }
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(ContextPatchError::new(format!(
+    match rooted::entry_kind(root, &relative)? {
+        None => Err(ContextPatchError::new(format!(
+            "source file `{relative}` does not exist"
+        ))),
+        Some(RootedEntryKind::Symlink) => Err(ContextPatchError::new(format!(
             "source file `{relative}` must not be a symlink"
-        )));
-    }
-    if !metadata.is_file() {
-        return Err(ContextPatchError::new(format!(
+        ))),
+        Some(RootedEntryKind::RegularFile) => Ok(relative),
+        Some(_) => Err(ContextPatchError::new(format!(
             "source path `{relative}` is not a regular file"
-        )));
+        ))),
     }
-    let resolved = target.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve source file `{relative}`: {error}"
-        ))
-    })?;
-    if !resolved.starts_with(root) {
-        return Err(ContextPatchError::new(format!(
-            "source file `{relative}` resolves outside repository root"
-        )));
-    }
-    Ok(relative)
 }
 
 /// Confine one absent destination path, returning its repository-relative spelling.
 ///
-/// The leaf must not exist and its parent must be a real directory. An anchored root establishes both
-/// through the descriptor walk; a path-backed root keeps the resolve-and-compare form.
+/// The leaf must not exist and its parent must be a real directory, both established through the
+/// descriptor walk under either authority.
 pub(crate) fn resolve_absent_file(
     root: RepositoryRoot<'_>,
     path: &Path,
 ) -> Result<String, ContextPatchError> {
     let relative = normalize_relative_path(path)?;
 
-    #[cfg(unix)]
-    if root.is_anchored() {
-        if rooted::entry_kind(root, &relative)?.is_some() {
+    if rooted::entry_kind(root, &relative)?.is_some() {
+        return Err(ContextPatchError::new(format!(
+            "destination path `{relative}` already exists"
+        )));
+    }
+    // The parent is named explicitly so an absent one is refused here rather than surfacing later as a
+    // rename failure. A root-level leaf has no parent component to check.
+    if let Some(parent) = Path::new(&relative).parent().and_then(|parent| {
+        let parent = parent.to_string_lossy().to_string();
+        (!parent.is_empty()).then_some(parent)
+    }) {
+        if !rooted::is_directory(root, &parent)? {
             return Err(ContextPatchError::new(format!(
-                "destination path `{relative}` already exists"
+                "destination parent for `{relative}` is not a directory"
             )));
         }
-        // The parent is named explicitly so an absent one is refused here rather than surfacing later as a
-        // rename failure. A root-level leaf has no parent component to check.
-        if let Some(parent) = Path::new(&relative).parent().and_then(|parent| {
-            let parent = parent.to_string_lossy().to_string();
-            (!parent.is_empty()).then_some(parent)
-        }) {
-            if !rooted::is_directory(root, &parent)? {
-                return Err(ContextPatchError::new(format!(
-                    "destination parent for `{relative}` is not a directory"
-                )));
-            }
-        }
-        return Ok(relative);
-    }
-
-    let root = root.logical_path();
-    ensure_no_symlink_components(root, &relative, true)?;
-    let target = root.join(&relative);
-    match fs::symlink_metadata(&target) {
-        Ok(_) => {
-            return Err(ContextPatchError::new(format!(
-                "destination path `{relative}` already exists"
-            )))
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(ContextPatchError::new(format!(
-                "failed to inspect destination path `{relative}`: {error}"
-            )))
-        }
-    }
-
-    let parent = target.parent().ok_or_else(|| {
-        ContextPatchError::new(format!("destination path `{relative}` has no parent"))
-    })?;
-    let resolved_parent = parent.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve destination parent for `{relative}`: {error}"
-        ))
-    })?;
-    if !resolved_parent.starts_with(root) {
-        return Err(ContextPatchError::new(format!(
-            "destination path `{relative}` resolves outside repository root"
-        )));
-    }
-    if !resolved_parent.is_dir() {
-        return Err(ContextPatchError::new(format!(
-            "destination parent for `{relative}` is not a directory"
-        )));
     }
     Ok(relative)
 }
@@ -403,38 +323,6 @@ fn normalize_relative_path(path: &Path) -> Result<String, ContextPatchError> {
     Ok(normalized)
 }
 
-fn ensure_no_symlink_components(
-    root: &Path,
-    relative: &str,
-    allow_missing_leaf: bool,
-) -> Result<(), ContextPatchError> {
-    let components = Path::new(relative).components().collect::<Vec<_>>();
-    let mut current = root.to_path_buf();
-    for (index, component) in components.iter().enumerate() {
-        current.push(component.as_os_str());
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(ContextPatchError::new(format!(
-                    "path `{relative}` contains symlink component `{}`",
-                    current.strip_prefix(root).unwrap_or(&current).display()
-                )))
-            }
-            Ok(_) => {}
-            Err(error)
-                if allow_missing_leaf
-                    && index + 1 == components.len()
-                    && error.kind() == ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(ContextPatchError::new(format!(
-                    "failed to inspect path component `{}`: {error}",
-                    current.strip_prefix(root).unwrap_or(&current).display()
-                )))
-            }
-        }
-    }
-    Ok(())
-}
-
 fn git_output<'a>(
     cwd: impl Into<CommandCwd<'a>>,
     args: &[&str],
@@ -484,6 +372,8 @@ fn display_nul_output(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::io::ErrorKind;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 

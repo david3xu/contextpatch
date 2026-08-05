@@ -5,18 +5,24 @@
 //! descriptor authority cannot accidentally fall back to a name, because there is no name-shaped argument
 //! to pass.
 //!
-//! The two authorities deliberately differ, in the same way and for the same reason as Git path
-//! confinement. A path-backed root reaches its entries by joining and calling `std::fs`, which follows
-//! symlinks exactly as it does today; the byte-for-byte behavior of every existing path-backed caller is
-//! preserved, which is why the compatibility branch is kept rather than unified away. An anchored root
-//! walks components from the retained descriptor with no-follow descriptor-relative calls and refuses a
-//! symlink at any component, because following one would mean resolving a name again and the descriptor
-//! exists precisely to avoid that. Anchored roots are therefore stricter, and where that shows through it
-//! is asserted in both directions rather than left to be discovered.
+//! Both authorities run the same implementation. An anchored root lends the descriptor it already retains;
+//! a path-backed root has one opened for it with `O_DIRECTORY | O_NOFOLLOW`, and that single open is the
+//! only time a name is resolved. Every component after it is reached with descriptor-relative, no-follow
+//! calls. A configured root is therefore exactly as safe as a selected one, which is a deliberate change
+//! from the earlier arrangement where the path-backed branch followed symlinks by delegating to `std::fs`.
+//!
+//! Listing and metadata still *inspect* symlinks rather than refusing them: `fstatat` with
+//! `AT_SYMLINK_NOFOLLOW` reports a symlink as a symlink, so callers that describe what is present keep
+//! their answer. What no longer happens anywhere is *following* one. The operations that read or mutate
+//! refuse a symlink at any component, including the leaf.
 //!
 //! Low-level mutations return `std::io::Error` rather than a worded refusal. Their callers already
 //! interpolate the I/O error into refusal text they own, so handing the error back unworded is what keeps
-//! those strings identical while the operation underneath them changes.
+//! those strings identical while the operation underneath them changes. `entry_kind_raw` exists for the
+//! same reason: verification steps word their own failures and must not nest one message inside another.
+//!
+//! Non-Unix fails closed. Without descriptor-relative operations none of this can be made safe, so the
+//! primitives refuse rather than silently degrading to path resolution.
 
 #[cfg(unix)]
 use std::fs::File;
@@ -44,18 +50,6 @@ impl RootedEntryKind {
             _ => Self::Other,
         }
     }
-
-    fn from_file_type(file_type: std::fs::FileType) -> Self {
-        if file_type.is_symlink() {
-            Self::Symlink
-        } else if file_type.is_file() {
-            Self::RegularFile
-        } else if file_type.is_dir() {
-            Self::Directory
-        } else {
-            Self::Other
-        }
-    }
 }
 
 /// One directory entry, named relative to the repository root.
@@ -67,103 +61,174 @@ pub struct RootedDirEntry {
     pub kind: RootedEntryKind,
 }
 
+/// A root descriptor obtained from whichever authority the root carries.
+///
+/// An anchored root lends the descriptor it already retains. A path-backed root has one opened for it, and
+/// that single open is the only time a name is resolved: every component after it is reached relative to
+/// the descriptor. Both cases then run the same no-follow implementation, so a configured root is exactly
+/// as safe as a selected one.
+#[cfg(unix)]
+pub(crate) enum RootHandle<'a> {
+    Borrowed(&'a File),
+    Owned(File),
+}
+
+#[cfg(unix)]
+impl RootHandle<'_> {
+    pub(crate) fn as_file(&self) -> &File {
+        match self {
+            Self::Borrowed(file) => file,
+            Self::Owned(file) => file,
+        }
+    }
+}
+
+/// Obtain a root descriptor for either authority.
+///
+/// Crate-visible so Git path confinement can walk from the same descriptor these primitives use, which is
+/// what keeps confinement and the operation it guards on one authority.
+#[cfg(unix)]
+pub(crate) fn root_descriptor(
+    root: RepositoryRoot<'_>,
+) -> Result<RootHandle<'_>, ContextPatchError> {
+    root_handle(root)
+}
+
+#[cfg(unix)]
+fn root_handle(root: RepositoryRoot<'_>) -> Result<RootHandle<'_>, ContextPatchError> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if let Some(directory) = root.directory() {
+        return Ok(RootHandle::Borrowed(directory));
+    }
+    let logical_path = root.logical_path();
+    let opened = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(logical_path)
+        .map_err(|error| {
+            ContextPatchError::new(format!(
+                "failed to open repository root {} without following symlinks: {error}",
+                logical_path.display()
+            ))
+        })?;
+    Ok(RootHandle::Owned(opened))
+}
+
+#[cfg(not(unix))]
+fn unsupported_rooted_filesystem() -> ContextPatchError {
+    ContextPatchError::new("guarded repository file access requires descriptor-relative operations")
+}
+
 /// Inspect one entry without following a final symlink, reporting absence as `None`.
+///
+/// The final component is inspected rather than opened, which is what lets a symlink be *reported* as a
+/// symlink instead of being refused. Listing and metadata want that distinction; the operations that read
+/// or mutate do not, and they refuse instead.
 pub fn entry_kind(
     root: RepositoryRoot<'_>,
     relative: &str,
 ) -> Result<Option<RootedEntryKind>, ContextPatchError> {
     #[cfg(unix)]
-    if let Some(directory) = root.directory() {
-        let Some(parent) = open_parent(directory, relative)? else {
-            return Ok(None);
-        };
-        let leaf = leaf_name(relative)?;
-        return Ok(stat_at(&parent, &leaf, relative)?.map(RootedEntryKind::from_mode));
+    {
+        entry_kind_raw(root, relative)
+            .map_err(|error| ContextPatchError::new(format!("failed to inspect `{relative}`: {error}")))
     }
 
-    match std::fs::symlink_metadata(joined(root, relative)) {
-        Ok(metadata) => Ok(Some(RootedEntryKind::from_file_type(metadata.file_type()))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(ContextPatchError::new(format!(
-            "failed to inspect `{relative}`: {error}"
-        ))),
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative);
+        Err(unsupported_rooted_filesystem())
     }
 }
 
-/// Whether one entry is a regular file.
+/// The same inspection, reporting the raw I/O failure.
 ///
-/// The path-backed branch follows symlinks, matching `Path::is_file`. The anchored branch does not, so a
-/// symlink is reported as not a regular file rather than as whatever it points at.
+/// Verification steps interpolate the I/O error into refusal text they own, so handing it back unworded is
+/// what keeps those strings byte-identical rather than nesting one message inside another.
+#[cfg(unix)]
+pub fn entry_kind_raw(
+    root: RepositoryRoot<'_>,
+    relative: &str,
+) -> Result<Option<RootedEntryKind>, std::io::Error> {
+    let handle = root_handle(root).map_err(io_error)?;
+    let Some(parent) = open_parent(handle.as_file(), relative).map_err(io_error)? else {
+        return Ok(None);
+    };
+    let leaf = leaf_name(relative).map_err(io_error)?;
+    Ok(stat_at_raw(&parent, &leaf)?.map(RootedEntryKind::from_mode))
+}
+
+/// Whether one entry is a regular file, without following a final symlink.
+///
+/// A symlink is reported as not a regular file rather than as whatever it points at, under either
+/// authority. Following one would mean resolving a name, which is the thing this module exists to avoid.
 pub fn is_regular_file(root: RepositoryRoot<'_>, relative: &str) -> Result<bool, ContextPatchError> {
-    #[cfg(unix)]
-    if root.is_anchored() {
-        return Ok(entry_kind(root, relative)? == Some(RootedEntryKind::RegularFile));
-    }
-
-    Ok(joined(root, relative).is_file())
+    Ok(entry_kind(root, relative)? == Some(RootedEntryKind::RegularFile))
 }
 
-/// Whether one entry is a directory.
+/// Whether one entry is a directory, without following a final symlink.
 pub fn is_directory(root: RepositoryRoot<'_>, relative: &str) -> Result<bool, ContextPatchError> {
-    #[cfg(unix)]
-    if root.is_anchored() {
-        return Ok(entry_kind(root, relative)? == Some(RootedEntryKind::Directory));
-    }
-
-    Ok(joined(root, relative).is_dir())
+    Ok(entry_kind(root, relative)? == Some(RootedEntryKind::Directory))
 }
 
-/// Whether one entry exists at all.
+/// Whether one entry exists at all, counting a symlink as present.
 pub fn exists(root: RepositoryRoot<'_>, relative: &str) -> Result<bool, ContextPatchError> {
-    #[cfg(unix)]
-    if root.is_anchored() {
-        return Ok(entry_kind(root, relative)?.is_some());
-    }
-
-    Ok(joined(root, relative).exists())
+    Ok(entry_kind(root, relative)?.is_some())
 }
 
 /// Open one regular file for reading, refusing anything that is not one.
 ///
-/// The anchored branch opens the leaf relative to its parent descriptor with `O_NOFOLLOW`, so neither the
-/// parent chain nor the leaf can be redirected between the check and the read.
+/// The leaf is opened relative to its parent descriptor with `O_NOFOLLOW`, so neither the parent chain nor
+/// the leaf can be redirected between the check and the read.
 pub fn open_regular_file(
     root: RepositoryRoot<'_>,
     relative: &str,
 ) -> Result<std::fs::File, ContextPatchError> {
     #[cfg(unix)]
-    if let Some(directory) = root.directory() {
-        let parent = open_parent(directory, relative)?.ok_or_else(|| {
+    {
+        let handle = root_handle(root)?;
+        let parent = open_parent(handle.as_file(), relative)?.ok_or_else(|| {
             ContextPatchError::new(format!("`{relative}` is not an existing regular file"))
         })?;
         let leaf = leaf_name(relative)?;
-        return open_regular_at(&parent, &leaf, relative);
+        open_regular_at(&parent, &leaf, relative)
     }
 
-    let target = joined(root, relative);
-    std::fs::File::open(&target).map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to open {} for hashing: {error}",
-            target.display()
-        ))
-    })
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative);
+        Err(unsupported_rooted_filesystem())
+    }
 }
 
 /// Hash one regular file's contents through the same authority that will act on it.
 ///
 /// Reading through an already-open descriptor is what makes the hash and the mutation refer to one file:
 /// a replacement after this point changes the name's target, not the bytes that were hashed.
+///
+/// Both failure renderings match `crate::fs::hash::sha256_file` exactly, including the absolute path,
+/// because callers that moved onto this primitive must not have their refusal text move with them. The
+/// logical path is used for the message only, never to reach the file.
 pub fn sha256(root: RepositoryRoot<'_>, relative: &str) -> Result<String, ContextPatchError> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
-    let mut file = open_regular_file(root, relative)?;
+    let mut file = open_regular_file(root, relative).map_err(|error| {
+        ContextPatchError::new(format!(
+            "failed to open {} for hashing: {error}",
+            displayed(root, relative)
+        ))
+    })?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| ContextPatchError::new(format!("failed to hash `{relative}`: {error}")))?;
+        let read = file.read(&mut buffer).map_err(|error| {
+            ContextPatchError::new(format!(
+                "failed to hash {}: {error}",
+                displayed(root, relative)
+            ))
+        })?;
         if read == 0 {
             break;
         }
@@ -174,21 +239,18 @@ pub fn sha256(root: RepositoryRoot<'_>, relative: &str) -> Result<String, Contex
 
 /// Rename one entry to another, both resolved through the root's authority.
 ///
-/// The anchored branch resolves each side to its own parent descriptor and issues one `renameat`, so
-/// neither parent chain can be substituted between resolving the two sides and performing the move.
-pub fn rename(
-    root: RepositoryRoot<'_>,
-    from: &str,
-    to: &str,
-) -> Result<(), std::io::Error> {
+/// Each side is resolved to its own parent descriptor and one `renameat` performs the move, so neither
+/// parent chain can be substituted between resolving the two sides and performing it.
+pub fn rename(root: RepositoryRoot<'_>, from: &str, to: &str) -> Result<(), std::io::Error> {
     #[cfg(unix)]
-    if let Some(directory) = root.directory() {
+    {
         use std::os::fd::AsRawFd;
 
-        let from_parent = open_parent(directory, from)
+        let handle = root_handle(root).map_err(io_error)?;
+        let from_parent = open_parent(handle.as_file(), from)
             .map_err(io_error)?
             .ok_or_else(missing_entry)?;
-        let to_parent = open_parent(directory, to)
+        let to_parent = open_parent(handle.as_file(), to)
             .map_err(io_error)?
             .ok_or_else(missing_entry)?;
         let from_leaf = leaf_name(from).map_err(io_error)?;
@@ -205,81 +267,86 @@ pub fn rename(
         if status != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        return Ok(());
+        Ok(())
     }
 
-    std::fs::rename(joined(root, from), joined(root, to))
+    #[cfg(not(unix))]
+    {
+        let _ = (root, from, to);
+        Err(io_unsupported())
+    }
 }
 
 /// Remove one file, resolved through the root's authority.
 pub fn remove_file(root: RepositoryRoot<'_>, relative: &str) -> Result<(), std::io::Error> {
     #[cfg(unix)]
-    if let Some(directory) = root.directory() {
-        return unlink_at(directory, relative, 0);
+    {
+        unlink_at(root, relative, 0)
     }
 
-    std::fs::remove_file(joined(root, relative))
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative);
+        Err(io_unsupported())
+    }
 }
 
 /// Remove one empty directory, resolved through the root's authority.
 pub fn remove_dir(root: RepositoryRoot<'_>, relative: &str) -> Result<(), std::io::Error> {
     #[cfg(unix)]
-    if let Some(directory) = root.directory() {
-        return unlink_at(directory, relative, libc::AT_REMOVEDIR);
+    {
+        unlink_at(root, relative, libc::AT_REMOVEDIR)
     }
 
-    std::fs::remove_dir(joined(root, relative))
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative);
+        Err(io_unsupported())
+    }
 }
 
 /// Remove one directory and everything beneath it, resolved through the root's authority.
 ///
-/// The anchored branch descends with descriptor-relative reads and refuses a symlink anywhere in the tree,
-/// so a recursive removal cannot be redirected out of the repository part way down.
+/// The descent uses descriptor-relative reads and unlinks a symlink rather than following it, so a
+/// recursive removal cannot be redirected out of the repository part way down.
 pub fn remove_dir_all(root: RepositoryRoot<'_>, relative: &str) -> Result<(), std::io::Error> {
     #[cfg(unix)]
-    if root.is_anchored() {
-        let entries = read_dir(root, relative).map_err(io_error)?;
-        for entry in entries {
+    {
+        for entry in read_dir(root, relative).map_err(io_error)? {
             match entry.kind {
                 RootedEntryKind::Directory => remove_dir_all(root, &entry.relative)?,
                 _ => remove_file(root, &entry.relative)?,
             }
         }
-        return remove_dir(root, relative);
+        remove_dir(root, relative)
     }
 
-    std::fs::remove_dir_all(joined(root, relative))
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative);
+        Err(io_unsupported())
+    }
 }
 
 /// List one directory's entries, named relative to the repository root.
+///
+/// Entry types are established with `fstatat` and no-follow, so a symlink is reported as a symlink rather
+/// than as whatever it points at. That is deliberate: listing and metadata want to describe what is there.
 pub fn read_dir(
     root: RepositoryRoot<'_>,
     relative: &str,
 ) -> Result<Vec<RootedDirEntry>, ContextPatchError> {
     #[cfg(unix)]
-    if let Some(directory) = root.directory() {
-        return read_dir_anchored(directory, relative);
+    {
+        let handle = root_handle(root)?;
+        read_dir_anchored(handle.as_file(), relative)
     }
 
-    let target = joined(root, relative);
-    let mut entries = Vec::new();
-    for entry in std::fs::read_dir(&target)
-        .map_err(|error| ContextPatchError::new(format!("failed to read `{relative}`: {error}")))?
+    #[cfg(not(unix))]
     {
-        let entry = entry.map_err(|error| {
-            ContextPatchError::new(format!("failed to read entry under `{relative}`: {error}"))
-        })?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let child = format!("{relative}/{name}");
-        let file_type = entry.file_type().map_err(|error| {
-            ContextPatchError::new(format!("failed to inspect `{child}`: {error}"))
-        })?;
-        entries.push(RootedDirEntry {
-            relative: child,
-            kind: RootedEntryKind::from_file_type(file_type),
-        });
+        let _ = (root, relative);
+        Err(unsupported_rooted_filesystem())
     }
-    Ok(entries)
 }
 
 /// Whether one directory holds no entries.
@@ -290,8 +357,17 @@ pub fn directory_is_empty(
     Ok(read_dir(root, relative)?.is_empty())
 }
 
-fn joined(root: RepositoryRoot<'_>, relative: &str) -> std::path::PathBuf {
-    root.logical_path().join(Path::new(relative))
+/// The absolute spelling of one entry, for messages only.
+///
+/// Never used to reach a file. It exists so refusal text can keep naming the path a caller would recognize
+/// while the operation underneath it works from a descriptor.
+fn displayed(root: RepositoryRoot<'_>, relative: &str) -> String {
+    root.logical_path().join(Path::new(relative)).display().to_string()
+}
+
+#[cfg(not(unix))]
+fn io_unsupported() -> std::io::Error {
+    std::io::Error::other("guarded repository file access requires descriptor-relative operations")
 }
 
 #[cfg(unix)]
@@ -381,11 +457,10 @@ fn component_failure(
 }
 
 #[cfg(unix)]
-fn stat_at(
+fn stat_at_raw(
     parent: &File,
     name: &std::ffi::CStr,
-    relative: &str,
-) -> Result<Option<libc::mode_t>, ContextPatchError> {
+) -> Result<Option<libc::mode_t>, std::io::Error> {
     use std::os::fd::AsRawFd;
 
     let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -402,11 +477,19 @@ fn stat_at(
         if error.kind() == std::io::ErrorKind::NotFound {
             return Ok(None);
         }
-        return Err(ContextPatchError::new(format!(
-            "failed to inspect `{relative}`: {error}"
-        )));
+        return Err(error);
     }
     Ok(Some(unsafe { status.assume_init() }.st_mode))
+}
+
+#[cfg(unix)]
+fn stat_at(
+    parent: &File,
+    name: &std::ffi::CStr,
+    relative: &str,
+) -> Result<Option<libc::mode_t>, ContextPatchError> {
+    stat_at_raw(parent, name)
+        .map_err(|error| ContextPatchError::new(format!("failed to inspect `{relative}`: {error}")))
 }
 
 #[cfg(unix)]
@@ -447,13 +530,14 @@ fn open_regular_at(
 
 #[cfg(unix)]
 fn unlink_at(
-    directory: &File,
+    root: RepositoryRoot<'_>,
     relative: &str,
     flags: libc::c_int,
 ) -> Result<(), std::io::Error> {
     use std::os::fd::AsRawFd;
 
-    let parent = open_parent(directory, relative)
+    let handle = root_handle(root).map_err(io_error)?;
+    let parent = open_parent(handle.as_file(), relative)
         .map_err(io_error)?
         .ok_or_else(missing_entry)?;
     let leaf = leaf_name(relative).map_err(io_error)?;
@@ -631,21 +715,33 @@ mod tests {
     }
 
     #[test]
-    fn a_symlink_leaf_is_a_regular_file_by_name_and_not_by_descriptor() {
+    fn a_symlink_leaf_is_refused_under_either_authority() {
+        // This replaces an earlier test that asserted the two authorities differ here. They no longer do:
+        // following a symlink means resolving a name, and neither authority does that any more. The link is
+        // still *reported* as a link, because listing and metadata need to describe what is present.
         let root = test_root("symlink-leaf");
         fs::write(root.join("real.txt"), "content\n").unwrap();
         symlink("real.txt", root.join("link.txt")).unwrap();
         let directory = open_directory(&root);
-
-        // The name follows the link and answers about its target.
-        assert!(is_regular_file(RepositoryRoot::from_path(&root), "link.txt").unwrap());
-        // The descriptor does not, so a link cannot stand in for the file it points at.
+        let named = RepositoryRoot::from_path(&root);
         let anchored = RepositoryRoot::anchored(&root, &directory);
-        assert!(!is_regular_file(anchored, "link.txt").unwrap());
-        assert_eq!(
-            entry_kind(anchored, "link.txt").unwrap(),
-            Some(RootedEntryKind::Symlink)
-        );
+
+        for (label, root) in [("path-backed", named), ("anchored", anchored)] {
+            assert!(
+                !is_regular_file(root, "link.txt").unwrap(),
+                "{label}: a symlink must not pass as a regular file"
+            );
+            assert_eq!(
+                entry_kind(root, "link.txt").unwrap(),
+                Some(RootedEntryKind::Symlink),
+                "{label}: inspection still reports the link as a link"
+            );
+            // Reading refuses rather than silently following through to the target.
+            let error = sha256(root, "link.txt").unwrap_err().to_string();
+            assert!(error.contains("for hashing"), "{label}: {error}");
+            // The target itself is still reachable by its own name.
+            assert!(is_regular_file(root, "real.txt").unwrap(), "{label}");
+        }
     }
 
     #[test]
@@ -683,10 +779,24 @@ mod tests {
             sha256(RepositoryRoot::anchored(&root, &directory), "tracked.txt").unwrap(),
             sha256_bytes(b"anchored\n")
         );
-        // The name now reaches the replacement, which is the substitution the descriptor prevents.
+        // The name now points at a symlink, and a path-backed root refuses to open one as its root rather
+        // than following it to the replacement. Before the authorities were unified this read succeeded and
+        // returned the replacement's content, which is the substitution this refusal closes.
+        let error = sha256(RepositoryRoot::from_path(&root), "tracked.txt")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("without following symlinks"),
+            "a symlinked root is refused rather than followed: {error}"
+        );
+        assert!(
+            !error.contains("replacement"),
+            "the refusal must not have reached the replacement: {error}"
+        );
         assert_eq!(
-            sha256(RepositoryRoot::from_path(&root), "tracked.txt").unwrap(),
-            sha256_bytes(b"replacement\n")
+            fs::read_to_string(replacement.join("tracked.txt")).unwrap(),
+            "replacement\n",
+            "the replacement repository must be untouched"
         );
     }
 
@@ -815,7 +925,9 @@ mod tests {
     }
 
     #[test]
-    fn a_path_backed_root_keeps_its_existing_behavior() {
+    fn a_path_backed_root_runs_the_same_no_follow_implementation() {
+        // The compatibility branch is gone, so a configured root reaches its entries through a descriptor it
+        // opens once. Ordinary work is unaffected; what changed is that nothing here follows a link.
         let root = test_root("path-backed");
         fs::create_dir(root.join("nested")).unwrap();
         fs::write(root.join("nested").join("file.txt"), "content\n").unwrap();
@@ -827,6 +939,17 @@ mod tests {
             sha256(named, "nested/file.txt").unwrap(),
             sha256_bytes(b"content\n")
         );
+
+        // An intermediate symlink is refused for a configured root exactly as for a selected one.
+        let outside = test_root("path-backed-outside");
+        fs::write(outside.join("secret.txt"), "outside\n").unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+        let error = sha256(named, "escape/secret.txt").unwrap_err().to_string();
+        assert!(
+            error.contains("contains symlink component `escape`"),
+            "{error}"
+        );
+        assert!(outside.join("secret.txt").exists());
 
         remove_file(named, "nested/file.txt").unwrap();
         assert!(!root.join("nested").join("file.txt").exists());

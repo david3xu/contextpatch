@@ -349,42 +349,19 @@ pub fn required_files_in_ref<'a>(
 
 /// Require a named path to exist in the worktree and stay inside the root.
 ///
-/// An anchored root establishes both facts through its retained descriptor: confinement walks the
-/// components descriptor-relative, and the presence check inspects the leaf through the same authority. A
-/// path-backed root keeps the resolve-and-compare form it has always used, so its refusals are unchanged.
+/// Confinement and presence are both established through the root's descriptor authority, under either
+/// authority, so the file confirmed present is the file inside the directory that was selected rather than
+/// whatever the name resolves to by the time the check runs.
 pub fn required_file_present<'a>(
     root: impl Into<crate::git::root::RepositoryRoot<'a>>,
     raw: &str,
 ) -> Result<String, ContextPatchError> {
     let root = root.into();
     required_file_path_syntax(raw)?;
-
-    #[cfg(unix)]
-    if root.is_anchored() {
-        // Confinement and the presence check share one authority, so the file confirmed present is the
-        // file inside the directory that was selected rather than whatever the name resolves to now.
-        crate::git::validate::git_path(root, raw)?;
-        if !crate::fs::rooted::is_regular_file(root, raw)? {
-            return Err(ContextPatchError::new(format!(
-                "required file `{raw}` is missing after branch preparation"
-            )));
-        }
-        return Ok(raw.to_string());
-    }
-
-    let root = root.logical_path();
-    let candidate = root.join(Path::new(raw));
-    if !candidate.is_file() {
+    crate::git::validate::git_path(root, raw)?;
+    if !crate::fs::rooted::is_regular_file(root, raw)? {
         return Err(ContextPatchError::new(format!(
             "required file `{raw}` is missing after branch preparation"
-        )));
-    }
-    let resolved = candidate.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!("failed to resolve required file `{raw}`: {error}"))
-    })?;
-    if !resolved.starts_with(root) {
-        return Err(ContextPatchError::new(format!(
-            "required file `{raw}` resolves outside repository root"
         )));
     }
     Ok(raw.to_string())
