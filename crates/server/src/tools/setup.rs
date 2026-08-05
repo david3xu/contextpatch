@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::tools;
 use crate::tools::common::{optional_bool, optional_string, optional_u64, required_string};
 
-pub(crate) fn call_setup_profile_run(
-    repo_root: &Path,
+pub(crate) fn call_setup_profile_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let profile = required_string(arguments, "profile")?;
@@ -23,7 +23,7 @@ pub(crate) fn call_setup_profile_run(
     let confirm = optional_string(arguments, "confirm")?;
 
     let result = setup_profile_run(
-        repo_root,
+        repository_root,
         cwd.map(Path::new),
         profile,
         action,

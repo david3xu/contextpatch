@@ -345,7 +345,7 @@ fn call_tool(
             tools::process::call_validation_profile_run(repo_root, arguments)
         }
         tools::setup_profile_run::NAME => {
-            tools::setup::call_setup_profile_run(repo_root, arguments)
+            tools::setup::call_setup_profile_run(repository.root(), arguments)
         }
         tools::native_build_run::NAME => tools::native::call_native_build_run(repo_root, arguments),
         tools::native_device_run::NAME => {

@@ -49,8 +49,8 @@ impl BoundedProcessOutput {
     }
 }
 
-pub(crate) fn run_no_shell_command(
-    cwd: &Path,
+pub(crate) fn run_no_shell_command<'a>(
+    cwd: impl Into<CommandCwd<'a>>,
     program: &str,
     args: &[String],
     timeout: Duration,
@@ -607,6 +607,12 @@ pub(crate) struct ChildCwd {
     #[cfg(unix)]
     directory: std::fs::File,
     logical_path: PathBuf,
+    /// The same directory named relative to the repository root.
+    ///
+    /// Carried so a caller that must *inspect* the working directory can do so through the root's authority
+    /// instead of through this directory's name. Without it a caller would have to join the logical path,
+    /// which is the reopen the anchoring effort removes.
+    relative: String,
 }
 
 impl ChildCwd {
@@ -628,6 +634,14 @@ impl ChildCwd {
     /// The name to report, never used to reach the directory.
     pub(crate) fn logical_path(&self) -> &Path {
         &self.logical_path
+    }
+
+    /// The working directory relative to the repository root, for inspections that go through the root.
+    ///
+    /// Empty when the working directory is the root itself, which is the spelling the rooted primitives
+    /// already take for the root.
+    pub(crate) fn relative(&self) -> &str {
+        &self.relative
     }
 }
 
@@ -669,6 +683,7 @@ pub(crate) fn resolve_child_cwd(
         Ok(ChildCwd {
             directory,
             logical_path,
+            relative,
         })
     }
 

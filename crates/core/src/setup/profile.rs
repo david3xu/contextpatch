@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::error::ContextPatchError;
 use crate::git::status::{dirty_paths, status_short};
 use crate::process::runner::{
-    checked_timeout, resolve_cwd, run_no_shell_command, validate_common_command_shape,
+    checked_timeout, resolve_child_cwd, run_no_shell_command, validate_common_command_shape,
 };
 use crate::setup::node_capacitor;
 use crate::setup::plan::{SetupExecution, SetupProfileResult};
@@ -41,8 +41,8 @@ impl CapacitorPlatform {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn setup_profile_run(
-    repo_root: &Path,
+pub fn setup_profile_run<'a>(
+    repository_root: impl Into<crate::git::RepositoryRoot<'a>>,
     cwd: Option<&Path>,
     profile: &str,
     action: &str,
@@ -51,13 +51,11 @@ pub fn setup_profile_run(
     dry_run: bool,
     confirm: Option<&str>,
 ) -> Result<SetupProfileResult, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
-    let cwd = resolve_cwd(&root, cwd)?;
+    // Planning, the cleanliness check, execution, and the after check all derive from one authority, so a
+    // profile cannot be planned against one repository and run in another. The working directory is opened
+    // relative to the root descriptor and held until every child has been spawned.
+    let root = repository_root.into();
+    let cwd = resolve_child_cwd(root, cwd)?;
     let timeout = checked_timeout(timeout_secs)?;
 
     if !dry_run && confirm != Some(SETUP_MUTATION_CONFIRMATION) {
@@ -67,7 +65,7 @@ pub fn setup_profile_run(
     }
 
     let plan = match profile {
-        node_capacitor::PROFILE => node_capacitor::plan(&cwd, action, params)?,
+        node_capacitor::PROFILE => node_capacitor::plan(root, cwd.relative(), action, params)?,
         _ => {
             return Err(ContextPatchError::new(format!(
                 "setup_profile_run refused: unknown profile `{profile}`"
@@ -81,20 +79,20 @@ pub fn setup_profile_run(
     let execution = if dry_run {
         None
     } else {
-        let before_paths = dirty_paths(&root)?;
+        let before_paths = dirty_paths(root)?;
         if !before_paths.is_empty() {
             return Err(ContextPatchError::new(format!(
                 "setup_profile_run refused: worktree must be clean before external setup mutation\n{}",
                 before_paths.into_iter().collect::<Vec<_>>().join("\n")
             )));
         }
-        let status_before = status_short(&root)?;
+        let status_before = status_short(root)?;
         let outputs = plan
             .commands
             .iter()
             .map(|command| {
                 run_no_shell_command(
-                    &cwd,
+                    cwd.command_cwd(),
                     &command.program,
                     &command.args,
                     timeout,
@@ -102,8 +100,8 @@ pub fn setup_profile_run(
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let status_after = status_short(&root)?;
-        let changed_paths = dirty_paths(&root)?.into_iter().collect::<Vec<_>>();
+        let status_after = status_short(root)?;
+        let changed_paths = dirty_paths(root)?.into_iter().collect::<Vec<_>>();
         let unexpected =
             unexpected_changed_paths(&changed_paths, &plan.expected_changed_path_classes);
         if !unexpected.is_empty() {
@@ -157,7 +155,7 @@ pub fn setup_profile_run(
         profile: profile.to_string(),
         action: action.to_string(),
         dry_run,
-        cwd,
+        cwd: cwd.logical_path().to_path_buf(),
         plan,
         execution,
         required_confirm_for_mutation: SETUP_MUTATION_CONFIRMATION,

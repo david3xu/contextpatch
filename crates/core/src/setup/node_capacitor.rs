@@ -1,6 +1,5 @@
-use std::path::Path;
-
 use crate::error::ContextPatchError;
+use crate::git::RepositoryRoot;
 use crate::setup::plan::{CommandPlan, PlannedCommand};
 use crate::setup::profile::{
     require_no_params, validate_non_empty_single_line, validate_relative_path_param,
@@ -9,12 +8,22 @@ use crate::setup::profile::{
 
 pub(crate) const PROFILE: &str = "node-capacitor-shell";
 
+const PNPM_LOCKFILE: &str = "pnpm-lock.yaml";
+const PODFILE: &str = "Podfile";
+
+/// Plan one setup action for a project rooted at `cwd_relative` inside `root`.
+///
+/// The project is inspected through the repository's own authority, named relative to the root rather than
+/// by joining the working directory's path. A lockfile or Podfile therefore decides the plan only when it is
+/// a regular file inside the repository that was selected: a symlink is not followed, and a sibling
+/// repository with the same layout cannot answer for this one.
 pub(crate) fn plan(
-    cwd: &Path,
+    root: RepositoryRoot<'_>,
+    cwd_relative: &str,
     action: &str,
     params: SetupActionParams,
 ) -> Result<CommandPlan, ContextPatchError> {
-    let package_manager = detect_package_manager(cwd);
+    let package_manager = detect_package_manager(root, cwd_relative)?;
     match action {
         "install_capacitor_dependencies" => {
             require_no_params(action, params)?;
@@ -110,7 +119,7 @@ pub(crate) fn plan(
         }
         "ios_pod_install" => {
             require_no_params(action, params)?;
-            if !cwd.join("Podfile").is_file() {
+            if !crate::fs::rooted::is_regular_file(root, &project_relative(cwd_relative, PODFILE))? {
                 return Err(ContextPatchError::new(
                     "setup_profile_run refused: ios_pod_install requires a Podfile in cwd; Swift Package Manager based Capacitor projects do not need CocoaPods",
                 ));
@@ -189,12 +198,26 @@ impl PackageManager {
     }
 }
 
-fn detect_package_manager(cwd: &Path) -> PackageManager {
-    if cwd.join("pnpm-lock.yaml").is_file() {
-        PackageManager::Pnpm
+fn detect_package_manager(
+    root: RepositoryRoot<'_>,
+    cwd_relative: &str,
+) -> Result<PackageManager, ContextPatchError> {
+    if crate::fs::rooted::is_regular_file(root, &project_relative(cwd_relative, PNPM_LOCKFILE))? {
+        Ok(PackageManager::Pnpm)
     } else {
-        PackageManager::Npm
+        Ok(PackageManager::Npm)
     }
+}
+
+/// Name one project file relative to the repository root.
+///
+/// The working directory is already root relative, so this is string composition rather than path
+/// resolution: nothing here reaches the filesystem.
+fn project_relative(cwd_relative: &str, file_name: &str) -> String {
+    if cwd_relative.is_empty() {
+        return file_name.to_string();
+    }
+    format!("{cwd_relative}/{file_name}")
 }
 
 fn validate_app_id(app_id: &str) -> Result<(), ContextPatchError> {

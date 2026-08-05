@@ -1850,3 +1850,198 @@ fn project_dispatch_refuses_symlinked_fixtures_without_reaching_outside_the_sele
     assert!(!outside.join("fixture_manifest.json").exists());
     assert!(!decoy.join(FIXTURE_MANIFEST_PATH).exists());
 }
+
+// ---------------------------------------------------------------------------
+// Setup profile authority
+// ---------------------------------------------------------------------------
+
+const SETUP_PROFILE: &str = "node-capacitor-shell";
+const SETUP_CONFIRMATION: &str = "run setup profile";
+const PNPM_LOCKFILE: &str = "pnpm-lock.yaml";
+const IOS_PROJECT_DIR: &str = "ios/App";
+const PODFILE: &str = "Podfile";
+
+/// Which project markers a selectable setup repository carries.
+///
+/// Named fields rather than bare booleans so a call site says which marker it is asking for, since the two
+/// drive different parts of the plan.
+struct SetupLayout {
+    pnpm: bool,
+    podfile: bool,
+}
+
+/// A selectable repository holding a Node project, with the iOS directory present either way.
+///
+/// The directory exists in both repositories so a Podfile refusal comes from the missing Podfile rather than
+/// from a working directory that could not be opened.
+fn setup_repo(
+    workspace: &std::path::Path,
+    name: &str,
+    layout: SetupLayout,
+) -> std::path::PathBuf {
+    let repo = workspace.join(name);
+    fs::create_dir_all(repo.join(IOS_PROJECT_DIR)).unwrap();
+    init_git_repo(&repo);
+    fs::write(repo.join("package.json"), "{}\n").unwrap();
+    if layout.pnpm {
+        fs::write(repo.join(PNPM_LOCKFILE), "lockfileVersion: '9.0'\n").unwrap();
+    }
+    if layout.podfile {
+        fs::write(
+            repo.join(IOS_PROJECT_DIR).join(PODFILE),
+            "target 'App' do\nend\n",
+        )
+        .unwrap();
+    }
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", "initial"]);
+    repo
+}
+
+fn setup_action(action: &str, extra: &str) -> String {
+    format!(r#"{{"profile":"{SETUP_PROFILE}","action":"{action}"{extra}}}"#)
+}
+
+fn setup_plan_arguments(action: &str) -> String {
+    setup_action(action, r#","dry_run":true,"timeout_secs":30"#)
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_plans_setup_profiles_from_the_selected_repository() {
+    let workspace = temp_root("project_setup_profiles");
+    let target = setup_repo(
+        &workspace,
+        "target",
+        SetupLayout {
+            pnpm: true,
+            podfile: true,
+        },
+    );
+    let decoy = setup_repo(
+        &workspace,
+        "decoy",
+        SetupLayout {
+            pnpm: false,
+            podfile: false,
+        },
+    );
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // The package manager is decided by the selected repository's own lockfile, in both directions.
+    for (selected, expected, other) in [("target", "pnpm", "npm"), ("decoy", "npm", "pnpm")] {
+        let planned = server.exchange(&file_action(
+            selected,
+            "setup_profile_run",
+            &setup_plan_arguments("install_capacitor_dependencies"),
+        ));
+        let text = response_text(&planned).to_string();
+        assert!(
+            text.contains(&format!("commands: {expected} ")),
+            "the selected repository's lockfile chose the package manager: {text}"
+        );
+        assert!(
+            !text.contains(&format!("commands: {other} ")),
+            "the sibling's layout must not decide the plan: {text}"
+        );
+    }
+
+    // A Podfile is looked for inside the selected repository's working directory, and its absence refuses
+    // even though a sibling has one.
+    let pods = server.exchange(&file_action(
+        "target",
+        "setup_profile_run",
+        &setup_action(
+            "ios_pod_install",
+            &format!(r#","cwd":"{IOS_PROJECT_DIR}","dry_run":true,"timeout_secs":30"#),
+        ),
+    ));
+    assert_text(&pods, "command: pod install");
+    assert_text(&pods, IOS_PROJECT_DIR);
+
+    let missing_pods = server.exchange(&file_action(
+        "decoy",
+        "setup_profile_run",
+        &setup_action(
+            "ios_pod_install",
+            &format!(r#","cwd":"{IOS_PROJECT_DIR}","dry_run":true,"timeout_secs":30"#),
+        ),
+    ));
+    assert_eq!(missing_pods["result"]["isError"], true);
+    assert_text(&missing_pods, "requires a Podfile");
+
+    // The gate that runs before any external command reads the selected repository's status, so each
+    // refusal names its own dirty path and nothing is executed.
+    fs::write(target.join("target-dirty.txt"), "x\n").unwrap();
+    fs::write(decoy.join("decoy-dirty.txt"), "x\n").unwrap();
+    for (selected, other) in [("target", "decoy"), ("decoy", "target")] {
+        let blocked = server.exchange(&file_action(
+            selected,
+            "setup_profile_run",
+            &setup_action(
+                "install_capacitor_dependencies",
+                &format!(
+                    r#","dry_run":false,"confirm":"{SETUP_CONFIRMATION}","timeout_secs":30"#
+                ),
+            ),
+        ));
+        let text = response_text(&blocked).to_string();
+        assert_eq!(blocked["result"]["isError"], true, "{text}");
+        assert!(text.contains("worktree must be clean"), "{text}");
+        assert!(
+            text.contains(&format!("{selected}-dirty.txt")),
+            "the refusal reports the selected repository's status: {text}"
+        );
+        assert!(
+            !text.contains(&format!("{other}-dirty.txt")),
+            "the sibling's status must not appear: {text}"
+        );
+    }
+    server.finish();
+
+    // Renaming the repository does not change what it is. Planning still reads its lockfile under the new
+    // name, because the plan follows the directory rather than the spelling.
+    fs::remove_file(target.join("target-dirty.txt")).unwrap();
+    fs::remove_file(decoy.join("decoy-dirty.txt")).unwrap();
+    let renamed = workspace.join("renamed");
+    fs::rename(&target, &renamed).unwrap();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+    let after_rename = server.exchange(&file_action(
+        "renamed",
+        "setup_profile_run",
+        &setup_plan_arguments("install_capacitor_dependencies"),
+    ));
+    assert_text(&after_rename, "commands: pnpm ");
+
+    // A different repository taking over the name is refused rather than planned from, even though it is a
+    // valid worktree whose own layout would have produced a different plan.
+    let holder = temp_root("project_setup_profiles_holder");
+    let moved = holder.join("moved");
+    fs::rename(&renamed, &moved).unwrap();
+    let replacement = holder.join("replacement");
+    fs::create_dir_all(replacement.join(IOS_PROJECT_DIR)).unwrap();
+    init_git_repo(&replacement);
+    fs::write(replacement.join("package.json"), "{}\n").unwrap();
+    git(&replacement, &["add", "."]);
+    git(&replacement, &["commit", "--quiet", "-m", "replacement"]);
+    std::os::unix::fs::symlink(&replacement, &renamed).unwrap();
+
+    let replaced = server.exchange(&file_action(
+        "renamed",
+        "setup_profile_run",
+        &setup_plan_arguments("install_capacitor_dependencies"),
+    ));
+    server.finish();
+    let text = response_text(&replaced).to_string();
+    assert_eq!(replaced["result"]["isError"], true, "{text}");
+    assert!(
+        !text.contains("commands: npm"),
+        "a replacement reached through the old name must not be planned from: {text}"
+    );
+
+    // The directory that was selected is intact, and the replacement was never planned or run in.
+    assert!(moved.join(PNPM_LOCKFILE).is_file());
+    assert!(!replacement.join(PNPM_LOCKFILE).exists());
+    assert!(!replacement.join("node_modules").exists());
+}
