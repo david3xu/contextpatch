@@ -78,8 +78,8 @@ pub fn replace_exact(
     replace_exact_in_root(&repo_root, path, old, new)
 }
 
-pub fn replace_exact_in_root(
-    repo_root: &Path,
+pub fn replace_exact_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     old: &str,
     new: &str,
@@ -87,18 +87,22 @@ pub fn replace_exact_in_root(
     replace_exact_in_root_with_sha256(repo_root, path, old, new, None)
 }
 
-pub fn replace_exact_in_root_with_sha256(
-    repo_root: &Path,
+pub fn replace_exact_in_root_with_sha256<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     old: &str,
     new: &str,
     expected_sha256: Option<&str>,
 ) -> Result<ReplaceExactSummary, ContextPatchError> {
     validate_replace_request(old, expected_sha256)?;
+    let repo_root = repo_root.into();
+    // The file mutation lock is still keyed by path, which is a deferred boundary; it takes the canonical
+    // label rather than the authority for that reason.
+    let lock_root = crate::fs::rooted::canonical_label(repo_root)?;
     let target = open_regular_file_in_root(repo_root, path)?;
     let target_path = target.target_path();
     let _mutation_lock =
-        try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())?;
+        try_file_mutation_lock_for_open_file(&lock_root, &target_path, target.file())?;
     let current_bytes = target.read_all()?;
     let planned = plan_guarded_replacement(&target, current_bytes, old, new, expected_sha256)?;
     target.replace_atomic(planned.updated.as_bytes())?;
@@ -340,18 +344,20 @@ impl PlannedReplacement {
 }
 
 /// Validate one replacement without writing it.
-pub fn plan_replace_exact_in_root(
-    repo_root: &Path,
+pub fn plan_replace_exact_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     old: &str,
     new: &str,
     expected_sha256: Option<&str>,
 ) -> Result<PlannedReplacement, ContextPatchError> {
     validate_replace_request(old, expected_sha256)?;
+    let repo_root = repo_root.into();
+    let lock_root = crate::fs::rooted::canonical_label(repo_root)?;
     let target = open_regular_file_in_root(repo_root, path)?;
     let target_path = target.target_path();
     let _mutation_lock =
-        try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())?;
+        try_file_mutation_lock_for_open_file(&lock_root, &target_path, target.file())?;
     let current_bytes = target.read_all()?;
     plan_guarded_replacement(&target, current_bytes, old, new, expected_sha256)
 }
@@ -367,10 +373,12 @@ pub fn plan_replace_exact_in_root(
 /// deterministic regardless of the order entries were submitted in. Applying the returned plans is
 /// still per-file rather than transactional: a later apply failure can leave an already-applied
 /// prefix.
-pub fn plan_bulk_replace_exact_in_root(
-    repo_root: &Path,
+pub fn plan_bulk_replace_exact_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     entries: &[ReplaceExactEntry<'_>],
 ) -> Result<Vec<PlannedReplacement>, ContextPatchError> {
+    let repo_root = repo_root.into();
+    let lock_root = crate::fs::rooted::canonical_label(repo_root)?;
     if entries.is_empty() {
         return Err(ContextPatchError::new(
             "bulk replacement requires at least one entry",
@@ -422,7 +430,7 @@ pub fn plan_bulk_replace_exact_in_root(
         .map(|(path, indices, target)| {
             let target_path = target.target_path();
             let _mutation_lock =
-                try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())
+                try_file_mutation_lock_for_open_file(&lock_root, &target_path, target.file())
                     .map_err(|error| entry_error(indices[0], path, &error.to_string()))?;
             let snapshot = target
                 .read_all()
@@ -439,14 +447,17 @@ pub fn plan_bulk_replace_exact_in_root(
 /// write, and the filesystem identity is revalidated, so a file that changed after planning is refused
 /// rather than overwritten. `expected_sha256` is not required for this revalidation. Every hunk lands
 /// in one atomic write, so a file is never observed partially edited.
-pub fn apply_planned_replacement(
-    repo_root: &Path,
+pub fn apply_planned_replacement<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     planned: &PlannedReplacement,
 ) -> Result<ReplaceExactFileSummary, ContextPatchError> {
-    let current_root = repo_root.canonicalize().map_err(|error| {
+    let repo_root = repo_root.into();
+    // The plan records which repository it was made against, and apply refuses under a different one. The
+    // comparison is by canonical label because that is what the plan stored; access still goes through the
+    // root's own authority.
+    let current_root = crate::fs::rooted::canonical_label(repo_root).map_err(|error| {
         ContextPatchError::new(format!(
-            "failed to resolve repository root {} while applying replacement plan: {error}",
-            repo_root.display()
+            "{error} while applying replacement plan"
         ))
     })?;
     if current_root != planned.repo_root {
@@ -456,10 +467,10 @@ pub fn apply_planned_replacement(
             current_root.display()
         )));
     }
-    let target = open_regular_file_in_root(&current_root, &planned.relative_path)?;
+    let target = open_regular_file_in_root(repo_root, &planned.relative_path)?;
     let target_path = target.target_path();
     let _mutation_lock =
-        try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())?;
+        try_file_mutation_lock_for_open_file(&current_root, &target_path, target.file())?;
     let current_identity = FileIdentity::from_file(target.file())?;
     if current_identity != planned.identity {
         return Err(ContextPatchError::new(format!(

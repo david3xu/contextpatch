@@ -3,7 +3,7 @@
 #[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]
-use std::fs;
+#[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
 use std::io::Write;
@@ -60,6 +60,10 @@ pub struct GuardedRegularFile {
     parent: File,
     #[cfg(unix)]
     leaf: std::ffi::CString,
+    /// The root descriptor this file was reached through, retained so revalidation can re-walk from the
+    /// same authority rather than resolving the root's name again.
+    #[cfg(unix)]
+    root_directory: File,
 }
 
 #[derive(Debug)]
@@ -263,7 +267,7 @@ impl GuardedRegularFile {
     pub fn revalidate_current_path(&self) -> Result<(), ContextPatchError> {
         #[cfg(unix)]
         {
-            ensure_parent_is_current(&self.root, &self.relative, &self.parent)?;
+            ensure_parent_is_current(&self.root_directory, &self.relative, &self.parent)?;
             let current = open_regular_at(&self.parent, &self.leaf, &self.relative)?;
             if FileIdentity::from_file(&self.file)? != FileIdentity::from_file(&current)? {
                 return Err(ContextPatchError::new(format!(
@@ -396,15 +400,16 @@ impl Utf8LineCounter {
     }
 }
 
-pub fn inspect_path_in_root(
-    repo_root: &Path,
+pub fn inspect_path_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
 ) -> Result<Option<GuardedPathInspection>, ContextPatchError> {
     #[cfg(unix)]
     {
-        let root = canonical_root(repo_root)?;
+        let authority = repo_root.into();
+        let root = reporting_root(authority)?;
         let normalized = normalize_relative_path(path)?;
-        inspect_path_unix(root, normalized)
+        inspect_path_unix(authority, root, normalized)
     }
 
     #[cfg(not(unix))]
@@ -414,15 +419,16 @@ pub fn inspect_path_in_root(
     }
 }
 
-pub fn open_regular_file_in_root(
-    repo_root: &Path,
+pub fn open_regular_file_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
 ) -> Result<GuardedRegularFile, ContextPatchError> {
     #[cfg(unix)]
     {
-        let root = canonical_root(repo_root)?;
+        let authority = repo_root.into();
+        let root = reporting_root(authority)?;
         let normalized = normalize_relative_path(path)?;
-        open_regular_file_unix(root, normalized)
+        open_regular_file_unix(authority, root, normalized)
     }
 
     #[cfg(not(unix))]
@@ -432,16 +438,17 @@ pub fn open_regular_file_in_root(
     }
 }
 
-pub fn validate_new_file_path_in_root(
-    repo_root: &Path,
+pub fn validate_new_file_path_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     parents: bool,
 ) -> Result<(), ContextPatchError> {
     #[cfg(unix)]
     {
-        let root = canonical_root(repo_root)?;
+        let authority = repo_root.into();
+        let root = reporting_root(authority)?;
         let normalized = normalize_relative_path(path)?;
-        validate_new_file_path_unix(&root, &normalized, parents)
+        validate_new_file_path_unix(authority, &root, &normalized, parents)
     }
 
     #[cfg(not(unix))]
@@ -451,17 +458,18 @@ pub fn validate_new_file_path_in_root(
     }
 }
 
-pub fn create_new_file_in_root(
-    repo_root: &Path,
+pub fn create_new_file_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     contents: &[u8],
     parents: bool,
 ) -> Result<PathBuf, ContextPatchError> {
     #[cfg(unix)]
     {
-        let root = canonical_root(repo_root)?;
+        let authority = repo_root.into();
+        let root = reporting_root(authority)?;
         let normalized = normalize_relative_path(path)?;
-        create_new_file_unix(root, normalized, contents, parents)
+        create_new_file_unix(authority, root, normalized, contents, parents)
     }
 
     #[cfg(not(unix))]
@@ -471,14 +479,14 @@ pub fn create_new_file_in_root(
     }
 }
 
+/// The canonical spelling used for reporting and for symlink-target comparison.
+///
+/// Delegates to the shared label helper so there is one rule for how a root's name is resolved, and so an
+/// anchored selection is never re-resolved. In neither case is this value used to *reach* a file: access
+/// always goes through the root descriptor.
 #[cfg(unix)]
-fn canonical_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
+fn reporting_root(root: crate::git::RepositoryRoot<'_>) -> Result<PathBuf, ContextPatchError> {
+    let root = crate::fs::rooted::canonical_label(root)?;
     if !root.is_dir() {
         return Err(ContextPatchError::new(format!(
             "repository root {} is not a directory",
@@ -515,12 +523,15 @@ fn normalize_relative_path(path: &Path) -> Result<PathBuf, ContextPatchError> {
 
 #[cfg(unix)]
 fn inspect_path_unix(
+    authority: crate::git::RepositoryRoot<'_>,
     root: PathBuf,
     relative: PathBuf,
 ) -> Result<Option<GuardedPathInspection>, ContextPatchError> {
     use std::os::unix::fs::MetadataExt;
 
-    let Some(parent) = open_parent_unix(&root, &relative, false, true)? else {
+    let handle = crate::fs::rooted::root_descriptor(authority)?;
+    let root_directory = handle.as_file();
+    let Some(parent) = open_parent_unix(root_directory, &relative, false, true)? else {
         return Ok(None);
     };
     let leaf = leaf_c_string(&relative)?;
@@ -549,6 +560,7 @@ fn inspect_path_unix(
                 file,
                 parent,
                 leaf,
+                root_directory: retain(root_directory)?,
             }),
         }));
     }
@@ -592,10 +604,13 @@ fn inspect_path_unix(
 
 #[cfg(unix)]
 fn open_regular_file_unix(
+    authority: crate::git::RepositoryRoot<'_>,
     root: PathBuf,
     relative: PathBuf,
 ) -> Result<GuardedRegularFile, ContextPatchError> {
-    let parent = open_parent_unix(&root, &relative, false, false)?.ok_or_else(|| {
+    let handle = crate::fs::rooted::root_descriptor(authority)?;
+    let root_directory = handle.as_file();
+    let parent = open_parent_unix(root_directory, &relative, false, false)?.ok_or_else(|| {
         ContextPatchError::new(format!(
             "`{}` is not an existing regular file",
             relative.display()
@@ -609,16 +624,27 @@ fn open_regular_file_unix(
         file,
         parent,
         leaf,
+        root_directory: retain(root_directory)?,
+    })
+}
+
+/// Duplicate a root descriptor so a returned value can outlive the borrowed authority.
+#[cfg(unix)]
+fn retain(directory: &File) -> Result<File, ContextPatchError> {
+    directory.try_clone().map_err(|error| {
+        ContextPatchError::new(format!("failed to retain repository root: {error}"))
     })
 }
 
 #[cfg(unix)]
 fn validate_new_file_path_unix(
+    authority: crate::git::RepositoryRoot<'_>,
     root: &Path,
     relative: &Path,
     parents: bool,
 ) -> Result<(), ContextPatchError> {
-    let Some(parent) = open_parent_unix(root, relative, false, parents)? else {
+    let handle = crate::fs::rooted::root_descriptor(authority)?;
+    let Some(parent) = open_parent_unix(handle.as_file(), relative, false, parents)? else {
         return Ok(());
     };
     let leaf = leaf_c_string(relative)?;
@@ -633,6 +659,7 @@ fn validate_new_file_path_unix(
 
 #[cfg(unix)]
 fn create_new_file_unix(
+    authority: crate::git::RepositoryRoot<'_>,
     root: PathBuf,
     relative: PathBuf,
     contents: &[u8],
@@ -640,7 +667,9 @@ fn create_new_file_unix(
 ) -> Result<PathBuf, ContextPatchError> {
     use std::os::fd::AsRawFd;
 
-    let parent = open_parent_unix(&root, &relative, parents, false)?.ok_or_else(|| {
+    let handle = crate::fs::rooted::root_descriptor(authority)?;
+    let root_directory = handle.as_file();
+    let parent = open_parent_unix(root_directory, &relative, parents, false)?.ok_or_else(|| {
         ContextPatchError::new(format!(
             "failed to resolve parent directory for {}",
             relative.display()
@@ -669,7 +698,7 @@ fn create_new_file_unix(
             ))
         })?;
 
-        ensure_parent_is_current(&root, &relative, &parent)?;
+        ensure_parent_is_current(root_directory, &relative, &parent)?;
         let status = unsafe {
             libc::linkat(
                 parent.as_raw_fd(),
@@ -763,11 +792,11 @@ fn replace_atomic_unix(
 
 #[cfg(unix)]
 fn ensure_parent_is_current(
-    root: &Path,
+    root_directory: &File,
     relative: &Path,
     expected_parent: &File,
 ) -> Result<(), ContextPatchError> {
-    let current_parent = open_parent_unix(root, relative, false, false)?.ok_or_else(|| {
+    let current_parent = open_parent_unix(root_directory, relative, false, false)?.ok_or_else(|| {
         ContextPatchError::new(format!(
             "parent directory for `{}` no longer exists",
             relative.display()
@@ -784,25 +813,17 @@ fn ensure_parent_is_current(
 
 #[cfg(unix)]
 fn open_parent_unix(
-    root: &Path,
+    root_directory: &File,
     relative: &Path,
     create_missing: bool,
     allow_missing: bool,
 ) -> Result<Option<File>, ContextPatchError> {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
 
-    let mut current = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(root)
-        .map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to open repository root {} without following symlinks: {error}",
-                root.display()
-            ))
-        })?;
+    let mut current = root_directory.try_clone().map_err(|error| {
+        ContextPatchError::new(format!("failed to retain repository root: {error}"))
+    })?;
     let components = relative.components().collect::<Vec<_>>();
     let mut prefix = PathBuf::new();
     for component in &components[..components.len() - 1] {
@@ -1086,6 +1107,7 @@ fn unsupported_guarded_filesystem() -> ContextPatchError {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[cfg(unix)]

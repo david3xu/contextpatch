@@ -20,24 +20,24 @@ pub fn write_new_file(
     write_new_file_in_root(&repo_root, path, content)
 }
 
-pub fn write_new_file_in_root(
-    repo_root: &Path,
+pub fn write_new_file_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     content: &str,
 ) -> Result<WriteNewFileSummary, ContextPatchError> {
     write_new_file_bytes_in_root(repo_root, path, content.as_bytes())
 }
 
-pub fn write_new_file_bytes_in_root(
-    repo_root: &Path,
+pub fn write_new_file_bytes_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     content: &[u8],
 ) -> Result<WriteNewFileSummary, ContextPatchError> {
     write_new_file_bytes_with_parents_in_root(repo_root, path, content, false)
 }
 
-pub fn write_new_file_bytes_with_parents_in_root(
-    repo_root: &Path,
+pub fn write_new_file_bytes_with_parents_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     content: &[u8],
     parents: bool,

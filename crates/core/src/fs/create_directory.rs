@@ -21,17 +21,18 @@ pub fn create_directory(
     create_directory_in_root(&repo_root, path, parents)
 }
 
-pub fn create_directory_in_root(
-    repo_root: &Path,
+/// Create one directory under the repository root.
+///
+/// The root is reached through the root's authority, so a selected repository is never re-resolved. The
+/// per-component walk below is still path-based and canonicalizes each step to confine it; converting that
+/// walk to `mkdirat` is tracked as a remaining C13 boundary because its refusals name absolute paths and
+/// moving them is a separate, visible change.
+pub fn create_directory_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     parents: bool,
 ) -> Result<CreateDirectorySummary, ContextPatchError> {
-    let root = repo_root.canonicalize().map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })?;
+    let root = crate::fs::rooted::canonical_label(repo_root.into())?;
     let components = safe_relative_components(&root, path)?;
     let mut current = root.clone();
     let mut directories_created = Vec::new();

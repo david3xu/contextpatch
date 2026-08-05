@@ -17,8 +17,8 @@ pub fn read_range(
     read_range_in_root(&repo_root, path, start_line, end_line)
 }
 
-pub fn read_range_in_root(
-    repo_root: &Path,
+pub fn read_range_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     start_line: usize,
     end_line: usize,

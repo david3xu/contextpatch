@@ -357,6 +357,29 @@ pub fn directory_is_empty(
     Ok(read_dir(root, relative)?.is_empty())
 }
 
+/// The canonical spelling of a root, for the boundaries that are still keyed by name.
+///
+/// Mutation locks, receipts, and scratch identity are all derived from a path and remain so; they need a
+/// spelling that is stable across aliases. An anchored selection was canonicalized when it was selected, so
+/// its logical path is already that spelling and resolving it again would be the reopen this phase removes.
+/// A configured root may be spelled non-canonically and is resolved once.
+///
+/// This value is a *label*. It is never used to reach a file.
+pub fn canonical_label(
+    root: RepositoryRoot<'_>,
+) -> Result<std::path::PathBuf, ContextPatchError> {
+    if root.is_anchored() {
+        return Ok(root.logical_path().to_path_buf());
+    }
+    let logical_path = root.logical_path();
+    logical_path.canonicalize().map_err(|error| {
+        ContextPatchError::new(format!(
+            "failed to resolve repository root {}: {error}",
+            logical_path.display()
+        ))
+    })
+}
+
 /// The absolute spelling of one entry, for messages only.
 ///
 /// Never used to reach a file. It exists so refusal text can keep naming the path a caller would recognize

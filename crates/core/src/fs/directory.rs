@@ -27,8 +27,8 @@ pub struct DirectoryListing {
     pub entries: Vec<DirectoryEntry>,
 }
 
-pub fn list_directory_in_root(
-    repo_root: &Path,
+pub fn list_directory_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     include_hidden: bool,
     recursive: bool,
@@ -37,15 +37,10 @@ pub fn list_directory_in_root(
 ) -> Result<DirectoryListing, ContextPatchError> {
     #[cfg(unix)]
     {
-        let root = repo_root.canonicalize().map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to resolve repository root {}: {error}",
-                repo_root.display()
-            ))
-        })?;
+        let authority = repo_root.into();
         let relative = normalize_directory_path(path)?;
         let entries = list_directory_unix(
-            &root,
+            authority,
             path,
             &relative,
             include_hidden,
@@ -104,7 +99,7 @@ fn normalize_directory_path(path: &Path) -> Result<String, ContextPatchError> {
 
 #[cfg(unix)]
 fn list_directory_unix(
-    root: &Path,
+    root: crate::git::RepositoryRoot<'_>,
     path: &Path,
     relative: &str,
     include_hidden: bool,
@@ -157,25 +152,18 @@ struct RawDirectoryEntry {
 
 #[cfg(unix)]
 fn open_directory_path(
-    root: &Path,
+    root: crate::git::RepositoryRoot<'_>,
     path: &Path,
     relative: &str,
 ) -> Result<fs::File, ContextPatchError> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
 
-    let mut current = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(root)
-        .map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to open repository root {} without following symlinks: {error}",
-                root.display()
-            ))
-        })?;
+    let handle = crate::fs::rooted::root_descriptor(root)?;
+    let mut current = handle.as_file().try_clone().map_err(|error| {
+        ContextPatchError::new(format!("failed to retain repository root: {error}"))
+    })?;
     if path == Path::new(".") {
         return Ok(current);
     }
@@ -422,7 +410,7 @@ mod tests {
         for name in ["z.txt", "b.txt", "a.txt", "c.txt", ".hidden"] {
             fs::write(root.join("task").join(name), name).unwrap();
         }
-        let directory = open_directory_path(&root, Path::new("task"), "task").unwrap();
+        let directory = open_directory_path((&root).into(), Path::new("task"), "task").unwrap();
 
         let (entries, truncated) = read_directory_entries(&directory, "task", false, 2).unwrap();
         let names = entries

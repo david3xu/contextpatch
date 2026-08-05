@@ -19,8 +19,8 @@ pub struct ExecutableChange {
     pub dry_run: bool,
 }
 
-pub fn set_file_executable_in_root(
-    repo_root: &Path,
+pub fn set_file_executable_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     executable: bool,
     expected_sha256: Option<&str>,
@@ -48,15 +48,11 @@ pub fn set_file_executable_in_root(
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = repo_root.canonicalize().map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to resolve repository root {}: {error}",
-                repo_root.display()
-            ))
-        })?;
+        let authority = repo_root.into();
+        let root = crate::fs::rooted::canonical_label(authority)?;
         let relative = normalize_relative_path(path)?;
         if dry_run {
-            let file = open_regular_file_in_root(&root, path)?;
+            let file = open_regular_file_in_root(authority, path)?;
             return inspect_change(&file, relative, executable, true);
         }
 
@@ -74,7 +70,7 @@ pub fn set_file_executable_in_root(
         })?;
         let expected_mode = normalize_mode(expected_mode)?;
 
-        let file = open_regular_file_in_root(&root, path)?;
+        let file = open_regular_file_in_root(authority, path)?;
         let target = file.target_path();
         let _mutation_lock = try_file_mutation_lock_for_open_file(&root, &target, file.file())?;
         let change = inspect_change(&file, relative.clone(), executable, false)?;
