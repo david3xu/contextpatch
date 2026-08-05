@@ -207,8 +207,24 @@ Slices, each its own behavior-neutral commit:
 
    Removing the inlined implementations left several server pass-throughs with no callers; they were
    deleted rather than kept alive behind an allow attribute.
-3. **`restore` planning — open.** Untracked collection, empty-directory collection, and the tracked-path
-   guard behind the three restore and delete actions.
+3. **`restore` planning — done.** `core::git::restore` owns planning, guarded execution, and
+   postcondition checks for the three restore and delete actions: the dirty and tracked requirements for
+   a restore, the untracked and regular-file requirements for an exact delete, prefix expansion over
+   untracked and ignored candidates, empty-directory collection, the expansion bound, and the deletion
+   itself. Plan and apply are separate functions so the adapter still holds its mutation lock and opens
+   its receipt around the mutation alone.
+
+   Two postcondition refusals are addressed as `refused after restore` and `refused after delete` rather
+   than the usual shape, so the offending set is returned as data and worded by the adapter. Limits,
+   confirmations, and dry-run defaults stay ahead of normalization in the adapter, which keeps unchanged
+   the order in which a caller learns a request is malformed.
+
+   Fourteen core tests run against real temporary repositories. Two of them record findings rather than
+   assumptions: porcelain reports the untracked *file* rather than its enclosing directory, so a prefix
+   over a mixed directory deletes the generated sibling and leaves tracked history untouched; and Git only
+   collapses a directory in an ignored listing when it holds nothing tracked, which means the
+   tracked-path refusal inside that walk guards a race rather than a routine case. That is now stated at
+   the function rather than covered by a test that cannot reach it.
 4. **`commit` planning — open.** Dirty-set matching, staged-scope policy, and prefix expansion behind the
    five commit and stage actions.
 5. **`sync` planning — open.** Branch preparation planning, merge readiness, and push divergence checks.

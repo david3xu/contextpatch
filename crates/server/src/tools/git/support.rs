@@ -67,20 +67,6 @@ pub(crate) fn git_status_paths_for_tool(
     git_state::status_paths(root).map_err(|error| refused(tool_name, error))
 }
 
-pub(crate) fn git_untracked_paths_for_tool(
-    tool_name: &str,
-    root: &Path,
-) -> Result<BTreeSet<String>, String> {
-    git_state::untracked_paths(root).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn git_untracked_and_ignored_paths_for_tool(
-    tool_name: &str,
-    root: &Path,
-) -> Result<BTreeSet<String>, String> {
-    git_state::untracked_and_ignored_paths(root).map_err(|error| refused(tool_name, error))
-}
-
 pub(crate) fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
     git_cached_paths_for_tool(tools::git_commit_exact::NAME, root)
 }
@@ -105,38 +91,6 @@ pub(crate) fn git_args(subcommand: &str, paths: &[String]) -> Vec<String> {
         .chain(std::iter::once("--".to_string()))
         .chain(paths.iter().cloned())
         .collect()
-}
-
-pub(crate) fn git_restore_args(paths: &[String]) -> Vec<String> {
-    ["restore", "--staged", "--worktree", "--"]
-        .into_iter()
-        .map(ToString::to_string)
-        .chain(paths.iter().cloned())
-        .collect()
-}
-
-pub(crate) fn ensure_restore_paths_are_tracked(
-    root: &Path,
-    paths: &[String],
-) -> Result<(), String> {
-    let untracked = paths
-        .iter()
-        .filter_map(|path| {
-            let args = ["ls-files", "--error-unmatch", "--", path.as_str()];
-            match git_output_for_tool(tools::git_restore_exact::NAME, root, &args) {
-                Ok(_) => None,
-                Err(_) => Some(path.clone()),
-            }
-        })
-        .collect::<BTreeSet<_>>();
-
-    if !untracked.is_empty() {
-        return Err(format!(
-            "git_restore_exact refused: untracked paths cannot be restored from HEAD\n{}",
-            format_set(&untracked)
-        ));
-    }
-    Ok(())
 }
 
 pub(crate) fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
@@ -466,10 +420,7 @@ pub(crate) fn empty_label(text: &str) -> &str {
 }
 
 pub(crate) fn format_set(paths: &BTreeSet<String>) -> String {
-    if paths.is_empty() {
-        return "(none)".to_string();
-    }
-    paths.iter().cloned().collect::<Vec<_>>().join("\n")
+    contextpatch_core::git::restore::format_path_set(paths)
 }
 
 #[cfg(test)]
