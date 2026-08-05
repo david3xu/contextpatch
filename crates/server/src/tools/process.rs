@@ -237,10 +237,17 @@ fn panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-pub(crate) fn call_task_image_python_run(
-    repo_root: &Path,
+pub(crate) fn call_task_image_python_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
+    let repository_root = repository_root.into();
+    // Checked before any argument is read, so a selected repository receives the same refusal whether it
+    // asked to plan or to execute. Core refuses again during planning; two independent gates because a
+    // caller must not be able to plan against a selection and then execute that plan.
+    contextpatch_core::process::task_image::ensure_task_image_root_is_addressable(repository_root)
+        .map_err(|error| format!("task_image_python_run refused: {error}"))?;
+
     let script = required_string(arguments, "script")?;
     let program = optional_string(arguments, "program")?.unwrap_or("python3");
     let args = optional_string_array(arguments, "args")?;
@@ -249,7 +256,7 @@ pub(crate) fn call_task_image_python_run(
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
     let confirm = optional_string(arguments, "confirm")?;
     let plan = contextpatch_core::process::task_image::plan_task_image_python_run(
-        repo_root,
+        repository_root,
         script,
         program,
         &args,

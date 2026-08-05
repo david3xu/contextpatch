@@ -336,7 +336,7 @@ fn call_tool(
             tools::process::call_artifact_python_run(repo_root, arguments)
         }
         tools::task_image_python_run::NAME => {
-            tools::process::call_task_image_python_run(repo_root, arguments)
+            tools::process::call_task_image_python_run(repository.root(), arguments)
         }
         tools::harbor_run_start::NAME => {
             tools::process::call_harbor_run_start(repo_root, arguments)

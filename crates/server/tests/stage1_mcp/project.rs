@@ -891,6 +891,150 @@ fn file_action(repository: &str, action: &str, arguments: &str) -> String {
 
 #[cfg(unix)]
 #[test]
+fn project_dispatch_refuses_task_image_runs_for_a_selected_repository() {
+    // The one deliberately unsupported selected-root action. A Docker bind mount is named by path, and there
+    // is no descriptor form of `-v`, so honoring a selection would mean handing the container a name and
+    // hoping it resolves to the directory that was validated. It refuses instead, at plan and at execute,
+    // and the configured root keeps working.
+    let workspace = temp_root("project_task_image_refusal");
+    let target = file_repo(&workspace, "target");
+    fs::create_dir_all(target.join("task").join("environment")).unwrap();
+    fs::write(
+        target.join("task").join("environment").join("Dockerfile"),
+        "FROM python:3.13-slim\n",
+    )
+    .unwrap();
+    fs::write(target.join("script.py"), "print('ok')\n").unwrap();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // Planning refuses.
+    let planned = server.exchange(&file_action(
+        "target",
+        "task_image_python_run",
+        r#"{"script":"script.py","dry_run":true}"#,
+    ));
+    assert_eq!(planned["result"]["isError"], true);
+    assert_text(&planned, "a Docker bind mount can only be named by path");
+
+    // Execution refuses with the same message, so a caller cannot plan against a selection and then run it.
+    let executed = server.exchange(&file_action(
+        "target",
+        "task_image_python_run",
+        r#"{"script":"script.py","dry_run":false,"confirm":"run task image python"}"#,
+    ));
+    server.finish();
+    assert_eq!(executed["result"]["isError"], true);
+    assert_text(&executed, "a Docker bind mount can only be named by path");
+    assert_text(&executed, "run this action against the configured repository root");
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_runs_guarded_commands_in_the_selected_repository() {
+    // The guarded command working directory is opened relative to the root descriptor, so a command runs in
+    // the repository that was selected rather than in the workspace or a sibling.
+    let workspace = temp_root("project_guarded_command");
+    let target = file_repo(&workspace, "target");
+    let decoy = file_repo(&workspace, "decoy");
+    fs::write(target.join("only-in-target.txt"), "x\n").unwrap();
+    fs::write(decoy.join("only-in-decoy.txt"), "x\n").unwrap();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    for (selected, other) in [("target", "decoy"), ("decoy", "target")] {
+        let listed = server.exchange(&file_action(
+            selected,
+            "run_guarded_command",
+            r#"{"program":"rg","args":["--files"]}"#,
+        ));
+        let text = response_text(&listed).to_string();
+        assert!(
+            text.contains(&format!("only-in-{selected}.txt")),
+            "the command ran in the selected repository: {text}"
+        );
+        assert!(
+            !text.contains(&format!("only-in-{other}.txt")),
+            "the command must not see the sibling: {text}"
+        );
+    }
+
+    // A cwd argument is resolved through the same authority and cannot escape.
+    let escaped = server.exchange(&file_action(
+        "target",
+        "run_guarded_command",
+        r#"{"program":"rg","args":["--files"],"cwd":"../decoy"}"#,
+    ));
+    server.finish();
+    assert_eq!(escaped["result"]["isError"], true);
+    assert!(
+        !response_text(&escaped).contains("only-in-decoy.txt"),
+        "{}",
+        response_text(&escaped)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_keeps_scratch_and_receipts_with_a_renamed_repository() {
+    // Identity keying, proven through dispatch. A repository is written to, renamed, and re-selected under
+    // its new name; its receipts must still be reachable because they belong to the directory rather than to
+    // the name it had at the time.
+    let workspace = temp_root("project_identity_rename");
+    let target = file_repo(&workspace, "target");
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+    let written = server.exchange(&file_action(
+        "target",
+        "replace_exact",
+        r#"{"path":"sample.txt","old":"target line one","new":"recorded"}"#,
+    ));
+    assert_ne!(
+        written["result"]["isError"],
+        true,
+        "{}",
+        response_text(&written)
+    );
+
+    let before = server.exchange(&file_action(
+        "target",
+        "read_write_receipts",
+        r#"{"limit":10}"#,
+    ));
+    let parsed: Value = serde_json::from_str(response_text(&before)).unwrap();
+    let count_before = parsed["returned"].as_u64().unwrap();
+    let journal_before = parsed["journal"].as_str().unwrap().to_string();
+    assert!(count_before > 0, "the write produced a receipt");
+    server.finish();
+
+    // Rename the repository. The scratch directory's display name follows the label, but its identity does
+    // not, so the journal path is unchanged and the receipts remain reachable.
+    let renamed = workspace.join("renamed");
+    fs::rename(&target, &renamed).unwrap();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+    let after = server.exchange(&file_action(
+        "renamed",
+        "read_write_receipts",
+        r#"{"limit":10}"#,
+    ));
+    server.finish();
+
+    let parsed: Value = serde_json::from_str(response_text(&after)).unwrap();
+    assert_eq!(
+        parsed["journal"].as_str().unwrap(),
+        journal_before,
+        "identity keying keeps the journal path across a rename"
+    );
+    assert_eq!(
+        parsed["returned"].as_u64().unwrap(),
+        count_before,
+        "receipts written before the rename are still reachable"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn project_dispatch_reads_and_lists_only_the_selected_repository() {
     let workspace = temp_root("project_file_reads");
     let target = file_repo(&workspace, "target");

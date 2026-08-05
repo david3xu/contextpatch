@@ -73,16 +73,31 @@ pub fn legacy_scratch_root<'a>(repo_root: impl Into<crate::git::RepositoryRoot<'
 }
 
 /// The scratch directory for this repository, created if absent.
+///
+/// A `repository-label` marker naming the logical path is written alongside, so a human listing the scratch
+/// container can tell which directory belongs to which repository. It is refreshed on each call because a
+/// rename changes the label without changing the directory, and it is best-effort: failing to write a label
+/// must not fail the operation that needed the directory.
 pub fn ensure_scratch_root<'a>(
     repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
 ) -> Result<PathBuf, ContextPatchError> {
-    let root = scratch_root(repo_root)?;
+    let repo_root = repo_root.into();
+    let identity = crate::fs::repository_identity::identity_of(repo_root)?;
+    let root = container().join(identity.directory_name());
     fs::create_dir_all(&root).map_err(|error| {
         ContextPatchError::invalid(format!(
             "could not create the scratch directory `{}`: {error}",
             root.display()
         ))
     })?;
+    let _ = fs::write(
+        root.join("repository-label"),
+        format!(
+            "{}\n{}\n",
+            identity.label(),
+            repo_root.logical_path().display()
+        ),
+    );
     Ok(root)
 }
 

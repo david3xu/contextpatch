@@ -123,14 +123,49 @@ impl TaskImageRunResult {
     }
 }
 
-pub fn plan_task_image_python_run(
-    repo_root: &Path,
+/// The refusal a selected repository receives from every task-image action.
+///
+/// Docker bind mounts are specified by pathname. There is no descriptor form of `-v`, so a container can
+/// only be given a name to resolve itself, at a time this process does not control. Handing it
+/// `logical_path()` would pass a name off as authority: the directory the container mounts could differ from
+/// the directory that was selected and validated, and nothing would notice.
+///
+/// Staging a copy was considered and rejected. It would change what the container actually sees, which is a
+/// semantic change to the action rather than a safe implementation of it, and a caller reading
+/// "ran your script against the repository" would be told something untrue.
+///
+/// So this fails closed. A configured root is unaffected: it is reached by name already, and its pathname is
+/// the authority rather than a stand-in for one.
+pub const SELECTED_ROOT_REFUSAL: &str =
+    "task-image actions are unavailable for a selected repository because a Docker bind mount can only be \
+     named by path, which would substitute a pathname for the selected repository's authority; run this \
+     action against the configured repository root instead";
+
+/// Refuse a task-image action that cannot honor a selected repository's authority.
+///
+/// Applied to planning and to execution, so a caller cannot plan against a selection and then execute the
+/// plan. Both report the same message, because the reason is the same and a caller comparing them should not
+/// have to wonder whether they mean different things.
+pub fn ensure_task_image_root_is_addressable(
+    repo_root: crate::git::RepositoryRoot<'_>,
+) -> Result<(), ContextPatchError> {
+    if repo_root.is_anchored() {
+        return Err(ContextPatchError::new(SELECTED_ROOT_REFUSAL));
+    }
+    Ok(())
+}
+
+pub fn plan_task_image_python_run<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     script: &str,
     program: &str,
     args: &[String],
     timeout_secs: Option<u64>,
     build_timeout_secs: Option<u64>,
 ) -> Result<TaskImagePlan, ContextPatchError> {
+    let repo_root = repo_root.into();
+    ensure_task_image_root_is_addressable(repo_root)?;
+    let repo_root = repo_root.logical_path();
     let root = repo_root.canonicalize().map_err(|error| {
         ContextPatchError::new(format!(
             "failed to resolve repository root {}: {error}",
@@ -592,6 +627,45 @@ mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains("symlink"));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_selected_repository_is_refused_by_exact_message_at_planning_and_at_the_gate() {
+        // Docker bind mounts are named by path, so a selected repository cannot be honored. The refusal is
+        // pinned exactly, and asserted at both entry points, because a caller must not be able to plan
+        // against a selection and then execute that plan.
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let root = temp_root("task_image_selected_root");
+        fs::create_dir_all(root.join(TASK_ENVIRONMENT)).unwrap();
+        fs::write(root.join(TASK_DOCKERFILE), "FROM python:3.13-slim\n").unwrap();
+        fs::write(root.join("script.py"), "print('ok')\n").unwrap();
+
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(&root)
+            .unwrap();
+        let selected = crate::git::RepositoryRoot::anchored(&root, &directory);
+
+        assert_eq!(
+            ensure_task_image_root_is_addressable(selected)
+                .unwrap_err()
+                .to_string(),
+            SELECTED_ROOT_REFUSAL
+        );
+        assert_eq!(
+            plan_task_image_python_run(selected, "script.py", "python3", &[], None, None)
+                .unwrap_err()
+                .to_string(),
+            SELECTED_ROOT_REFUSAL
+        );
+
+        // A configured root is unaffected: its pathname is the authority rather than a stand-in for one.
+        let configured = crate::git::RepositoryRoot::from_path(&root);
+        ensure_task_image_root_is_addressable(configured).unwrap();
+        plan_task_image_python_run(configured, "script.py", "python3", &[], None, None).unwrap();
     }
 
     fn temp_root(name: &str) -> PathBuf {

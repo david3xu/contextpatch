@@ -39,11 +39,19 @@ impl RepositoryIdentity {
         &self.digest
     }
 
-    /// A human-recognizable directory name combining the label and the key.
+    /// The directory name for this repository.
     ///
-    /// The label is for reading; only the digest distinguishes repositories.
+    /// The digest alone. An earlier draft prefixed the label for readability, and a dispatch test caught what
+    /// that costs: the key was stable across a rename but the *name* was not, so receipts still moved and
+    /// the whole point was lost. Readability is provided instead by a marker file written inside the
+    /// directory, which cannot affect where the directory is.
     pub fn directory_name(&self) -> String {
-        format!("{}-{}", self.label, &self.digest[..DIGEST_PREFIX_LENGTH])
+        self.digest[..DIGEST_PREFIX_LENGTH].to_string()
+    }
+
+    /// The label to record inside the directory for a human reading a scratch container.
+    pub fn label(&self) -> &str {
+        &self.label
     }
 }
 
@@ -148,11 +156,13 @@ mod tests {
         let identity_after = identity_of(RepositoryRoot::from_path(&after)).unwrap();
 
         assert_eq!(identity_before.key(), identity_after.key());
-        // The label follows the name, so the directory name changes while the key does not.
-        assert_ne!(
+        // The directory name follows the key alone, so a rename does not move the scratch directory. The
+        // label follows the name and is recorded separately, where it cannot affect a path.
+        assert_eq!(
             identity_before.directory_name(),
             identity_after.directory_name()
         );
+        assert_ne!(identity_before.label(), identity_after.label());
         // Path keying would have produced a different key, which is the bug being fixed.
         assert_ne!(
             legacy_path_identity(RepositoryRoot::from_path(&before)).key(),
