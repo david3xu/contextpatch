@@ -297,6 +297,45 @@ mod tests {
     }
 
     #[test]
+    fn one_resolver_renders_two_exact_wordings() {
+        // Consolidating the canonicalization was only behavior-neutral if neither surface's text moved, so
+        // both renderings are pinned exactly here, side by side. The I/O tail is derived from the same
+        // failure rather than written out, which keeps the assertion exact without depending on the
+        // platform's error string.
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let absent = std::env::temp_dir().join(format!(
+            "contextpatch-c11-absent-root-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let io_error = std::fs::canonicalize(&absent).unwrap_err();
+
+        // The MCP adapter says `repo root` and omits the path.
+        assert_eq!(
+            resolved_repo_root(&absent, "file_info").unwrap_err(),
+            format!("file_info refused: failed to resolve repo root: {io_error}")
+        );
+        assert_eq!(
+            resolved_repo_root(&absent, "git_restore_exact").unwrap_err(),
+            format!("git_restore_exact refused: failed to resolve repo root: {io_error}")
+        );
+
+        // `core` says `repository root` and names the path. Same resolver underneath.
+        assert_eq!(
+            contextpatch_core::git::exact_worktree_root(&absent)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "failed to resolve repository root {}: {io_error}",
+                absent.display()
+            )
+        );
+    }
+
+    #[test]
     fn moved_state_guards_keep_their_refusal_prefixes() {
         // The state and query guards now live in core, which returns the detail only. These assertions
         // pin the prefixes the adapters assemble, including the two that were never tool names and are

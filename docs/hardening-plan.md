@@ -165,8 +165,7 @@ policy, because path normalization already bounds them and a descendant root sta
 name no paths, `git_branch_prepare` and `git_push_exact`, require the configured root to be exactly a
 Git worktree root; the strict check is delegated to `core` so no second implementation was grown.
 
-This does not close C11: the two canonicalize-only helpers that share the name `canonical_repo_root`
-still exist and are removed in 3.3.
+C11 is closed by 3.3: the canonicalize-only duplicates are gone and one resolver remains.
 
 Decide explicitly, per tool, whether an exact worktree root is required, and state it in the schema.
 Today the same configured root can be accepted by the status path and refused by the mutation path.

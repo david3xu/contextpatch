@@ -39,9 +39,7 @@ pub(crate) fn call_git_restore_exact(
         ));
     }
 
-    let root = repo_root.canonicalize().map_err(|error| {
-        format!("git_restore_exact refused: failed to resolve repo root: {error}")
-    })?;
+    let root = resolved_repo_root(repo_root, tools::git_restore_exact::NAME)?;
     let normalized_paths = normalize_git_paths(tools::git_restore_exact::NAME, &root, &paths)?;
     let plan = core_restore::plan_restore_exact(&root, &normalized_paths)
         .map_err(|error| refused(tools::git_restore_exact::NAME, error))?;

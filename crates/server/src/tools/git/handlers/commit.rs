@@ -60,9 +60,7 @@ pub(crate) fn call_git_commit_exact(
         ));
     }
 
-    let root = repo_root.canonicalize().map_err(|error| {
-        format!("git_commit_exact refused: failed to resolve repo root: {error}")
-    })?;
+    let root = resolved_repo_root(repo_root, TOOL)?;
     let normalized_paths = normalize_git_paths(TOOL, &root, &paths)?;
     let plan = core_commit::plan_commit_exact(&root, &normalized_paths)
         .map_err(|error| refused(TOOL, error))?;
