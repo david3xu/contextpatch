@@ -15,8 +15,8 @@ fn refused(tool_name: &str, error: contextpatch_core::error::ContextPatchError) 
     format!("{tool_name} refused: {error}")
 }
 
-pub(crate) fn call_git_restore_exact(
-    repo_root: &Path,
+pub(crate) fn call_git_restore_exact<'a>(
+    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "restore exact paths";
@@ -39,9 +39,18 @@ pub(crate) fn call_git_restore_exact(
         ));
     }
 
-    let root = resolved_repo_root(repo_root, tools::git_restore_exact::NAME)?;
-    let normalized_paths = normalize_git_paths(tools::git_restore_exact::NAME, &root, &paths)?;
-    let plan = core_restore::plan_restore_exact(&root, &normalized_paths)
+    let repository = repository.into();
+    let policy = repository_under_policy(
+        repository,
+        tools::git_restore_exact::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
+    let root = policy.bind(repository);
+    // Path confinement resolves caller-named paths against a root, so it needs the logical path. That is
+    // one of the three remaining path-backed boundaries, alongside locks and the receipt journal.
+    let normalized_paths =
+        normalize_git_paths(tools::git_restore_exact::NAME, root.path(), &paths)?;
+    let plan = core_restore::plan_restore_exact(root, &normalized_paths)
         .map_err(|error| refused(tools::git_restore_exact::NAME, error))?;
 
     if dry_run {
@@ -55,7 +64,7 @@ pub(crate) fn call_git_restore_exact(
         .map_err(|error| format!("git_restore_exact refused: {error}"));
     }
 
-    let outcome = core_restore::apply_restore_exact(&root, &plan)
+    let outcome = core_restore::apply_restore_exact(root, &plan)
         .map_err(|error| refused(tools::git_restore_exact::NAME, error))?;
     // A failed postcondition is addressed differently from a refusal that happened before anything
     // changed, so the offending set comes back as data and is worded here.

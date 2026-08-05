@@ -513,6 +513,92 @@ fn project_dispatch_pushes_only_to_the_selected_repository_remote() {
     assert_eq!(commit_at(&decoy, "HEAD"), decoy_head_before);
 }
 
+/// A repository whose tracked file is committed and then modified, so it has exactly one dirty path.
+fn dirty_repo(workspace: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let repo = workspace.join(name);
+    fs::create_dir_all(&repo).unwrap();
+    init_git_repo(&repo);
+    fs::write(repo.join("marker.txt"), format!("{name} committed\n")).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(repo.join("marker.txt"), format!("{name} dirty\n")).unwrap();
+    repo
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_stages_commits_and_restores_only_the_selected_repository() {
+    // The mutating counterpart to the query isolation tests. Staging, committing, and restoring through a
+    // selected repository must land in that repository, and the sibling must be bit-for-bit untouched
+    // across all three.
+    let workspace = temp_root("project_surface_mutation_isolation");
+    let target = dirty_repo(&workspace, "target");
+    let decoy = dirty_repo(&workspace, "decoy");
+
+    let target_head_before = commit_at(&target, "HEAD");
+    let decoy_head_before = commit_at(&decoy, "HEAD");
+    let decoy_dirty_before = fs::read_to_string(decoy.join("marker.txt")).unwrap();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    let staged = server.exchange(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_stage_exact","arguments":{"paths":["marker.txt"],"dry_run":false,"confirm":"stage exact paths"}}}}"#,
+    );
+    assert_ne!(
+        staged["result"]["isError"],
+        true,
+        "{}",
+        response_text(&staged)
+    );
+
+    let committed = server.exchange(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_commit_exact","arguments":{"paths":["marker.txt"],"subject":"commit in the selected repository","dry_run":false,"confirm":"commit exact paths"}}}}"#,
+    );
+    assert_ne!(
+        committed["result"]["isError"],
+        true,
+        "{}",
+        response_text(&committed)
+    );
+
+    // The selected repository advanced; the sibling did not, and is still dirty with its own content.
+    let target_head_after_commit = commit_at(&target, "HEAD");
+    assert_ne!(target_head_after_commit, target_head_before);
+    assert_eq!(commit_at(&decoy, "HEAD"), decoy_head_before);
+    assert_eq!(
+        fs::read_to_string(decoy.join("marker.txt")).unwrap(),
+        decoy_dirty_before
+    );
+
+    // Restoring is the same question in the other direction: it must discard work in the selected
+    // repository only.
+    fs::write(target.join("marker.txt"), "target changed again\n").unwrap();
+    let restored = server.exchange(
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_restore_exact","arguments":{"paths":["marker.txt"],"dry_run":false,"confirm":"restore exact paths"}}}}"#,
+    );
+    server.finish();
+
+    assert_ne!(
+        restored["result"]["isError"],
+        true,
+        "{}",
+        response_text(&restored)
+    );
+    // Back to what was committed a moment ago, not to the original content.
+    assert_eq!(
+        fs::read_to_string(target.join("marker.txt")).unwrap(),
+        "target dirty\n"
+    );
+    assert_eq!(commit_at(&target, "HEAD"), target_head_after_commit);
+
+    // The sibling never moved and its uncommitted work was never discarded.
+    assert_eq!(commit_at(&decoy, "HEAD"), decoy_head_before);
+    assert_eq!(
+        fs::read_to_string(decoy.join("marker.txt")).unwrap(),
+        decoy_dirty_before
+    );
+}
+
 #[test]
 fn project_surface_refuses_unsafe_or_inexact_repository_selectors() {
     use std::os::unix::fs::symlink;

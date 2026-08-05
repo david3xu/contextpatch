@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde_json::{json, Value};
 
 use contextpatch_core::git::commit as core_commit;
@@ -33,8 +31,8 @@ fn commit_message(
     Ok((subject, body))
 }
 
-pub(crate) fn call_git_commit_exact(
-    repo_root: &Path,
+pub(crate) fn call_git_commit_exact<'a>(
+    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "commit exact paths";
@@ -60,9 +58,13 @@ pub(crate) fn call_git_commit_exact(
         ));
     }
 
-    let root = resolved_repo_root(repo_root, TOOL)?;
-    let normalized_paths = normalize_git_paths(TOOL, &root, &paths)?;
-    let plan = core_commit::plan_commit_exact(&root, &normalized_paths)
+    let repository = repository.into();
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let root = policy.bind(repository);
+    // Path confinement resolves caller-named paths against a root, so it needs the logical path. That is
+    // one of the three remaining path-backed boundaries, alongside locks and the receipt journal.
+    let normalized_paths = normalize_git_paths(TOOL, root.path(), &paths)?;
+    let plan = core_commit::plan_commit_exact(root, &normalized_paths)
         .map_err(|error| refused(TOOL, error))?;
 
     if dry_run {
@@ -79,13 +81,13 @@ pub(crate) fn call_git_commit_exact(
         .map_err(|error| format!("git_commit_exact refused: {error}"));
     }
 
-    let before_git_head = git_head_for_tool(TOOL, &root)?;
-    let receipt_id = crate::tools::journal::begin_git(&root, TOOL, &before_git_head)?;
+    let before_git_head = git_head_for_tool(TOOL, root)?;
+    let receipt_id = crate::tools::journal::begin_git(root.path(), TOOL, &before_git_head)?;
     let result = (|| {
-        core_commit::stage_paths(&root, &plan.paths).map_err(|error| refused(TOOL, error))?;
-        core_commit::verify_exact_staged(&root, &plan)
+        core_commit::stage_paths(root, &plan.paths).map_err(|error| refused(TOOL, error))?;
+        core_commit::verify_exact_staged(root, &plan)
             .map_err(|error| refused_after_staging(TOOL, error))?;
-        core_commit::commit_staged(&root, &subject, &body).map_err(|error| {
+        core_commit::commit_staged(root, &subject, &body).map_err(|error| {
             format!(
                 "{}\nindex may contain staged exact paths because git commit failed after staging",
                 refused(TOOL, error)
@@ -93,7 +95,7 @@ pub(crate) fn call_git_commit_exact(
         })?;
 
         let identity =
-            core_commit::read_commit_identity(&root).map_err(|error| refused(TOOL, error))?;
+            core_commit::read_commit_identity(root).map_err(|error| refused(TOOL, error))?;
         serde_json::to_string_pretty(&json!({
             "tool": TOOL,
             "dry_run": false,
@@ -106,9 +108,9 @@ pub(crate) fn call_git_commit_exact(
         }))
         .map_err(|error| format!("git_commit_exact refused: {error}"))
     })();
-    let after_git_head = git_head_for_tool(TOOL, &root);
+    let after_git_head = git_head_for_tool(TOOL, root);
     crate::tools::journal::settle_git(
-        &root,
+        root.path(),
         TOOL,
         &receipt_id,
         &before_git_head,
@@ -117,8 +119,8 @@ pub(crate) fn call_git_commit_exact(
     )
 }
 
-pub(crate) fn call_git_commit_scoped(
-    repo_root: &Path,
+pub(crate) fn call_git_commit_scoped<'a>(
+    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "commit scoped paths";
@@ -144,9 +146,11 @@ pub(crate) fn call_git_commit_scoped(
         ));
     }
 
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let normalized_paths = normalize_git_paths(TOOL, &root, &paths)?;
-    let plan = core_commit::plan_commit_scoped(&root, &normalized_paths)
+    let repository = repository.into();
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let root = policy.bind(repository);
+    let normalized_paths = normalize_git_paths(TOOL, root.path(), &paths)?;
+    let plan = core_commit::plan_commit_scoped(root, &normalized_paths)
         .map_err(|error| refused(TOOL, error))?;
 
     if dry_run {
@@ -164,13 +168,13 @@ pub(crate) fn call_git_commit_scoped(
         .map_err(|error| format!("git_commit_scoped refused: {error}"));
     }
 
-    let before_git_head = git_head_for_tool(TOOL, &root)?;
-    let receipt_id = crate::tools::journal::begin_git(&root, TOOL, &before_git_head)?;
+    let before_git_head = git_head_for_tool(TOOL, root)?;
+    let receipt_id = crate::tools::journal::begin_git(root.path(), TOOL, &before_git_head)?;
     let result = (|| {
-        core_commit::stage_paths(&root, &plan.paths).map_err(|error| refused(TOOL, error))?;
-        core_commit::verify_scoped_staged(&root, &plan)
+        core_commit::stage_paths(root, &plan.paths).map_err(|error| refused(TOOL, error))?;
+        core_commit::verify_scoped_staged(root, &plan)
             .map_err(|error| refused_after_staging(TOOL, error))?;
-        core_commit::commit_staged(&root, &subject, &body).map_err(|error| {
+        core_commit::commit_staged(root, &subject, &body).map_err(|error| {
             format!(
                 "{}\nindex may contain staged scoped paths because git commit failed after staging",
                 refused(TOOL, error)
@@ -178,7 +182,7 @@ pub(crate) fn call_git_commit_scoped(
         })?;
 
         let (dirty_after, still_dirty) =
-            core_commit::requested_still_dirty(&root, &plan.requested_paths)
+            core_commit::requested_still_dirty(root, &plan.requested_paths)
                 .map_err(|error| refused(TOOL, error))?;
         if !still_dirty.is_empty() {
             return Err(format!(
@@ -188,7 +192,7 @@ pub(crate) fn call_git_commit_scoped(
         }
 
         let identity =
-            core_commit::read_commit_identity(&root).map_err(|error| refused(TOOL, error))?;
+            core_commit::read_commit_identity(root).map_err(|error| refused(TOOL, error))?;
         serde_json::to_string_pretty(&json!({
             "tool": TOOL,
             "dry_run": false,
@@ -198,13 +202,13 @@ pub(crate) fn call_git_commit_scoped(
             "paths": plan.paths,
             "push": false,
             "remaining_dirty_paths": dirty_after,
-            "status_short": git_status_short(&root)?
+            "status_short": git_status_short(root)?
         }))
         .map_err(|error| format!("git_commit_scoped refused: {error}"))
     })();
-    let after_git_head = git_head_for_tool(TOOL, &root);
+    let after_git_head = git_head_for_tool(TOOL, root);
     crate::tools::journal::settle_git(
-        &root,
+        root.path(),
         TOOL,
         &receipt_id,
         &before_git_head,
@@ -213,8 +217,8 @@ pub(crate) fn call_git_commit_scoped(
     )
 }
 
-pub(crate) fn call_git_commit_prefix(
-    repo_root: &Path,
+pub(crate) fn call_git_commit_prefix<'a>(
+    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "commit prefix paths";
@@ -240,9 +244,11 @@ pub(crate) fn call_git_commit_prefix(
         ));
     }
 
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let normalized_prefixes = normalize_git_prefixes(TOOL, &root, &prefixes)?;
-    let plan = core_commit::plan_commit_prefix(&root, &normalized_prefixes)
+    let repository = repository.into();
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let root = policy.bind(repository);
+    let normalized_prefixes = normalize_git_prefixes(TOOL, root.path(), &prefixes)?;
+    let plan = core_commit::plan_commit_prefix(root, &normalized_prefixes)
         .map_err(|error| refused(TOOL, error))?;
 
     if dry_run {
@@ -262,13 +268,13 @@ pub(crate) fn call_git_commit_prefix(
         .map_err(|error| format!("git_commit_prefix refused: {error}"));
     }
 
-    let before_git_head = git_head_for_tool(TOOL, &root)?;
-    let receipt_id = crate::tools::journal::begin_git(&root, TOOL, &before_git_head)?;
+    let before_git_head = git_head_for_tool(TOOL, root)?;
+    let receipt_id = crate::tools::journal::begin_git(root.path(), TOOL, &before_git_head)?;
     let result = (|| {
-        core_commit::stage_paths(&root, &plan.paths).map_err(|error| refused(TOOL, error))?;
-        core_commit::verify_prefix_staged(&root, &plan)
+        core_commit::stage_paths(root, &plan.paths).map_err(|error| refused(TOOL, error))?;
+        core_commit::verify_prefix_staged(root, &plan)
             .map_err(|error| refused_after_staging(TOOL, error))?;
-        core_commit::commit_staged(&root, &subject, &body).map_err(|error| {
+        core_commit::commit_staged(root, &subject, &body).map_err(|error| {
             format!(
                 "{}\nindex may contain staged prefix-expanded paths because git commit failed after staging",
                 refused(TOOL, error)
@@ -276,7 +282,7 @@ pub(crate) fn call_git_commit_prefix(
         })?;
 
         let (dirty_after, still_dirty) =
-            core_commit::requested_still_dirty(&root, &plan.requested_paths)
+            core_commit::requested_still_dirty(root, &plan.requested_paths)
                 .map_err(|error| refused(TOOL, error))?;
         if !still_dirty.is_empty() {
             return Err(format!(
@@ -286,7 +292,7 @@ pub(crate) fn call_git_commit_prefix(
         }
 
         let identity =
-            core_commit::read_commit_identity(&root).map_err(|error| refused(TOOL, error))?;
+            core_commit::read_commit_identity(root).map_err(|error| refused(TOOL, error))?;
         serde_json::to_string_pretty(&json!({
             "tool": TOOL,
             "dry_run": false,
@@ -297,13 +303,13 @@ pub(crate) fn call_git_commit_prefix(
             "paths": plan.paths,
             "push": false,
             "remaining_dirty_paths": dirty_after,
-            "status_short": git_status_short(&root)?
+            "status_short": git_status_short(root)?
         }))
         .map_err(|error| format!("git_commit_prefix refused: {error}"))
     })();
-    let after_git_head = git_head_for_tool(TOOL, &root);
+    let after_git_head = git_head_for_tool(TOOL, root);
     crate::tools::journal::settle_git(
-        &root,
+        root.path(),
         TOOL,
         &receipt_id,
         &before_git_head,
@@ -312,8 +318,8 @@ pub(crate) fn call_git_commit_prefix(
     )
 }
 
-pub(crate) fn call_git_stage_exact(
-    repo_root: &Path,
+pub(crate) fn call_git_stage_exact<'a>(
+    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "stage exact paths";
@@ -338,9 +344,11 @@ pub(crate) fn call_git_stage_exact(
         ));
     }
 
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let normalized_paths = normalize_git_paths(TOOL, &root, &paths)?;
-    let plan = core_commit::plan_stage_exact(&root, &normalized_paths)
+    let repository = repository.into();
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let root = policy.bind(repository);
+    let normalized_paths = normalize_git_paths(TOOL, root.path(), &paths)?;
+    let plan = core_commit::plan_stage_exact(root, &normalized_paths)
         .map_err(|error| refused(TOOL, error))?;
 
     if dry_run {
@@ -354,10 +362,10 @@ pub(crate) fn call_git_stage_exact(
         .map_err(|error| format!("git_stage_exact refused: {error}"));
     }
 
-    core_commit::stage_paths(&root, &plan.paths).map_err(|error| refused(TOOL, error))?;
-    core_commit::verify_stage_exact(&root, &plan)
+    core_commit::stage_paths(root, &plan.paths).map_err(|error| refused(TOOL, error))?;
+    core_commit::verify_stage_exact(root, &plan)
         .map_err(|error| refused_after_staging(TOOL, error))?;
-    let status = git_status_short(&root)?;
+    let status = git_status_short(root)?;
 
     serde_json::to_string_pretty(&json!({
         "tool": TOOL,
@@ -370,8 +378,8 @@ pub(crate) fn call_git_stage_exact(
     .map_err(|error| format!("git_stage_exact refused: {error}"))
 }
 
-pub(crate) fn call_git_staged_scope_check(
-    repo_root: &Path,
+pub(crate) fn call_git_staged_scope_check<'a>(
+    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const TOOL: &str = tools::git_staged_scope_check::NAME;
@@ -399,13 +407,15 @@ pub(crate) fn call_git_staged_scope_check(
         ));
     }
 
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let normalized_allowed_paths = normalize_git_paths(TOOL, &root, &allowed_paths)?;
-    let normalized_allowed_prefixes = normalize_git_prefixes(TOOL, &root, &allowed_prefixes)?;
-    let normalized_required_paths = normalize_git_paths(TOOL, &root, &required_paths)?;
+    let repository = repository.into();
+    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let root = policy.bind(repository);
+    let normalized_allowed_paths = normalize_git_paths(TOOL, root.path(), &allowed_paths)?;
+    let normalized_allowed_prefixes = normalize_git_prefixes(TOOL, root.path(), &allowed_prefixes)?;
+    let normalized_required_paths = normalize_git_paths(TOOL, root.path(), &required_paths)?;
 
     let report = core_commit::evaluate_staged_scope(
-        &root,
+        root,
         &normalized_allowed_paths,
         &normalized_allowed_prefixes,
         &normalized_required_paths,

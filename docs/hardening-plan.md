@@ -329,11 +329,14 @@ than path-derived. Items 1 to 3 and 5 of the original inventory are now closed: 
 target, Git execution changes into the retained descriptor through a minimal `fchdir` hook, the guarded
 runner takes a typed working directory, and the worktree check accepts one. What remains:
 
-1. **Git handlers not yet converted.** `git_commit_exact`, `git_commit_scoped`, `git_commit_prefix`,
-   `git_stage_exact`, `git_staged_scope_check`, and `git_restore_exact` still receive a path from dispatch,
-   even though the core policy behind all six now accepts a descriptor-backed target. Converting them is
-   mechanical: the signature, the policy resolution, and the few sites that genuinely need a path, namely
-   path confinement and the receipt journal.
+1. **Git handlers not yet converted.** None remain among the pure Git actions. All eleven Git handlers that
+   do not also touch the filesystem now take the typed target: remote listing, remote check, merge
+   readiness, push, the three commit shapes, staging, the staged scope check, and the exact restore.
+
+   `logical_path()` survives at exactly three boundaries, each named at its call site: path confinement,
+   which resolves caller-named paths against a root and therefore needs one by nature; the repository
+   mutation lock, which is still keyed by path; and the receipt journal. Those three are what the remaining
+   slices are about.
 2. **`git_branch_prepare`.** Deferred on purpose rather than for effort: its post-switch required-file check
    reads the worktree by path, so converting only its Git half would split one action between anchored
    execution and path-based verification.
