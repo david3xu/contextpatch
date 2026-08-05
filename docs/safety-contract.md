@@ -104,6 +104,16 @@ through a directory descriptor, so a privileged external process that renames th
 the final identity check remains outside the cooperative-writer guarantee. Callers must use current
 hash/state checks when unrelated external programs may mutate the same tree.
 
+Every successful file mutation reports the SHA-256 digest of the content it wrote. `replace_exact`,
+`write_new_file`, `write_new_file_base64`, `bulk_replace_exact`, `bulk_write_new_files_base64`, the
+artifact writers, and `write_existing_file_exact_hash` all carry it, so a caller can pass a reported
+digest straight back as the next `expected_sha256` without an intervening read. That matters because a
+guard that costs an extra round trip on every write is a guard that gets skipped. A reported digest
+describes the bytes that write produced and nothing later: once an external writer touches the file, the
+digest stops matching and the next guarded write refuses, which is the intended outcome rather than a
+regression. For a multi-hunk file the digest covers the single write that carried every hunk, so all of
+that file's entries report the same value.
+
 For `bulk_replace_exact`, validation is batch-wide but application is deliberately per-file. Entries are
 grouped by normalized path, and every hunk for one file is resolved against a single captured snapshot of
 that file rather than against text an earlier hunk already rewrote, so a hunk's validity never depends on

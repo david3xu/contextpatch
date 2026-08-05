@@ -18,6 +18,9 @@ pub struct ReplaceExactSummary {
     pub start_byte: usize,
     pub end_byte: usize,
     pub bytes_written: usize,
+    /// Digest of the bytes this replacement wrote, so a caller can chain it as the next
+    /// `expected_sha256` without a separate read.
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,6 +49,9 @@ pub struct ReplaceExactFileSummary {
     pub path: PathBuf,
     pub relative_path: PathBuf,
     pub bytes_written: usize,
+    /// Digest of the bytes this write produced, so a caller can chain it as the next
+    /// `expected_sha256` without a separate read.
+    pub sha256: String,
     pub hunks: Vec<PlannedHunk>,
 }
 
@@ -318,6 +324,7 @@ impl PlannedReplacement {
             start_byte,
             end_byte,
             bytes_written: self.updated.len(),
+            sha256: sha256_bytes(self.updated.as_bytes()),
         }
     }
 
@@ -326,6 +333,7 @@ impl PlannedReplacement {
             path: self.path.clone(),
             relative_path: self.relative_path.clone(),
             bytes_written: self.updated.len(),
+            sha256: sha256_bytes(self.updated.as_bytes()),
             hunks: self.hunks.clone(),
         }
     }
@@ -1256,6 +1264,90 @@ mod tests {
             .contains("changed after replacement was planned"));
         assert_eq!(fs::read_to_string(one).unwrap(), "alpha BETA");
         assert_eq!(fs::read_to_string(two).unwrap(), "external change");
+    }
+
+    #[test]
+    fn a_single_replacement_reports_the_digest_of_the_bytes_on_disk() {
+        let root = test_root("a_single_replacement_reports_the_digest_of_the_bytes_on_disk");
+        let file = root.join("sample.txt");
+        fs::write(&file, "alpha beta gamma").unwrap();
+
+        let summary =
+            replace_exact_in_root(&root, Path::new("sample.txt"), "beta", "delta").unwrap();
+
+        assert_eq!(summary.sha256, sha256_bytes(&fs::read(&file).unwrap()));
+    }
+
+    #[test]
+    fn a_reported_digest_chains_into_the_next_replacement() {
+        let root = test_root("a_reported_digest_chains_into_the_next_replacement");
+        let file = root.join("sample.txt");
+        fs::write(&file, "alpha beta gamma").unwrap();
+
+        // The digest one write reports must be usable as the guard for the next, with no intervening
+        // read. That is the whole reason for returning it.
+        let first = replace_exact_in_root(&root, Path::new("sample.txt"), "alpha", "ALPHA").unwrap();
+        let second = replace_exact_in_root_with_sha256(
+            &root,
+            Path::new("sample.txt"),
+            "gamma",
+            "GAMMA",
+            Some(&first.sha256),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&file).unwrap(), "ALPHA beta GAMMA");
+        assert_eq!(second.sha256, sha256_bytes(&fs::read(&file).unwrap()));
+    }
+
+    #[test]
+    fn a_reported_digest_stops_guarding_once_the_file_changes() {
+        let root = test_root("a_reported_digest_stops_guarding_once_the_file_changes");
+        let file = root.join("sample.txt");
+        fs::write(&file, "alpha beta gamma").unwrap();
+
+        let first = replace_exact_in_root(&root, Path::new("sample.txt"), "alpha", "ALPHA").unwrap();
+        fs::write(&file, "external change gamma").unwrap();
+
+        let error = replace_exact_in_root_with_sha256(
+            &root,
+            Path::new("sample.txt"),
+            "gamma",
+            "GAMMA",
+            Some(&first.sha256),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "external change gamma");
+    }
+
+    #[test]
+    fn a_multi_hunk_write_reports_one_digest_matching_the_file_on_disk() {
+        let root = test_root("a_multi_hunk_write_reports_one_digest_matching_the_file_on_disk");
+        let file = root.join("sample.txt");
+        fs::write(&file, "alpha beta gamma").unwrap();
+        let entries = [
+            ReplaceExactEntry {
+                path: Path::new("sample.txt"),
+                old: "alpha",
+                new: "ALPHA",
+                expected_sha256: None,
+            },
+            ReplaceExactEntry {
+                path: Path::new("sample.txt"),
+                old: "gamma",
+                new: "GAMMA",
+                expected_sha256: None,
+            },
+        ];
+
+        let planned = plan_bulk_replace_exact_in_root(&root, &entries).unwrap();
+        let summary = apply_planned_replacement(&root, &planned[0]).unwrap();
+
+        // One write means one digest, covering every hunk, and it must match the file.
+        assert_eq!(summary.hunks.len(), 2);
+        assert_eq!(summary.sha256, sha256_bytes(&fs::read(&file).unwrap()));
     }
 
     fn test_root(name: &str) -> PathBuf {

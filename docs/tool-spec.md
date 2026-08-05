@@ -295,7 +295,10 @@ Rules:
 - Refuse if `old` appears more than once.
 - When `expected_sha256` is provided, validate it and refuse before mutation if the current complete-file digest differs.
 - Write atomically.
-- Return the changed byte range or a concise edit summary.
+- Return the changed byte range or a concise edit summary, together with the SHA-256 digest of the
+  bytes written. Reporting the digest is what lets a caller chain it as the next `expected_sha256`
+  without a separate read, which is the difference between a guard that is cheap enough to use on every
+  write and one that is quietly skipped.
 
 ### `bulk_replace_exact`
 
@@ -345,7 +348,8 @@ Rules:
   edited.
 - Return one result per submitted entry, in submission order, each naming its entry index and the byte
   range that entry resolved to, together with the number of files written. `bytes_written` is the size
-  of the single write that carried every hunk for that file.
+  of the single write that carried every hunk for that file, and `sha256` is that file's post-write
+  digest, so every hunk of one file reports the same digest.
 - Before applying each plan, re-read the target under its mutation lock and compare the exact bytes
   captured during validation. Refuse that entry if the file changed, even when no caller-supplied
   `expected_sha256` was provided.
@@ -435,6 +439,8 @@ Rules:
 - Refuse symlinked or non-directory parent components instead of following them.
 - Refuse missing parent directories.
 - Write atomically.
+- Report the SHA-256 digest of the created content, so the new file can be guarded on the next write
+  without reading it back.
 
 ### `write_new_file_base64`
 
@@ -457,6 +463,8 @@ Rules:
 - Refuse invalid base64 or decoded content larger than 20 MiB.
 - When `expected_bytes` is provided, refuse if the decoded byte count does not match.
 - Write atomically.
+- Report the SHA-256 digest of the created content, so the new file can be guarded on the next write
+  without reading it back.
 
 ### `file_info`
 

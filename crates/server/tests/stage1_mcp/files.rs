@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -206,6 +206,125 @@ fn stage2_bulk_replace_exact_refuses_contradictory_hunks_for_one_file() {
         fs::read_to_string(root.join("one.txt")).unwrap(),
         "alpha beta gamma\n"
     );
+}
+
+#[test]
+fn stage2_file_mutations_report_verified_post_write_digests() {
+    // Every successful mutation reports the digest of what it wrote, so a caller can chain it as the
+    // next expected_sha256 without a separate read. Each reported digest must equal the file on disk.
+    //
+    // Every mutation and every verifying read runs in its own session on purpose. Requests inside one
+    // session are dispatched concurrently, so a file_info sharing a session with a write can observe
+    // the file before that write lands.
+    let root = git_repo("stage2_file_mutations_report_digests");
+    fs::write(root.join("one.txt"), "alpha beta gamma\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let replaced = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"replace_exact","arguments":{"path":"one.txt","old":"beta","new":"BETA"}}}"#,
+        ],
+    );
+    let text = response_text(&replaced[0]);
+    let reported = reported_digest(text, "replace_exact");
+    assert_eq!(
+        Value::String(reported.clone()),
+        on_disk_digest(&root, "one.txt"),
+        "the reported digest must match the file on disk: {text}"
+    );
+
+    // Chaining: the reported digest is accepted as the guard for the very next write.
+    let chain = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "replace_exact",
+            "arguments": {
+                "path": "one.txt",
+                "old": "gamma",
+                "new": "GAMMA",
+                "expected_sha256": reported
+            }
+        }
+    })
+    .to_string();
+    let chained = run_server(&root, &[chain.as_str()]);
+    let chained_text = response_text(&chained[0]);
+    assert_ne!(
+        chained[0]["result"]["isError"], true,
+        "a freshly reported digest must still guard: {chained_text}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha BETA GAMMA\n"
+    );
+    assert_eq!(
+        Value::String(reported_digest(chained_text, "replace_exact")),
+        on_disk_digest(&root, "one.txt")
+    );
+
+    // Bulk multi-hunk: one write per file, so every hunk reports that file's post-write digest.
+    let bulk = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"alpha","new":"ALPHA"},{"path":"one.txt","old":"BETA","new":"beta"}]}}}"#,
+        ],
+    );
+    let applied: Value = serde_json::from_str(response_text(&bulk[0])).unwrap();
+    let bulk_digest = on_disk_digest(&root, "one.txt");
+    let entries = applied["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(
+            entry["sha256"], bulk_digest,
+            "every hunk reports its file's post-write digest: {applied}"
+        );
+    }
+
+    // Creation reports a digest as well, so a new file can be guarded without reading it back.
+    let created = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write_new_file","arguments":{"path":"new.txt","content":"created\n"}}}"#,
+        ],
+    );
+    let created_text = response_text(&created[0]);
+    assert_eq!(
+        Value::String(reported_digest(created_text, "write_new_file")),
+        on_disk_digest(&root, "new.txt")
+    );
+
+    // Bulk creation reports one digest per created file.
+    let imported = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_write_new_files_base64","arguments":{"entries":[{"path":"import.txt","content_base64":"aW1wb3J0ZWQK"}]}}}"#,
+        ],
+    );
+    let bulk_created: Value = serde_json::from_str(response_text(&imported[0])).unwrap();
+    assert_eq!(
+        bulk_created["files"][0]["sha256"],
+        on_disk_digest(&root, "import.txt"),
+        "bulk creation reports each file's digest: {bulk_created}"
+    );
+}
+
+/// Pull the trailing `sha256=<hex>` value out of a plain-text mutation response.
+fn reported_digest(response: &str, tool: &str) -> String {
+    response
+        .rsplit_once("sha256=")
+        .map(|(_, digest)| digest.trim().to_string())
+        .unwrap_or_else(|| panic!("{tool} must report a post-write digest: {response}"))
+}
+
+/// Digest the file as it currently exists on disk, independently of any tool response.
+fn on_disk_digest(root: &Path, path: &str) -> Value {
+    let mut hasher = Sha256::new();
+    hasher.update(fs::read(root.join(path)).unwrap());
+    Value::String(format!("{:x}", hasher.finalize()))
 }
 
 #[test]

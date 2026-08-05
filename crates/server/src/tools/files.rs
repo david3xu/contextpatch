@@ -176,11 +176,12 @@ pub(crate) fn call_replace_exact(
         })?;
 
     Ok(format!(
-        "replaced bytes {}..{} in {} ({} bytes written)",
+        "replaced bytes {}..{} in {} ({} bytes written); sha256={}",
         summary.start_byte,
         summary.end_byte,
         summary.path.display(),
-        summary.bytes_written
+        summary.bytes_written,
+        summary.sha256
     ))
 }
 
@@ -479,9 +480,10 @@ pub(crate) fn call_write_new_file(
         .map_err(|error| format!("write_new_file refused: {error}"))?;
 
     Ok(format!(
-        "created {} ({} bytes written)",
+        "created {} ({} bytes written); sha256={}",
         summary.path.display(),
-        summary.bytes_written
+        summary.bytes_written,
+        sha256_hex(content.as_bytes())
     ))
 }
 
@@ -518,9 +520,10 @@ pub(crate) fn call_write_new_file_base64(
         .map_err(|error| format!("write_new_file_base64 refused: {error}"))?;
 
     Ok(format!(
-        "created {} ({} bytes written from base64)",
+        "created {} ({} bytes written from base64); sha256={}",
         summary.path.display(),
-        summary.bytes_written
+        summary.bytes_written,
+        sha256_hex(&bytes)
     ))
 }
 
@@ -748,7 +751,8 @@ pub(crate) fn call_bulk_write_new_files_base64(
                 .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))?;
         created.push(json!({
             "path": summary.path.display().to_string(),
-            "bytes_written": summary.bytes_written
+            "bytes_written": summary.bytes_written,
+            "sha256": sha256_hex(&bytes)
         }));
     }
 
@@ -1033,7 +1037,8 @@ pub(crate) fn call_bulk_replace_exact(
                 "path": path,
                 "start_byte": hunk.start_byte,
                 "end_byte": hunk.end_byte,
-                "bytes_written": summary.bytes_written
+                "bytes_written": summary.bytes_written,
+                "sha256": summary.sha256
             }));
         }
     }
@@ -1077,6 +1082,7 @@ fn write_artifact(
         "artifact_root": artifact_root.display().to_string(),
         "path": summary.path.display().to_string(),
         "bytes_written": summary.bytes_written,
+        "sha256": sha256_hex(bytes),
         "repo_mutation": false
     }))
     .map_err(|error| format!("{tool_name} refused: {error}"))
