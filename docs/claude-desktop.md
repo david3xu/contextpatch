@@ -132,6 +132,10 @@ The local ContextPatch MCP connection requires no authentication. Claude Desktop
 
 ## Build and configure Claude Desktop
 
+For a repository on another machine, the transport is SSH rather than a local process; see
+[Claude Desktop with ContextPatch over SSH](claude-desktop-remote-ssh.md). Everything below assumes the
+server runs locally.
+
 If the MCP server entry does not exist yet, point Claude Desktop at the release server. Use absolute paths because Claude Desktop does not inherit your shell's current directory:
 
 ```json
