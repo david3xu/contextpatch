@@ -143,8 +143,12 @@ Rules:
 
 - Must report file tools and process-execution availability honestly.
 - Must report the active tool surface, its public names, and the internal action names.
-- Projected responses must retain `build.git_sha`; a section response must include both
-  `"section": "<name>"` and a property named for the requested section.
+- Projected responses must retain `build.git_sha` and `build.git_dirty_fingerprint`; a section
+  response must include both `"section": "<name>"` and a property named for the requested section.
+- Must report a dirty-tree fingerprint alongside `git_dirty`. A matching `git_sha` does not pin a
+  build made from a dirty worktree, because the sha still matches `HEAD` while the binary carries
+  uncommitted changes. The fingerprint must be `clean` for a clean worktree, `unknown` when
+  provenance could not be determined, and must never contain file content.
 - Unknown sections must refuse and list the valid choices.
 - The no-argument response must retain the complete legacy manifest shape.
 - Must identify the configured repository root.

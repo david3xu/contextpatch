@@ -68,11 +68,15 @@ pub(crate) fn build_metadata() -> Value {
     json!({
         "git_sha": contextpatch_core::BUILD_GIT_SHA,
         "git_dirty": contextpatch_core::BUILD_GIT_DIRTY,
+        "git_dirty_fingerprint": contextpatch_core::BUILD_GIT_DIRTY_FINGERPRINT,
         "built_at": contextpatch_core::BUILD_TIMESTAMP,
         "profile": contextpatch_core::BUILD_PROFILE,
         "note": "Compare git_sha against the checked out commit. If they differ, this server \
                  predates the source tree, and a rebuild plus reinstall may provide capabilities \
-                 that appear absent here."
+                 that appear absent here. A matching git_sha is not sufficient while git_dirty is \
+                 true, because the sha still matches HEAD when the binary carries uncommitted \
+                 changes; compare git_dirty_fingerprint against a rebuild from the current tree to \
+                 tell whether this server was built from it."
     })
 }
 

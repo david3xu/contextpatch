@@ -11,12 +11,22 @@
 //! string rather than breaking the build, because provenance is diagnostic and must never be the
 //! reason a build fails.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// A build script cannot depend on the crate it builds, so the deterministic fingerprint helpers are
+// included directly. The crate compiles the same file as `contextpatch_core::provenance`, where
+// their tests live, so the shipped stamp and the tested logic cannot drift apart.
+include!("src/provenance.rs");
+
 /// Emitted when a value cannot be determined, so the field is always present and always a string.
 const UNKNOWN: &str = "unknown";
+
+/// Paths handed to one `git hash-object` invocation, so a large dirty set neither spawns a process
+/// per file nor overruns the platform argument limit.
+const DIGEST_BATCH_SIZE: usize = 64;
 
 fn repository_root() -> Option<PathBuf> {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").ok()?);
@@ -73,6 +83,79 @@ fn listed_repository_files(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Digest the current content of each dirty path with `git hash-object`.
+///
+/// Git computes the digests, so file bytes never enter this process and cannot reach the emitted
+/// stamp, a build log, or a failure message.
+fn blob_digests(root: &Path, paths: &[String]) -> BTreeMap<String, String> {
+    let mut digests = BTreeMap::new();
+
+    for batch in paths.chunks(DIGEST_BATCH_SIZE) {
+        let mut command = Command::new("git");
+        command.current_dir(root).args(["hash-object", "--"]);
+        command.args(batch);
+
+        let Ok(output) = command.output() else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+
+        // One digest per input path, in the order the paths were given.
+        let listing = String::from_utf8_lossy(&output.stdout);
+        for (path, digest) in batch.iter().zip(listing.lines()) {
+            digests.insert(path.clone(), digest.trim().to_string());
+        }
+    }
+
+    digests
+}
+
+/// Collect every uncommitted path together with a digest of its current content.
+///
+/// Returns `None` only when the status listing itself could not be read, which the caller reports as
+/// unknown rather than silently as clean.
+fn dirty_entries(root: &Path) -> Option<Vec<DirtyEntry>> {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let records: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .map(|record| String::from_utf8_lossy(record).to_string())
+        .collect();
+
+    let parsed = parse_porcelain_records(&records);
+    let present: Vec<String> = parsed
+        .iter()
+        .map(|(_, path)| path.clone())
+        .filter(|path| root.join(path).exists())
+        .collect();
+    let digests = blob_digests(root, &present);
+
+    Some(
+        parsed
+            .into_iter()
+            .map(|(status, path)| DirtyEntry {
+                content_digest: digests
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_else(|| ABSENT_CONTENT_DIGEST.to_string()),
+                path,
+                status,
+            })
+            .collect(),
+    )
+}
+
 fn build_timestamp() -> String {
     // Prefer a readable UTC instant. `date` is present on every platform this server targets, and
     // falling back to epoch seconds keeps the field meaningful where it is not.
@@ -123,8 +206,18 @@ fn main() {
         .map(|listing| if listing.is_empty() { "false" } else { "true" }.to_string())
         .unwrap_or_else(|| UNKNOWN.to_string());
 
+    // A dirty boolean cannot pin a build: the sha still matches HEAD, so comparing the reported sha
+    // against the checked-out commit returns a false all-clear. The fingerprint distinguishes two
+    // builds made from different dirty trees at the same commit.
+    let dirty_fingerprint = root
+        .as_deref()
+        .and_then(dirty_entries)
+        .map(|entries| dirty_tree_fingerprint(&entries))
+        .unwrap_or_else(|| UNKNOWN.to_string());
+
     println!("cargo:rustc-env=CONTEXTPATCH_BUILD_GIT_SHA={sha}");
     println!("cargo:rustc-env=CONTEXTPATCH_BUILD_GIT_DIRTY={dirty}");
+    println!("cargo:rustc-env=CONTEXTPATCH_BUILD_GIT_DIRTY_FINGERPRINT={dirty_fingerprint}");
     println!(
         "cargo:rustc-env=CONTEXTPATCH_BUILD_TIMESTAMP={}",
         build_timestamp()
