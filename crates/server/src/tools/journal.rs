@@ -19,6 +19,28 @@ fn digest_of(path: &Path) -> Result<Option<String>, String> {
     }
 }
 
+/// Digest one repository file for receipt evidence, through the repository's own authority.
+///
+/// Absence is not a failure: a receipt records the before state of a file that may not exist yet. A symlink
+/// is reported as absent rather than followed, which matches the uniform no-follow rule the rest of the file
+/// surface applies, and replaces reading a joined pathname with `std::fs`.
+fn digest_in_root(
+    root: contextpatch_core::git::RepositoryRoot<'_>,
+    relative: &str,
+) -> Result<Option<String>, String> {
+    use contextpatch_core::fs::rooted::{self, RootedEntryKind};
+
+    match rooted::entry_kind(root, relative) {
+        Ok(Some(RootedEntryKind::RegularFile)) => rooted::sha256(root, relative)
+            .map(Some)
+            .map_err(|error| format!("failed to read `{relative}` for receipt evidence: {error}")),
+        Ok(_) => Ok(None),
+        Err(error) => Err(format!(
+            "failed to read `{relative}` for receipt evidence: {error}"
+        )),
+    }
+}
+
 fn settlement_error(tool: &str, error: impl std::fmt::Display) -> String {
     format!(
         "{tool} receipt settlement failed after the mutation ran: {error}; inspect current state \
@@ -26,23 +48,20 @@ fn settlement_error(tool: &str, error: impl std::fmt::Display) -> String {
     )
 }
 
-pub(crate) fn recorded<T>(
-    repo_root: &Path,
+pub(crate) fn recorded<'a, T>(
+    repo_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     tool: &str,
     relative_path: &str,
     work: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     let normalized = normalize_repo_relative_path(tool, relative_path)?;
-    let root = repo_root
-        .canonicalize()
-        .map_err(|error| format!("{tool} refused: failed to resolve repo root: {error}"))?;
-    let target = root.join(&normalized);
-    let before = digest_of(&target).map_err(|error| format!("{tool} refused: {error}"))?;
-    let id = receipt::begin_file(&root, tool, &normalized, before.as_deref())
+    let root = repo_root.into();
+    let before = digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
+    let id = receipt::begin_file(root, tool, &normalized, before.as_deref())
         .map_err(|error| format!("{tool} refused before mutation: {error}"))?;
 
     let result = work();
-    let after = digest_of(&target);
+    let after = digest_in_root(root, &normalized);
     let outcome = if result.is_ok() {
         Outcome::Applied
     } else {
@@ -52,8 +71,8 @@ pub(crate) fn recorded<T>(
         }
     };
     let settlement = match &after {
-        Ok(after) => receipt::settle_file(&root, &id, outcome, after.as_deref()),
-        Err(_) => receipt::settle_file(&root, &id, outcome, None),
+        Ok(after) => receipt::settle_file(root, &id, outcome, after.as_deref()),
+        Err(_) => receipt::settle_file(root, &id, outcome, None),
     };
 
     let mut auxiliary_errors = Vec::new();
@@ -68,8 +87,8 @@ pub(crate) fn recorded<T>(
     combine_result(result, auxiliary_errors)
 }
 
-pub(crate) fn begin_file_batch(
-    repo_root: &Path,
+pub(crate) fn begin_file_batch<'a>(
+    repo_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     tool: &str,
     relative_paths: &[String],
 ) -> Result<receipt::FileReceiptBatch, String> {
@@ -81,25 +100,22 @@ pub(crate) fn begin_file_batch(
         .map_err(|error| format!("{tool} refused before mutation: {error}"))
 }
 
-pub(crate) fn recorded_in_batch<T>(
+pub(crate) fn recorded_in_batch<'a, T>(
     batch: &mut receipt::FileReceiptBatch,
-    repo_root: &Path,
+    repo_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     tool: &str,
     relative_path: &str,
     work: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     let normalized = normalize_repo_relative_path(tool, relative_path)?;
-    let root = repo_root
-        .canonicalize()
-        .map_err(|error| format!("{tool} refused: failed to resolve repo root: {error}"))?;
-    let target = root.join(&normalized);
-    let before = digest_of(&target).map_err(|error| format!("{tool} refused: {error}"))?;
+    let root = repo_root.into();
+    let before = digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
     let id = batch
         .begin_file(&normalized, before.as_deref())
         .map_err(|error| format!("{tool} refused before mutation: {error}"))?;
 
     let result = work();
-    let after = digest_of(&target);
+    let after = digest_in_root(root, &normalized);
     let outcome = if result.is_ok() {
         Outcome::Applied
     } else {
