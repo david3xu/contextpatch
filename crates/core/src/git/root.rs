@@ -156,6 +156,10 @@ impl std::fmt::Debug for OwnedRepositoryRoot {
 
 impl OwnedRepositoryRoot {
     /// Retain whatever authority a root carries, so it can outlive the call that had it.
+    ///
+    /// Fails rather than degrading. An anchored root whose descriptor cannot be duplicated has no authority
+    /// to hand a worker, and the only remaining option would be its name, which is the substitution this type
+    /// exists to prevent. Callers invoke this before scheduling, so the refusal arrives before any job runs.
     pub fn retain(root: RepositoryRoot<'_>) -> Result<Self, ContextPatchError> {
         #[cfg(unix)]
         {
@@ -201,29 +205,36 @@ impl OwnedRepositoryRoot {
     pub fn logical_path(&self) -> &Path {
         &self.logical_path
     }
-}
 
-impl Clone for OwnedRepositoryRoot {
-    /// Duplicate the retained descriptor rather than the name.
+    /// Duplicate this authority, or fail.
     ///
-    /// A failed duplication degrades to the name rather than panicking, and `is_anchored` reports that
-    /// honestly, so a caller can tell the difference instead of being told a clone is anchored when it is not.
-    fn clone(&self) -> Self {
+    /// Deliberately not `Clone`. `Clone` cannot fail, so implementing it would force a choice between
+    /// panicking and quietly returning a path-backed copy of an anchored root. The second is worse than it
+    /// looks: the copy would still answer `logical_path`, still be accepted everywhere a root is accepted,
+    /// and differ only in that a name now decides which directory is reached. That is exactly the failure
+    /// this phase removes, so it is not offered.
+    pub fn try_clone(&self) -> Result<Self, ContextPatchError> {
         #[cfg(unix)]
         {
-            Self {
+            let directory = match &self.directory {
+                Some(directory) => Some(directory.try_clone().map_err(|error| {
+                    ContextPatchError::new(format!(
+                        "failed to duplicate the retained authority for repository {}: {error}",
+                        self.logical_path.display()
+                    ))
+                })?),
+                None => None,
+            };
+            Ok(Self {
                 logical_path: self.logical_path.clone(),
-                directory: self
-                    .directory
-                    .as_ref()
-                    .and_then(|directory| directory.try_clone().ok()),
-            }
+                directory,
+            })
         }
         #[cfg(not(unix))]
         {
-            Self {
+            Ok(Self {
                 logical_path: self.logical_path.clone(),
-            }
+            })
         }
     }
 }
