@@ -6,7 +6,6 @@ pub mod file_identity;
 pub mod guarded_file;
 pub mod hash;
 pub mod mutation_lock;
-pub mod path;
 pub mod read_range;
 pub mod receipt;
 pub mod rooted;
