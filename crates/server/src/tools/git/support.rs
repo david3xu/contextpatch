@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use crate::tools;
 use contextpatch_core::git::state as git_state;
-use contextpatch_core::process::runner::BoundedProcessOutput;
 pub(crate) fn validate_commit_subject(subject: &str) -> Result<String, String> {
     contextpatch_core::git::validate::commit_subject(subject)
         .map_err(|error| format!("{} refused: {error}", tools::git_commit_exact::NAME))
@@ -54,14 +53,6 @@ pub(crate) fn git_status_paths_for_tool(
     root: &Path,
 ) -> Result<BTreeSet<String>, String> {
     git_state::status_paths(root).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn parse_nul_paths_for_tool(
-    tool_name: &str,
-    bytes: &[u8],
-    label: &str,
-) -> Result<BTreeSet<String>, String> {
-    git_state::parse_nul_paths(bytes, label).map_err(|error| refused(tool_name, error))
 }
 
 /// How strictly an action must verify its configured repository root.
@@ -131,18 +122,6 @@ pub(crate) fn git_success_for_tool(
     args: Vec<String>,
 ) -> Result<(), String> {
     git_state::success(root, &args).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn git_output_for_tool(
-    tool_name: &str,
-    root: &Path,
-    args: &[&str],
-) -> Result<BoundedProcessOutput, String> {
-    git_state::output(root, args).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn git_status_code(root: &Path, args: &[&str]) -> Result<i32, String> {
-    git_state::exit_code(root, args).map_err(|error| refused("git operation", error))
 }
 
 pub(crate) fn rev_count_for_tool(tool_name: &str, root: &Path, range: &str) -> Result<u64, String> {
@@ -239,147 +218,12 @@ pub(crate) fn validate_git_ref_component(label: &str, value: &str) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn validate_expected_head(expected_head: &str) -> Result<String, String> {
-    if expected_head.len() < 7 || expected_head.len() > 40 {
-        return Err(
-            "git_push_exact refused: expected_head must be a 7 to 40 character commit hash"
-                .to_string(),
-        );
-    }
-    if !expected_head.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("git_push_exact refused: expected_head must be hexadecimal".to_string());
-    }
-    Ok(expected_head.to_ascii_lowercase())
-}
-
-pub(crate) fn remote_ref(remote: &str, branch: &str) -> String {
-    format!("refs/remotes/{remote}/{branch}")
-}
-
-pub(crate) fn infer_fetch_branch(remote: &str, target_ref: &str) -> Result<String, String> {
-    let refs_remotes_prefix = format!("refs/remotes/{remote}/");
-    let remote_prefix = format!("{remote}/");
-    let branch = if let Some(branch) = target_ref.strip_prefix(&refs_remotes_prefix) {
-        branch
-    } else if let Some(branch) = target_ref.strip_prefix(&remote_prefix) {
-        branch
-    } else {
-        return Err(format!(
-            "git_merge_readiness refused: fetch=true requires target_branch unless target_ref starts with `{remote}/` or `refs/remotes/{remote}/`"
-        ));
-    };
-    validate_git_branch(branch)
-}
-
 pub(crate) fn resolve_commit(
     tool_name: &str,
     root: &Path,
     ref_name: &str,
 ) -> Result<String, String> {
     git_state::resolve_commit(root, ref_name).map_err(|error| refused(tool_name, error))
-}
-
-pub(crate) fn changed_files_between(
-    tool_name: &str,
-    root: &Path,
-    from_ref: &str,
-    to_ref: &str,
-) -> Result<BTreeSet<String>, String> {
-    let output = git_output_for_tool(
-        tool_name,
-        root,
-        &["diff", "--name-only", "-z", from_ref, to_ref, "--"],
-    )?;
-    parse_nul_paths_for_tool(tool_name, &output.stdout, "git diff --name-only")
-}
-
-pub(crate) fn validate_required_file_path(
-    tool_name: &str,
-    root: &Path,
-    raw: &str,
-) -> Result<String, String> {
-    validate_required_file_path_syntax(tool_name, raw)?;
-    let path = Path::new(raw);
-    let candidate = root.join(path);
-    if !candidate.is_file() {
-        return Err(format!(
-            "{tool_name} refused: required file `{raw}` is missing after branch preparation"
-        ));
-    }
-    let resolved = candidate.canonicalize().map_err(|error| {
-        format!("{tool_name} refused: failed to resolve required file `{raw}`: {error}")
-    })?;
-    if !resolved.starts_with(root) {
-        return Err(format!(
-            "{tool_name} refused: required file `{raw}` resolves outside repository root"
-        ));
-    }
-    Ok(raw.to_string())
-}
-
-pub(crate) fn validate_required_files_in_ref(
-    tool_name: &str,
-    root: &Path,
-    ref_name: &str,
-    paths: &[String],
-) -> Result<Vec<String>, String> {
-    paths
-        .iter()
-        .map(|path| {
-            validate_required_file_path_syntax(tool_name, path)?;
-            let object = format!("{ref_name}:{path}");
-            let object_type = git_stdout_for_tool(tool_name, root, &["cat-file", "-t", &object])
-                .map_err(|_| {
-                    format!(
-                        "{tool_name} refused: required file `{path}` is missing from `{ref_name}`"
-                    )
-                })?;
-            if object_type.trim() != "blob" {
-                return Err(format!(
-                    "{tool_name} refused: required path `{path}` in `{ref_name}` is not a file"
-                ));
-            }
-            Ok(path.to_string())
-        })
-        .collect()
-}
-
-pub(crate) fn validate_required_file_path_syntax(tool_name: &str, raw: &str) -> Result<(), String> {
-    if raw.is_empty() || raw.contains('\0') {
-        return Err(format!(
-            "{tool_name} refused: required file path must not be empty or contain NUL"
-        ));
-    }
-    if raw.contains(':') || raw.contains('*') || raw.contains('?') || raw.contains('[') {
-        return Err(format!(
-            "{tool_name} refused: required file path `{raw}` contains Git pathspec metacharacters"
-        ));
-    }
-    let path = Path::new(raw);
-    if path.is_absolute() {
-        return Err(format!(
-            "{tool_name} refused: required file path `{raw}` must be repository-relative"
-        ));
-    }
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(_) => {}
-            _ => {
-                return Err(format!(
-                    "{tool_name} refused: required file path `{raw}` must be a normalized relative path"
-                ))
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn empty_label(text: &str) -> &str {
-    if text.trim().is_empty() {
-        "(empty)"
-    } else {
-        text
-    }
 }
 
 pub(crate) fn format_set(paths: &BTreeSet<String>) -> String {

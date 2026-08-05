@@ -177,12 +177,16 @@ absolute paths, and pathspec metacharacters. The tools that take no paths are th
 pushing are not bounded by the configured root. Write this decision down before moving any code, so
 the migration has a specification to preserve.
 
-### 3.2 Migrate Git policy into `core` (C10) — in progress
+### 3.2 Migrate Git policy into `core` (C10) — complete
 
-The migration pattern is settled and proven on the first slice: `core` returns the refusal detail only
-and the server adapter supplies the `"<tool> refused: "` prefix, so every public refusal string stays
-byte-identical while policy relocates. A server-side regression pins those assembled strings, which makes
-a detail reworded in `core` a test failure rather than a silent public change.
+The migration pattern held across all five slices: `core` returns the refusal detail only and the server
+adapter supplies the `"<tool> refused: "` prefix, so every public refusal string stayed byte-identical
+while policy relocated. Server-side regressions pin those assembled strings in each slice, which makes a
+detail reworded in `core` a test failure rather than a silent public change.
+
+Three refusal prefixes are not the usual shape and are preserved as data returned to the adapter rather
+than strings built in `core`: `refused after staging`, `refused after commit`, and the restore and delete
+postconditions. Two more were never tool names at all, `git operation` and `git workflow`.
 
 Slices, each its own behavior-neutral commit:
 
@@ -245,7 +249,25 @@ Slices, each its own behavior-neutral commit:
    `expected_paths` and `actual_dirty_paths` labels are swapped relative to the sets they print. Correcting
    them would change public refusal text, which this behavior-neutral migration must not do. It is now
    recorded as C34 and marked at the code.
-5. **`sync` planning — open.** Branch preparation planning, merge readiness, and push divergence checks.
+5. **`sync` planning — done.** `core::git::sync` owns remote listing and parsing, the single-branch fetch
+   refspec, the fetch-did-not-disturb-the-worktree guard, clean-worktree gates, ancestry, divergence
+   counts in both directions, changed-file overlap between two refs, expected-head validation, the
+   required-file gates, and the branch action selection.
+
+   Branch action selection is the one place this slice improved rather than only relocated. The dry-run and
+   execution paths previously derived the command sequence separately, so they could drift; they now share
+   one derivation, with the two reported name sets preserved because a plan says what it *would* do while a
+   result says what it *did*. The reset case still distinguishes being already on the branch, since forcing
+   a ref while it is checked out would leave the worktree behind.
+
+   Fourteen core tests run against a bare remote with a clone wired to it. Bare on purpose: pushing to a
+   non-bare repository's checked-out branch is refused by Git itself, which would mask the guards under
+   test. Two server regressions pin the assembled prefixes and the confirmations that still precede any
+   Git call. All five sync integration tests pass unchanged.
+
+With this slice C10 is complete. `tools/git/support.rs` is down from roughly twenty-six thousand bytes to
+twelve, and what remains there is request shaping and refusal addressing rather than policy. Eleven more
+pass-throughs lost their callers during this slice and were deleted.
 
 JSON parsing, MCP schemas, receipts, and response formatting stay in `server` throughout. C11 helper
 deduplication and C13 descriptor-based selection remain out of scope for this phase.
@@ -500,7 +522,7 @@ Phase-specific checks:
 | C07 | Mutating responses omit the resulting digest | 2.2 | Complete |
 | C08 | Batch validation refusals leave no receipt | 2.3 | Complete |
 | C09 | Cheap discovery projections are undocumented; meta action unlisted | 2.4 | Complete |
-| C10 | Git policy lives in the server crate against the stated boundary | 3.2 | In progress |
+| C10 | Git policy lives in the server crate against the stated boundary | 3.2 | Complete |
 | C11 | Three helpers share one name with two semantics | 3.3 | Open |
 | C12 | Worktree-root requirement is inconsistent across tools | 3.1 | Complete |
 | C13 | Workspace selector validates by path, not by descriptor | 3.4 | Open |

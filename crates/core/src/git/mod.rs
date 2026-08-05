@@ -4,6 +4,7 @@ mod guarded_path;
 pub mod restore;
 pub mod state;
 pub mod status;
+pub mod sync;
 pub mod tracked_move;
 pub mod validate;
 mod workspace;

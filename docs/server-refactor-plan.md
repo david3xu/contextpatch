@@ -67,7 +67,9 @@ Avoid one-file-per-tool modules when those files only contain constants or tiny 
   while the policy relocates, and it is what makes each slice behavior-neutral and separately reviewable.
   Request validation moved first, under `core::git::validate`, followed by Git invocation and state
   queries under `core::git::state`, then restore and delete planning under `core::git::restore`, then
-  commit and staging planning under `core::git::commit`.
+  commit and staging planning under `core::git::commit`, then remote, branch, and push policy under
+  `core::git::sync`. With that the migration is complete: `tools/git/support.rs` retains request shaping
+  and refusal addressing only.
 - Keep the directory tree balanced. Do not move all code from `main.rs` into a crowded `tools/` root; split by domain and promote shared runtime/protocol code out of `tools/`.
 - Update public docs only if public behavior changes. Pure module movement should not require tool-spec updates.
 
