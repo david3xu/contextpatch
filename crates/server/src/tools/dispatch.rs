@@ -261,10 +261,10 @@ fn call_tool(
     let repo_root = repository.logical_path();
     match name {
         tools::capability_manifest::NAME => {
-            tools::capability::call_capability_manifest(repo_root, arguments, surface)
+            tools::capability::call_capability_manifest(repository.root(), arguments, surface)
         }
         tools::preflight_health::NAME => {
-            tools::capability::call_preflight_health(repo_root, arguments)
+            tools::capability::call_preflight_health(repository.root(), arguments)
         }
         tools::read_range::NAME => tools::files::call_read_range(repository.root(), arguments),
         tools::diff_preview::NAME => tools::files::call_diff_preview(repository.root(), arguments),
@@ -398,9 +398,11 @@ fn call_tool(
         tools::git_push_exact::NAME => {
             tools::git::handlers::call_git_push_exact(repository.git_repository(), arguments)
         }
-        tools::github_pr_run::NAME => tools::github::call_github_pr_run(repo_root, arguments),
+        tools::github_pr_run::NAME => {
+            tools::github::call_github_pr_run(repository.root(), arguments)
+        }
         tools::github_fork_prepare::NAME => {
-            tools::github::call_github_fork_prepare(repo_root, arguments)
+            tools::github::call_github_fork_prepare(repository.root(), arguments)
         }
         unknown => Err(format!("unknown tool: {unknown}")),
     }

@@ -6,29 +6,36 @@ pub mod github_pr_run {
     pub const NAME: &str = "github_pr_run";
 }
 
-use std::path::Path;
 use std::process::{Command, Stdio};
 
+use contextpatch_core::git::RepositoryRoot;
 use contextpatch_core::process::guarded_command::{
     redact_and_truncate_output, redact_and_truncate_output_tail,
 };
+use contextpatch_core::process::runner::resolve_child_cwd;
 use serde_json::{json, Value};
 
 use crate::tools;
 use crate::tools::common::{
     nonempty_tool_string, optional_bool, optional_string, optional_u64, required_string,
 };
-use crate::tools::git::support::{git_stdout_for_tool, resolved_repo_root};
+use crate::tools::git::support::git_stdout_for_tool;
 
-pub(crate) fn call_github_pr_run(
-    repo_root: &Path,
+pub(crate) fn call_github_pr_run<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CREATE_CONFIRMATION: &str = "create pull request";
     const RERUN_CONFIRMATION: &str = "rerun failed workflow jobs";
 
     let action = required_string(arguments, "action")?;
-    let root = resolved_repo_root(repo_root, tools::github_pr_run::NAME)?;
+    // `gh` needs a working directory to discover which repository it is acting on. It gets the retained
+    // descriptor rather than a name, so the repository it discovers is the one that was selected. The
+    // logical path is still reported, because that is what a caller reading `cwd` expects to see.
+    let root = repository_root.into();
+    let cwd = resolve_child_cwd(root, None)
+        .map_err(|error| format!("github_pr_run refused: {error}"))?;
+    let root = cwd.logical_path();
     let repository = optional_github_repository(arguments)?;
     let job_log_view = if action == "workflow_job_log" {
         Some(workflow_job_log_view(arguments)?)
@@ -232,10 +239,10 @@ pub(crate) fn call_github_pr_run(
         }
     };
 
-    let output = Command::new("gh")
-        .args(&args)
-        .current_dir(&root)
-        .stdin(Stdio::null())
+    let mut command = Command::new("gh");
+    command.args(&args).stdin(Stdio::null());
+    cwd.anchor_command(&mut command);
+    let output = command
         .output()
         .map_err(|error| format!("github_pr_run refused: failed to run gh: {error}"))?;
 
@@ -424,13 +431,16 @@ fn bounded_output(bytes: &[u8], max_chars: usize) -> (String, bool) {
     redact_and_truncate_output(&text, max_chars)
 }
 
-pub(crate) fn call_github_fork_prepare(
-    repo_root: &Path,
+pub(crate) fn call_github_fork_prepare<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "prepare github fork";
 
-    let root = resolved_repo_root(repo_root, tools::github_fork_prepare::NAME)?;
+    let repository_root = repository_root.into();
+    let cwd = resolve_child_cwd(repository_root, None)
+        .map_err(|error| format!("github_fork_prepare refused: {error}"))?;
+    let root = cwd.logical_path();
     let remote = optional_bool(arguments, "remote")?.unwrap_or(true);
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
 
@@ -458,16 +468,21 @@ pub(crate) fn call_github_fork_prepare(
         ));
     }
 
-    let output = Command::new("gh")
-        .args(&args)
-        .current_dir(&root)
-        .stdin(Stdio::null())
+    let mut command = Command::new("gh");
+    command.args(&args).stdin(Stdio::null());
+    cwd.anchor_command(&mut command);
+    let output = command
         .output()
         .map_err(|error| format!("github_fork_prepare refused: failed to run gh: {error}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let remotes = git_stdout_for_tool(tools::github_fork_prepare::NAME, &root, &["remote", "-v"])?;
+    // Read back through the repository's own Git projection rather than by naming the directory again.
+    let remotes = git_stdout_for_tool(
+        tools::github_fork_prepare::NAME,
+        repository_root.git(),
+        &["remote", "-v"],
+    )?;
     serde_json::to_string_pretty(&json!({
         "tool": tools::github_fork_prepare::NAME,
         "dry_run": false,

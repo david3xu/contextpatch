@@ -2297,3 +2297,104 @@ fn project_dispatch_refuses_gradle_for_a_selected_repository_and_anchors_the_res
     assert!(!target.join("build").exists());
     assert!(!workspace.join("decoy").join("build").exists());
 }
+
+// ---------------------------------------------------------------------------
+// Capability and GitHub authority
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_describes_and_targets_only_the_selected_repository() {
+    let workspace = temp_root("project_capability_github");
+    let target = file_repo(&workspace, "target");
+    let decoy = file_repo(&workspace, "decoy");
+    // Only the target carries the repository-dependent tooling the manifest reports on.
+    fs::create_dir_all(target.join("references")).unwrap();
+    fs::write(
+        target.join("references/check-base-image.sh"),
+        "#!/usr/bin/env bash\nexit 0\n",
+    )
+    .unwrap();
+    fs::write(target.join("gradlew"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
+    // A distinctly named dirty path in each, so a status report identifies which repository answered.
+    fs::write(target.join("target-dirty.txt"), "x\n").unwrap();
+    fs::write(decoy.join("decoy-dirty.txt"), "x\n").unwrap();
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // The manifest names the repository that was selected, and its sidecar scratch location follows that
+    // repository's identity rather than the workspace it sits in.
+    let mut scratch_roots = Vec::new();
+    for selected in ["target", "decoy"] {
+        let manifest = server.exchange(&file_action(
+            selected,
+            "capability_manifest",
+            r#"{"section":"scratch"}"#,
+        ));
+        let parsed: Value = serde_json::from_str(response_text(&manifest)).unwrap();
+        scratch_roots.push(parsed["scratch"]["root"].as_str().unwrap().to_string());
+    }
+    assert_ne!(
+        scratch_roots[0], scratch_roots[1],
+        "each selected repository reports its own scratch root"
+    );
+
+    // Health reports the selected repository's root, its own status, and the repository-dependent tooling
+    // it can actually reach.
+    for (selected, other, present) in [("target", "decoy", true), ("decoy", "target", false)] {
+        let health = server.exchange(&file_action(
+            selected,
+            "preflight_health",
+            r#"{"response_mode":"full"}"#,
+        ));
+        let parsed: Value = serde_json::from_str(response_text(&health)).unwrap();
+        let reported = parsed["repo_root"].as_str().unwrap().to_string();
+        assert!(
+            reported.ends_with(selected),
+            "health names the selected repository: {reported}"
+        );
+        assert_eq!(
+            parsed["validation_tools"]["base_image_check"]["script_present"], present,
+            "health reports the selected repository's own script: {}",
+            response_text(&health)
+        );
+        assert_eq!(
+            parsed["native_build"]["required_tools"]["gradlew"], present,
+            "health reports the selected repository's own wrapper: {}",
+            response_text(&health)
+        );
+        let text = response_text(&health).to_string();
+        assert!(text.contains(&format!("{selected}-dirty.txt")), "{text}");
+        assert!(!text.contains(&format!("{other}-dirty.txt")), "{text}");
+    }
+
+    // Both GitHub plans report the selected repository as the directory `gh` would run in. Dry runs only,
+    // so no `gh` process starts and nothing is created on any remote.
+    for (selected, other) in [("target", "decoy"), ("decoy", "target")] {
+        for (action, arguments) in [
+            ("github_fork_prepare", r#"{"dry_run":true}"#),
+            (
+                "github_pr_run",
+                r#"{"action":"pr_create","base":"main","head":"topic","title":"t","body":"b","dry_run":true}"#,
+            ),
+        ] {
+            let planned = server.exchange(&file_action(selected, action, arguments));
+            let parsed: Value = serde_json::from_str(response_text(&planned)).unwrap();
+            assert_eq!(parsed["dry_run"], true, "{}", response_text(&planned));
+            let cwd = parsed["cwd"].as_str().unwrap().to_string();
+            assert!(
+                cwd.ends_with(selected),
+                "{action} plans against the selected repository: {cwd}"
+            );
+            assert!(
+                !cwd.ends_with(other),
+                "{action} must not plan against the sibling: {cwd}"
+            );
+        }
+    }
+
+    server.finish();
+    // Reads and plans changed nothing in either repository.
+    assert!(target.join("target-dirty.txt").is_file());
+    assert!(decoy.join("decoy-dirty.txt").is_file());
+    assert!(!decoy.join("gradlew").exists());
+}

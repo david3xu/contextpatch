@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use contextpatch_core::git::status::status_snapshot;
+use contextpatch_core::git::RepositoryRoot;
 use contextpatch_core::process::guarded_command::{
     redact_and_truncate_output, resolve_guarded_program,
 };
@@ -85,7 +86,7 @@ pub(crate) fn build_metadata() -> Value {
 /// Split from the tool entry point so the projection in `call_capability_manifest` cannot drift from
 /// the document: there is exactly one place the content is defined, and sections are selected from it
 /// rather than assembled a second time.
-fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
+fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -> Value {
     json!({
         "server": "contextpatch",
         "version": contextpatch_core::VERSION,
@@ -103,7 +104,7 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
                      only project_execute while preserving the same internal actions and safety \
                      policy."
         },
-        "repo_root": root.display().to_string(),
+        "repo_root": label.display().to_string(),
         "scratch": {
             "token": contextpatch_core::fs::scratch::SCRATCH_TOKEN,
             "root": contextpatch_core::fs::scratch::scratch_root(root)
@@ -593,15 +594,18 @@ pub(crate) const PROJECTABLE_SECTIONS: &[&str] = &[
     "native_device",
 ];
 
-pub(crate) fn call_capability_manifest(
-    repo_root: &Path,
+pub(crate) fn call_capability_manifest<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
     surface: ToolSurface,
 ) -> Result<String, String> {
-    let root = repo_root
-        .canonicalize()
+    // The manifest describes the repository this call targets, so it is read through that repository's own
+    // authority. The canonical spelling is still reported, because a caller comparing `repo_root` across
+    // calls needs a stable name; it is a label and never used to reach anything.
+    let root = repository_root.into();
+    let label = contextpatch_core::fs::rooted::canonical_label(root)
         .map_err(|error| format!("capability_manifest refused: {error}"))?;
-    let document = full_manifest(&root, surface);
+    let document = full_manifest(root, &label, surface);
 
     let names_only = crate::tools::common::optional_bool(arguments, "names_only")
         .map_err(|error| format!("capability_manifest refused: {error}"))?
@@ -650,16 +654,16 @@ pub(crate) fn call_capability_manifest(
         .map_err(|error| format!("capability_manifest refused: {error}"))
 }
 
-pub(crate) fn call_preflight_health(
-    repo_root: &Path,
+pub(crate) fn call_preflight_health<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let response_mode = PreflightResponseMode::parse(arguments)?;
-    let root = repo_root
-        .canonicalize()
+    let root = repository_root.into();
+    let label = contextpatch_core::fs::rooted::canonical_label(root)
         .map_err(|error| format!("preflight_health refused: {error}"))?;
     let (max_status_entries, max_status_bytes) = response_mode.status_sample_limits();
-    let git_status = match status_snapshot(&root, max_status_entries, max_status_bytes) {
+    let git_status = match status_snapshot(root, max_status_entries, max_status_bytes) {
         Ok(snapshot) => json!({
             "available": true,
             "clean": snapshot.clean,
@@ -693,7 +697,7 @@ pub(crate) fn call_preflight_health(
         "version": contextpatch_core::VERSION,
         "build": build_metadata(),
         "response_mode": response_mode.as_str(),
-        "repo_root": root.display().to_string(),
+        "repo_root": label.display().to_string(),
         "repository": git_status,
         "guarded_process_execution": {
             "available": true,
@@ -728,7 +732,7 @@ pub(crate) fn call_preflight_health(
             "harbor": executable_available("harbor"),
             "bash": executable_available("bash"),
             "rg": executable_available("rg"),
-            "base_image_check": base_image_check_available(&root)
+            "base_image_check": base_image_check_available(root)
         },
         "validation_profiles": {
             "repo-basic": {
@@ -767,11 +771,11 @@ pub(crate) fn call_preflight_health(
             }
         },
         "native_build": {
-            "available": xcodebuild_is_available() || gradlew_available(&root),
+            "available": xcodebuild_is_available() || gradlew_available(root),
             "required_tools": {
                 "xcodebuild": xcodebuild_available(),
                 "xcode_select": xcode_select_available(),
-                "gradlew": gradlew_available(&root),
+                "gradlew": gradlew_available(root),
                 "swift": executable_available("swift"),
                 "kotlinc": executable_available("kotlinc")
             }
@@ -977,16 +981,21 @@ fn executable_is_available(program: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn base_image_check_available(root: &Path) -> Value {
-    let script = root.join("references/check-base-image.sh");
+/// Report whether the base-image check script is present, read through the repository's own authority.
+///
+/// A symlink is reported as absent rather than followed, which matches what the action itself will do.
+fn base_image_check_available(root: RepositoryRoot<'_>) -> Value {
+    const SCRIPT: &str = "references/check-base-image.sh";
+    let script_present =
+        contextpatch_core::fs::rooted::is_regular_file(root, SCRIPT).unwrap_or(false);
     json!({
-        "available": executable_is_available("bash") && script.is_file(),
-        "script": "references/check-base-image.sh",
+        "available": executable_is_available("bash") && script_present,
+        "script": SCRIPT,
         "bash": executable_available("bash"),
-        "script_present": script.is_file()
+        "script_present": script_present
     })
 }
 
-fn gradlew_available(root: &Path) -> bool {
-    root.join("gradlew").is_file()
+fn gradlew_available(root: RepositoryRoot<'_>) -> bool {
+    contextpatch_core::fs::rooted::is_regular_file(root, "gradlew").unwrap_or(false)
 }

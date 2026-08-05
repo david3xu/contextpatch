@@ -603,7 +603,7 @@ fn configured_tool_paths() -> Vec<PathBuf> {
 ///
 /// Owning the descriptor is the point. A resolved *path* can be replaced between the check that it lies
 /// inside the repository and the moment the child changes into it; a descriptor cannot.
-pub(crate) struct ChildCwd {
+pub struct ChildCwd {
     #[cfg(unix)]
     directory: std::fs::File,
     logical_path: PathBuf,
@@ -632,8 +632,23 @@ impl ChildCwd {
     }
 
     /// The name to report, never used to reach the directory.
-    pub(crate) fn logical_path(&self) -> &Path {
+    pub fn logical_path(&self) -> &Path {
         &self.logical_path
+    }
+
+    /// Make one caller-owned command change into this directory instead of resolving a name.
+    ///
+    /// Exists for the surfaces that own their own `Command` because they need output handling this module's
+    /// bounded runner does not provide. They still must not resolve a working directory by name, so they
+    /// borrow the same anchoring the runner applies. The descriptor lives in `self`, so a caller has to keep
+    /// this value alive until the child has been spawned, which the borrow makes structural.
+    pub fn anchor_command(&self, command: &mut std::process::Command) {
+        #[cfg(unix)]
+        anchor_command_to_directory(command, &self.directory);
+        #[cfg(not(unix))]
+        {
+            command.current_dir(&self.logical_path);
+        }
     }
 
     /// The working directory relative to the repository root, for inspections that go through the root.
@@ -651,7 +666,7 @@ impl ChildCwd {
 /// escape the repository and cannot be substituted before the child starts. An absolute argument is
 /// accepted, as it always has been, by reducing it against the root's label first; the reduction decides
 /// only which components to walk, never how to reach them.
-pub(crate) fn resolve_child_cwd(
+pub fn resolve_child_cwd(
     root: crate::git::RepositoryRoot<'_>,
     cwd: Option<&Path>,
 ) -> Result<ChildCwd, ContextPatchError> {
