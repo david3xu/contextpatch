@@ -649,3 +649,213 @@ fn project_surface_refuses_unsafe_or_inexact_repository_selectors() {
         "outside\n"
     );
 }
+
+/// A repository holding one committed tracked file, plus a nested directory to move into.
+fn tracked_repo(workspace: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let repo = workspace.join(name);
+    fs::create_dir_all(&repo).unwrap();
+    init_git_repo(&repo);
+    fs::write(repo.join("tracked.txt"), format!("{name} content\n")).unwrap();
+    fs::create_dir_all(repo.join("nested")).unwrap();
+    fs::write(repo.join("nested").join("keep.txt"), "keep\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", "initial"]);
+    repo
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_moves_and_deletes_tracked_files_only_in_the_selected_repository() {
+    // `move_tracked` and `delete_guarded` now carry typed root authority end to end: the Git subprocess and
+    // every filesystem check around it derive from one root. Two repositories with identical layouts and
+    // distinguishable content make it visible which one was actually mutated, and an outside repository
+    // proves nothing escaped the workspace.
+    let workspace = temp_root("project_surface_tracked_mutation_isolation");
+    let target = tracked_repo(&workspace, "target");
+    let decoy = tracked_repo(&workspace, "decoy");
+    let outside = tracked_repo(&temp_root("project_surface_tracked_outside"), "outside");
+
+    let decoy_head_before = commit_at(&decoy, "HEAD");
+    let outside_head_before = commit_at(&outside, "HEAD");
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    let moved = server.exchange(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"move_tracked","arguments":{"from":"tracked.txt","to":"nested/moved.txt","dry_run":false,"confirm":"move tracked file"}}}}"#,
+    );
+    assert_ne!(
+        moved["result"]["isError"],
+        true,
+        "{}",
+        response_text(&moved)
+    );
+
+    // The move landed in the selected repository only.
+    assert!(!target.join("tracked.txt").exists());
+    assert_eq!(
+        fs::read_to_string(target.join("nested").join("moved.txt")).unwrap(),
+        "target content\n"
+    );
+    assert!(decoy.join("tracked.txt").exists());
+    assert!(!decoy.join("nested").join("moved.txt").exists());
+    assert!(outside.join("tracked.txt").exists());
+    assert!(!outside.join("nested").join("moved.txt").exists());
+
+    // Deleting a tracked file is the same question with a hash gate in front of it. The digest is read
+    // through the same surface rather than recomputed here, so the guard is exercised as callers meet it.
+    let inspected = server.exchange(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"decoy","action":"file_info","arguments":{"path":"tracked.txt"}}}}"#,
+    );
+    let info: Value = serde_json::from_str(response_text(&inspected)).unwrap();
+    let decoy_sha256 = info["sha256"].as_str().unwrap().to_string();
+    assert_eq!(decoy_sha256, sha256_hex_for_test(b"decoy content\n"));
+
+    let deleted = server.exchange(&format!(
+        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"project_execute","arguments":{{"repository":"decoy","action":"delete_guarded","arguments":{{"path":"tracked.txt","expected_sha256":"{decoy_sha256}","dry_run":false,"confirm":"delete tracked file"}}}}}}}}"#,
+    ));
+    server.finish();
+
+    assert_ne!(
+        deleted["result"]["isError"],
+        true,
+        "{}",
+        response_text(&deleted)
+    );
+
+    // The deletion reached the repository that was selected for it, in the other direction from the move,
+    // so neither assertion can pass by accident of ordering.
+    assert!(!decoy.join("tracked.txt").exists());
+    assert!(decoy.join("nested").join("keep.txt").exists());
+    assert_eq!(commit_at(&decoy, "HEAD"), decoy_head_before);
+
+    // The outside repository was never a candidate and is bit-for-bit unchanged.
+    assert_eq!(
+        fs::read_to_string(outside.join("tracked.txt")).unwrap(),
+        "outside content\n"
+    );
+    assert_eq!(commit_at(&outside, "HEAD"), outside_head_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_cleans_untracked_and_generated_paths_only_in_the_selected_repository() {
+    // `delete_untracked_exact` and `delete_generated_prefix` plan, mutate, and verify through one root
+    // authority. Both repositories carry identically named untracked files and identically named ignored
+    // build trees, so only the authority can distinguish which one is cleaned.
+    let workspace = temp_root("project_surface_cleanup_isolation");
+
+    let prepare = |name: &str| -> std::path::PathBuf {
+        let repo = workspace.join(name);
+        fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+        fs::write(repo.join(".gitignore"), "build/\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "--quiet", "-m", "initial"]);
+        fs::write(repo.join("scratch.txt"), format!("{name} scratch\n")).unwrap();
+        fs::create_dir_all(repo.join("build").join("deep")).unwrap();
+        fs::write(repo.join("build").join("out.bin"), "binary").unwrap();
+        fs::write(repo.join("build").join("deep").join("more.bin"), "more").unwrap();
+        repo
+    };
+    let target = prepare("target");
+    let decoy = prepare("decoy");
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    let cleaned = server.exchange(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"delete_untracked_exact","arguments":{"paths":["scratch.txt"],"dry_run":false,"confirm":"delete untracked files"}}}}"#,
+    );
+    assert_ne!(
+        cleaned["result"]["isError"],
+        true,
+        "{}",
+        response_text(&cleaned)
+    );
+    assert!(!target.join("scratch.txt").exists());
+    assert_eq!(
+        fs::read_to_string(decoy.join("scratch.txt")).unwrap(),
+        "decoy scratch\n",
+        "the sibling's identically named untracked file must survive"
+    );
+
+    // A generated-prefix cleanup descends an ignored tree and removes it whole. Run against the sibling so
+    // the two cleanups point in opposite directions.
+    let pruned = server.exchange(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"decoy","action":"delete_generated_prefix","arguments":{"prefixes":["build"],"dry_run":false,"confirm":"delete generated paths"}}}}"#,
+    );
+    server.finish();
+
+    assert_ne!(
+        pruned["result"]["isError"],
+        true,
+        "{}",
+        response_text(&pruned)
+    );
+    assert!(!decoy.join("build").exists(), "the named ignored tree goes whole");
+    assert!(
+        target.join("build").join("deep").join("more.bin").exists(),
+        "the sibling's identically named ignored tree must survive"
+    );
+    // Tracked history in both repositories is untouched by either cleanup.
+    assert!(target.join(".gitignore").exists());
+    assert!(decoy.join(".gitignore").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_verifies_branch_required_files_in_the_selected_repository() {
+    // `git_branch_prepare` verifies required files against the ref it will land on and again in the
+    // worktree afterwards, both through the selected repository's own authority. The sibling holds the
+    // required file and the selected repository does not, so a check that reached the wrong repository
+    // would pass and this refusal would disappear.
+    let workspace = temp_root("project_surface_required_file_isolation");
+    let remotes = temp_root("project_surface_required_file_remotes");
+    let (target, _target_remote) = repo_with_remote(&workspace, &remotes, "target", "target\n");
+    let (decoy, _decoy_remote) = repo_with_remote(&workspace, &remotes, "decoy", "decoy\n");
+
+    // Only the sibling has it, and it is committed so it exists in the ref rather than only on disk.
+    fs::write(decoy.join("required.txt"), "present\n").unwrap();
+    git(&decoy, &["add", "."]);
+    git(&decoy, &["commit", "--quiet", "-m", "add required file"]);
+    git(&decoy, &["push", "--quiet", "origin", "main"]);
+
+    let target_head_before = commit_at(&target, "HEAD");
+    let decoy_head_before = commit_at(&decoy, "HEAD");
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+    let refused = server.exchange(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_branch_prepare","arguments":{"branch":"feature","base_branch":"main","required_files":["required.txt"],"dry_run":false}}}}"#,
+    );
+
+    assert_eq!(
+        refused["result"]["isError"],
+        true,
+        "{}",
+        response_text(&refused)
+    );
+    assert_text(&refused, "required file `required.txt` is missing");
+
+    // The refusal happened before the switch, so no branch was created and neither repository moved.
+    assert!(!has_ref(&target, "refs/heads/feature"));
+    assert!(!has_ref(&decoy, "refs/heads/feature"));
+    assert_eq!(commit_at(&target, "HEAD"), target_head_before);
+    assert_eq!(commit_at(&decoy, "HEAD"), decoy_head_before);
+
+    // The same request against the repository that actually holds the file succeeds, which proves the
+    // refusal above was about the selected repository rather than about the file name.
+    let prepared = server.exchange(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"decoy","action":"git_branch_prepare","arguments":{"branch":"feature","base_branch":"main","required_files":["required.txt"],"dry_run":false}}}}"#,
+    );
+    server.finish();
+
+    assert_ne!(
+        prepared["result"]["isError"],
+        true,
+        "{}",
+        response_text(&prepared)
+    );
+    assert!(has_ref(&decoy, "refs/heads/feature"));
+    // And the branch was created in that repository only.
+    assert!(!has_ref(&target, "refs/heads/feature"));
+    assert_eq!(commit_at(&target, "HEAD"), target_head_before);
+}

@@ -1,13 +1,13 @@
-use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
-use crate::fs::hash::{sha256_file, validate_sha256};
+use crate::fs::hash::validate_sha256;
+use crate::fs::rooted;
 use crate::git::guarded_path::{
-    ensure_path_clean, ensure_tracked, exact_worktree_root, path_has_unstaged_deletion,
+    ensure_path_clean, ensure_tracked, exact_worktree_root_of, path_has_unstaged_deletion,
     path_is_tracked, resolve_existing_regular_file,
 };
+use crate::git::root::RepositoryRoot;
 
 pub const CONFIRMATION: &str = "delete tracked file";
 
@@ -19,8 +19,12 @@ pub struct DeleteGuardedResult {
     pub deleted: bool,
 }
 
-pub fn delete_guarded(
-    repo_root: &Path,
+/// Delete one tracked file through the root's own authority.
+///
+/// Every step — confinement, hashing, removal, and verification — goes through the same root, so the file
+/// that is hashed is the file that is removed and the file that is verified gone.
+pub fn delete_guarded<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
     path: &Path,
     expected_sha256: &str,
     dry_run: bool,
@@ -33,11 +37,18 @@ pub fn delete_guarded(
         )));
     }
 
-    let root = exact_worktree_root(repo_root)?;
-    let (path, target) = resolve_existing_regular_file(&root, path)?;
-    ensure_tracked(&root, &path, "file")?;
-    ensure_path_clean(&root, &path)?;
-    let current_sha256 = sha256_file(&target)?;
+    let root = root.into();
+    let resolved = exact_worktree_root_of(root)?;
+    let root = match resolved.as_deref() {
+        Some(path) => RepositoryRoot::from_path(path),
+        None => root,
+    };
+    let repository = root.git();
+
+    let path = resolve_existing_regular_file(root, path)?;
+    ensure_tracked(repository, &path, "file")?;
+    ensure_path_clean(repository, &path)?;
+    let current_sha256 = rooted::sha256(root, &path)?;
     if current_sha256 != expected_sha256 {
         return Err(ContextPatchError::new(format!(
             "hash mismatch for `{path}`; current_sha256={current_sha256}, expected_sha256={expected_sha256}"
@@ -53,19 +64,19 @@ pub fn delete_guarded(
         });
     }
 
-    let verified_sha256 = sha256_file(&target)?;
+    let verified_sha256 = rooted::sha256(root, &path)?;
     if verified_sha256 != expected_sha256 {
         return Err(ContextPatchError::new(format!(
             "file `{path}` changed during validation; current_sha256={verified_sha256}, expected_sha256={expected_sha256}"
         )));
     }
-    fs::remove_file(&target).map_err(|error| {
+    rooted::remove_file(root, &path).map_err(|error| {
         ContextPatchError::new(format!("failed to delete tracked file `{path}`: {error}"))
     })?;
 
-    match fs::symlink_metadata(&target) {
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Ok(_) => {
+    match rooted::entry_kind(root, &path) {
+        Ok(None) => {}
+        Ok(Some(_)) => {
             return Err(ContextPatchError::new(format!(
                 "delete verification failed: path `{path}` still exists"
             )))
@@ -76,12 +87,12 @@ pub fn delete_guarded(
             )))
         }
     }
-    if !path_is_tracked(&root, &path)? {
+    if !path_is_tracked(repository, &path)? {
         return Err(ContextPatchError::new(format!(
             "delete verification failed: `{path}` is no longer tracked in the index"
         )));
     }
-    if !path_has_unstaged_deletion(&root, &path)? {
+    if !path_has_unstaged_deletion(repository, &path)? {
         return Err(ContextPatchError::new(format!(
             "delete verification failed: `{path}` is not an unstaged tracked deletion"
         )));

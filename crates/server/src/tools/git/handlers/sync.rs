@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use serde_json::{json, Value};
 
@@ -95,8 +94,8 @@ pub(crate) fn call_git_remote_check(
     .map_err(|error| format!("git_remote_check refused: {error}"))
 }
 
-pub(crate) fn call_git_branch_prepare(
-    repo_root: &Path,
+pub(crate) fn call_git_branch_prepare<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "reset branch from remote base";
@@ -121,9 +120,18 @@ pub(crate) fn call_git_branch_prepare(
             .map_err(|error| refused(TOOL, error))?;
     }
 
-    let root = repo_root_for_policy(repo_root, TOOL, WorktreeRootPolicy::ExactWorktreeRoot)?;
-    ensure_remote_exists(TOOL, &root, &remote)?;
-    let status_before = git_status_short(&root)?;
+    // Confinement, required-file presence, and Git execution all derive from one authority, so a branch
+    // preparation cannot verify a file in one directory and land the branch in another.
+    let authority = repository_root.into();
+    let policy = repository_under_policy(
+        authority.git(),
+        TOOL,
+        WorktreeRootPolicy::ExactWorktreeRoot,
+    )?;
+    let confined = policy.bind_root(authority);
+    let root = confined.git();
+    ensure_remote_exists(TOOL, root, &remote)?;
+    let status_before = git_status_short(root)?;
     core_sync::ensure_worktree_clean(
         &status_before,
         "worktree must be clean before branch preparation",
@@ -138,8 +146,8 @@ pub(crate) fn call_git_branch_prepare(
     ];
 
     if dry_run {
-        let branch_existed = local_branch_exists(&root, &branch)?;
-        let previous_branch = current_branch(TOOL, &root)?;
+        let branch_existed = local_branch_exists(root, &branch)?;
+        let previous_branch = current_branch(TOOL, root)?;
         let action = core_sync::select_branch_action(branch_existed, reset_existing);
         let commands = std::iter::once(fetch_args.clone())
             .chain(action.commands(&branch, &remote_ref, previous_branch == branch))
@@ -178,15 +186,15 @@ pub(crate) fn call_git_branch_prepare(
         .map_err(|error| format!("git_branch_prepare refused: {error}"));
     }
 
-    core_sync::fetch(&root, fetch_args).map_err(|error| refused(TOOL, error))?;
+    core_sync::fetch(root, fetch_args).map_err(|error| refused(TOOL, error))?;
 
-    let status_after_fetch = git_status_short(&root)?;
+    let status_after_fetch = git_status_short(root)?;
     core_sync::ensure_status_unchanged(&status_before, &status_after_fetch)
         .map_err(|error| refused(TOOL, error))?;
 
-    let remote_commit = resolve_commit(TOOL, &root, &remote_ref)?;
+    let remote_commit = resolve_commit(TOOL, root, &remote_ref)?;
     let branch_ref = format!("refs/heads/{branch}");
-    let branch_existed = local_branch_exists(&root, &branch)?;
+    let branch_existed = local_branch_exists(root, &branch)?;
     // Required files are verified against whichever ref will actually be landed on, before switching, so
     // a preparation that would arrive somewhere incomplete refuses first.
     let required_file_ref = if branch_existed && !reset_existing {
@@ -195,13 +203,13 @@ pub(crate) fn call_git_branch_prepare(
         remote_ref.as_str()
     };
     let verified_required_files =
-        core_sync::required_files_in_ref(&root, required_file_ref, &required_files)
+        core_sync::required_files_in_ref(root, required_file_ref, &required_files)
             .map_err(|error| refused(TOOL, error))?;
-    let previous_branch = current_branch(TOOL, &root)?;
+    let previous_branch = current_branch(TOOL, root)?;
     let action = core_sync::select_branch_action(branch_existed, reset_existing);
 
     if action == contextpatch_core::git::sync::BranchAction::SwitchExisting {
-        let remote_is_ancestor = core_sync::is_ancestor(&root, &remote_ref, &branch_ref)
+        let remote_is_ancestor = core_sync::is_ancestor(root, &remote_ref, &branch_ref)
             .map_err(|error| refused(TOOL, error))?;
         if !remote_is_ancestor {
             return Err(format!(
@@ -210,18 +218,18 @@ pub(crate) fn call_git_branch_prepare(
         }
     }
     for command in action.commands(&branch, &remote_ref, previous_branch == branch) {
-        git_success_for_tool(TOOL, &root, command)?;
+        git_success_for_tool(TOOL, root, command)?;
     }
 
-    let current_branch = current_branch(TOOL, &root)?;
+    let current_branch = current_branch(TOOL, root)?;
     if current_branch != branch {
         return Err(format!(
             "git_branch_prepare refused: current branch `{current_branch}` does not match prepared branch `{branch}`"
         ));
     }
-    let head = resolve_commit(TOOL, &root, "HEAD")?;
+    let head = resolve_commit(TOOL, root, "HEAD")?;
     let remote_is_ancestor =
-        core_sync::is_ancestor(&root, &remote_ref, "HEAD").map_err(|error| refused(TOOL, error))?;
+        core_sync::is_ancestor(root, &remote_ref, "HEAD").map_err(|error| refused(TOOL, error))?;
     if !remote_is_ancestor {
         return Err(format!(
             "git_branch_prepare refused: `{remote_ref}` is not an ancestor of prepared branch `{branch}`"
@@ -229,10 +237,10 @@ pub(crate) fn call_git_branch_prepare(
     }
 
     for required_file in &verified_required_files {
-        core_sync::required_file_present(&root, required_file)
+        core_sync::required_file_present(confined, required_file)
             .map_err(|error| refused(TOOL, error))?;
     }
-    let status_after = git_status_short(&root)?;
+    let status_after = git_status_short(root)?;
 
     serde_json::to_string_pretty(&json!({
         "tool": TOOL,

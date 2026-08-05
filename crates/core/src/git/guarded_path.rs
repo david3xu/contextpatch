@@ -3,6 +3,9 @@ use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::ContextPatchError;
+use crate::fs::rooted::{self, RootedEntryKind};
+use crate::git::repository::GitRepository;
+use crate::git::root::RepositoryRoot;
 use crate::process::runner::{run_bounded_command, BoundedProcessOutput, CommandCwd};
 use crate::process::GIT_SUBPROCESS_TIMEOUT;
 
@@ -84,11 +87,36 @@ fn worktree_root(
     Ok(root)
 }
 
+/// Confine one existing regular file, returning its repository-relative spelling.
+///
+/// An anchored root establishes containment through its descriptor walk, which refuses a symlink at any
+/// component, so there is no second resolution to compare against a prefix. A path-backed root keeps the
+/// resolve-and-compare form, so its refusals are unchanged. The resolved absolute path is deliberately not
+/// returned: callers act through the root's authority and the relative spelling, which is what stops a
+/// path being checked here and then used against a different directory.
 pub(crate) fn resolve_existing_regular_file(
-    root: &Path,
+    root: RepositoryRoot<'_>,
     path: &Path,
-) -> Result<(String, PathBuf), ContextPatchError> {
+) -> Result<String, ContextPatchError> {
     let relative = normalize_relative_path(path)?;
+
+    #[cfg(unix)]
+    if root.is_anchored() {
+        return match rooted::entry_kind(root, &relative)? {
+            None => Err(ContextPatchError::new(format!(
+                "source file `{relative}` does not exist"
+            ))),
+            Some(RootedEntryKind::Symlink) => Err(ContextPatchError::new(format!(
+                "source file `{relative}` must not be a symlink"
+            ))),
+            Some(RootedEntryKind::RegularFile) => Ok(relative),
+            Some(_) => Err(ContextPatchError::new(format!(
+                "source path `{relative}` is not a regular file"
+            ))),
+        };
+    }
+
+    let root = root.logical_path();
     ensure_no_symlink_components(root, &relative, false)?;
     let target = root.join(&relative);
     let metadata = fs::symlink_metadata(&target).map_err(|error| {
@@ -120,14 +148,42 @@ pub(crate) fn resolve_existing_regular_file(
             "source file `{relative}` resolves outside repository root"
         )));
     }
-    Ok((relative, target))
+    Ok(relative)
 }
 
+/// Confine one absent destination path, returning its repository-relative spelling.
+///
+/// The leaf must not exist and its parent must be a real directory. An anchored root establishes both
+/// through the descriptor walk; a path-backed root keeps the resolve-and-compare form.
 pub(crate) fn resolve_absent_file(
-    root: &Path,
+    root: RepositoryRoot<'_>,
     path: &Path,
-) -> Result<(String, PathBuf), ContextPatchError> {
+) -> Result<String, ContextPatchError> {
     let relative = normalize_relative_path(path)?;
+
+    #[cfg(unix)]
+    if root.is_anchored() {
+        if rooted::entry_kind(root, &relative)?.is_some() {
+            return Err(ContextPatchError::new(format!(
+                "destination path `{relative}` already exists"
+            )));
+        }
+        // The parent is named explicitly so an absent one is refused here rather than surfacing later as a
+        // rename failure. A root-level leaf has no parent component to check.
+        if let Some(parent) = Path::new(&relative).parent().and_then(|parent| {
+            let parent = parent.to_string_lossy().to_string();
+            (!parent.is_empty()).then_some(parent)
+        }) {
+            if !rooted::is_directory(root, &parent)? {
+                return Err(ContextPatchError::new(format!(
+                    "destination parent for `{relative}` is not a directory"
+                )));
+            }
+        }
+        return Ok(relative);
+    }
+
+    let root = root.logical_path();
     ensure_no_symlink_components(root, &relative, true)?;
     let target = root.join(&relative);
     match fs::symlink_metadata(&target) {
@@ -162,15 +218,29 @@ pub(crate) fn resolve_absent_file(
             "destination parent for `{relative}` is not a directory"
         )));
     }
-    Ok((relative, target))
+    Ok(relative)
+}
+
+/// Apply the exact-worktree-root requirement to a root without re-resolving an anchored one.
+///
+/// An anchored selection was verified as a worktree root when it was selected, so checking it again here
+/// would be exactly the reopen this phase removes. `None` means the caller should keep the root it already
+/// holds; `Some` carries the resolved path a path-backed caller must switch to.
+pub(crate) fn exact_worktree_root_of(
+    root: RepositoryRoot<'_>,
+) -> Result<Option<PathBuf>, ContextPatchError> {
+    if root.is_anchored() {
+        return Ok(None);
+    }
+    exact_worktree_root(root.logical_path()).map(Some)
 }
 
 pub(crate) fn ensure_tracked(
-    root: &Path,
+    repository: GitRepository<'_>,
     relative: &str,
     label: &str,
 ) -> Result<(), ContextPatchError> {
-    if !path_is_tracked(root, relative)? {
+    if !path_is_tracked(repository, relative)? {
         return Err(ContextPatchError::new(format!(
             "{label} `{relative}` is not tracked by Git"
         )));
@@ -179,11 +249,11 @@ pub(crate) fn ensure_tracked(
 }
 
 pub(crate) fn ensure_not_tracked(
-    root: &Path,
+    repository: GitRepository<'_>,
     relative: &str,
     label: &str,
 ) -> Result<(), ContextPatchError> {
-    if path_is_tracked(root, relative)? {
+    if path_is_tracked(repository, relative)? {
         return Err(ContextPatchError::new(format!(
             "{label} `{relative}` is already tracked in the Git index"
         )));
@@ -191,9 +261,12 @@ pub(crate) fn ensure_not_tracked(
     Ok(())
 }
 
-pub(crate) fn path_is_tracked(root: &Path, relative: &str) -> Result<bool, ContextPatchError> {
+pub(crate) fn path_is_tracked(
+    repository: GitRepository<'_>,
+    relative: &str,
+) -> Result<bool, ContextPatchError> {
     let output = git_output(
-        root,
+        repository,
         &["ls-files", "-z", "--", relative],
         "inspect tracked path",
     )?;
@@ -205,9 +278,12 @@ pub(crate) fn path_is_tracked(root: &Path, relative: &str) -> Result<bool, Conte
     Ok(false)
 }
 
-pub(crate) fn ensure_path_clean(root: &Path, relative: &str) -> Result<(), ContextPatchError> {
+pub(crate) fn ensure_path_clean(
+    repository: GitRepository<'_>,
+    relative: &str,
+) -> Result<(), ContextPatchError> {
     let output = git_output(
-        root,
+        repository,
         &[
             "status",
             "--porcelain=v1",
@@ -227,9 +303,9 @@ pub(crate) fn ensure_path_clean(root: &Path, relative: &str) -> Result<(), Conte
     Ok(())
 }
 
-pub(crate) fn ensure_index_clean(root: &Path) -> Result<(), ContextPatchError> {
+pub(crate) fn ensure_index_clean(repository: GitRepository<'_>) -> Result<(), ContextPatchError> {
     let output = git_output_allow_failure(
-        root,
+        repository,
         &["diff", "--cached", "--quiet", "--exit-code"],
         "inspect Git index",
     )?;
@@ -245,17 +321,21 @@ pub(crate) fn ensure_index_clean(root: &Path) -> Result<(), ContextPatchError> {
     }
 }
 
-pub(crate) fn move_with_git(root: &Path, from: &str, to: &str) -> Result<(), ContextPatchError> {
-    git_output(root, &["mv", "--", from, to], "move tracked file")?;
+pub(crate) fn move_with_git(
+    repository: GitRepository<'_>,
+    from: &str,
+    to: &str,
+) -> Result<(), ContextPatchError> {
+    git_output(repository, &["mv", "--", from, to], "move tracked file")?;
     Ok(())
 }
 
 pub(crate) fn path_has_unstaged_deletion(
-    root: &Path,
+    repository: GitRepository<'_>,
     relative: &str,
 ) -> Result<bool, ContextPatchError> {
     let output = git_output(
-        root,
+        repository,
         &["status", "--porcelain=v1", "-z", "--", relative],
         "verify tracked deletion",
     )?;

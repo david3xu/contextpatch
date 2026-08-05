@@ -1,13 +1,13 @@
-use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
-use crate::fs::hash::sha256_file;
+use crate::fs::rooted::{self, RootedEntryKind};
 use crate::git::guarded_path::{
-    ensure_index_clean, ensure_not_tracked, ensure_path_clean, ensure_tracked, exact_worktree_root,
-    move_with_git, path_is_tracked, resolve_absent_file, resolve_existing_regular_file,
+    ensure_index_clean, ensure_not_tracked, ensure_path_clean, ensure_tracked,
+    exact_worktree_root_of, move_with_git, path_is_tracked, resolve_absent_file,
+    resolve_existing_regular_file,
 };
+use crate::git::root::RepositoryRoot;
 
 pub const CONFIRMATION: &str = "move tracked file";
 
@@ -20,8 +20,12 @@ pub struct MoveTrackedResult {
     pub moved: bool,
 }
 
-pub fn move_tracked(
-    repo_root: &Path,
+/// Move one tracked file through the root's own authority.
+///
+/// Git performs the move, and every filesystem check around it goes through the same root, so the file
+/// that is hashed before the move is the file that is verified after it.
+pub fn move_tracked<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
     from: &Path,
     to: &Path,
     dry_run: bool,
@@ -33,19 +37,26 @@ pub fn move_tracked(
         )));
     }
 
-    let root = exact_worktree_root(repo_root)?;
-    let (from, source) = resolve_existing_regular_file(&root, from)?;
-    let (to, destination) = resolve_absent_file(&root, to)?;
+    let root = root.into();
+    let resolved = exact_worktree_root_of(root)?;
+    let root = match resolved.as_deref() {
+        Some(path) => RepositoryRoot::from_path(path),
+        None => root,
+    };
+    let repository = root.git();
+
+    let from = resolve_existing_regular_file(root, from)?;
+    let to = resolve_absent_file(root, to)?;
     if from == to {
         return Err(ContextPatchError::new(
             "source and destination paths must differ",
         ));
     }
-    ensure_tracked(&root, &from, "source file")?;
-    ensure_not_tracked(&root, &to, "destination path")?;
-    ensure_path_clean(&root, &from)?;
-    ensure_index_clean(&root)?;
-    let source_sha256 = sha256_file(&source)?;
+    ensure_tracked(repository, &from, "source file")?;
+    ensure_not_tracked(repository, &to, "destination path")?;
+    ensure_path_clean(repository, &from)?;
+    ensure_index_clean(repository)?;
+    let source_sha256 = rooted::sha256(root, &from)?;
 
     if dry_run {
         return Ok(MoveTrackedResult {
@@ -57,11 +68,11 @@ pub fn move_tracked(
         });
     }
 
-    move_with_git(&root, &from, &to)?;
+    move_with_git(repository, &from, &to)?;
 
-    match fs::symlink_metadata(&source) {
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Ok(_) => {
+    match rooted::entry_kind(root, &from) {
+        Ok(None) => {}
+        Ok(Some(_)) => {
             return Err(ContextPatchError::new(format!(
                 "move verification failed: source path `{from}` still exists"
             )))
@@ -72,28 +83,28 @@ pub fn move_tracked(
             )))
         }
     }
-    let destination_metadata = fs::symlink_metadata(&destination).map_err(|error| {
+    let destination_kind = rooted::entry_kind(root, &to).map_err(|error| {
         ContextPatchError::new(format!(
             "move verification failed while inspecting destination `{to}`: {error}"
         ))
     })?;
-    if destination_metadata.file_type().is_symlink() || !destination_metadata.is_file() {
+    if destination_kind != Some(RootedEntryKind::RegularFile) {
         return Err(ContextPatchError::new(format!(
             "move verification failed: destination `{to}` is not a regular file"
         )));
     }
-    let destination_sha256 = sha256_file(&destination)?;
+    let destination_sha256 = rooted::sha256(root, &to)?;
     if destination_sha256 != source_sha256 {
         return Err(ContextPatchError::new(format!(
             "move verification failed: content hash changed from {source_sha256} to {destination_sha256}"
         )));
     }
-    if path_is_tracked(&root, &from)? {
+    if path_is_tracked(repository, &from)? {
         return Err(ContextPatchError::new(format!(
             "move verification failed: source `{from}` remains tracked"
         )));
     }
-    if !path_is_tracked(&root, &to)? {
+    if !path_is_tracked(repository, &to)? {
         return Err(ContextPatchError::new(format!(
             "move verification failed: destination `{to}` is not tracked"
         )));

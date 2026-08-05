@@ -15,11 +15,11 @@
 //! offending set is returned as data and the adapter words it.
 
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::Path;
 
 use crate::error::ContextPatchError;
+use crate::fs::rooted;
 use crate::git::repository::GitRepository;
+use crate::git::root::RepositoryRoot;
 use crate::git::state;
 
 /// Most paths one restore may name.
@@ -128,8 +128,10 @@ fn ensure_no_duplicates(
 }
 
 /// Every path Git currently tracks.
-pub fn tracked_paths(root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
-    let output = state::output(root, &["ls-files", "-z"])?;
+pub fn tracked_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let output = state::output(repository, &["ls-files", "-z"])?;
     state::parse_nul_paths(&output.stdout, LS_FILES_LABEL)
 }
 
@@ -224,14 +226,15 @@ pub fn apply_restore_exact<'a>(
 ///
 /// Requires each path to be untracked *and* a regular file, so the action cannot remove tracked history
 /// or walk into a directory the caller only named in passing.
-pub fn plan_delete_untracked_exact(
-    root: &Path,
+pub fn plan_delete_untracked_exact<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
     paths: &[String],
 ) -> Result<UntrackedDeletePlan, ContextPatchError> {
+    let root = root.into();
     let requested: BTreeSet<String> = paths.iter().cloned().collect();
     ensure_no_duplicates(paths, &requested, "paths")?;
 
-    let untracked_paths = state::untracked_paths(root)?;
+    let untracked_paths = state::untracked_paths(root.git())?;
     let not_untracked = requested
         .difference(&untracked_paths)
         .cloned()
@@ -243,7 +246,7 @@ pub fn plan_delete_untracked_exact(
         )));
     }
     for path in paths {
-        if !root.join(path).is_file() {
+        if !rooted::is_regular_file(root, path)? {
             return Err(ContextPatchError::new(format!(
                 "`{path}` is not a regular file"
             )));
@@ -265,12 +268,13 @@ pub fn plan_delete_untracked_exact(
 ///
 /// Kept separate from planning and from verification so the adapter can wrap exactly this step in its
 /// receipt.
-pub fn delete_untracked_files(
-    root: &Path,
+pub fn delete_untracked_files<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
     plan: &UntrackedDeletePlan,
 ) -> Result<(), ContextPatchError> {
+    let root = root.into();
     for path in &plan.paths {
-        fs::remove_file(root.join(path)).map_err(|error| {
+        rooted::remove_file(root, path).map_err(|error| {
             ContextPatchError::new(format!("failed to delete `{path}`: {error}"))
         })?;
     }
@@ -278,12 +282,13 @@ pub fn delete_untracked_files(
 }
 
 /// Check that a planned untracked delete took effect.
-pub fn verify_untracked_deleted(
-    root: &Path,
+pub fn verify_untracked_deleted<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
     plan: &UntrackedDeletePlan,
 ) -> Result<UntrackedDeleteOutcome, ContextPatchError> {
+    let root = root.into();
     let requested: BTreeSet<String> = plan.paths.iter().cloned().collect();
-    let untracked_after = state::untracked_paths(root)?;
+    let untracked_after = state::untracked_paths(root.git())?;
     let still_untracked = requested
         .intersection(&untracked_after)
         .cloned()
@@ -299,15 +304,16 @@ pub fn verify_untracked_deleted(
 /// Only untracked and ignored paths are candidates, and a tracked path anywhere under a matched prefix
 /// refuses the whole plan. Empty directories under a prefix are collected too, so a cleanup does not
 /// leave a skeleton behind.
-pub fn plan_delete_generated_prefix(
-    root: &Path,
+pub fn plan_delete_generated_prefix<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
     prefixes: &[String],
 ) -> Result<GeneratedDeletePlan, ContextPatchError> {
+    let root = root.into();
     let prefix_set: BTreeSet<String> = prefixes.iter().cloned().collect();
     ensure_no_duplicates(prefixes, &prefix_set, "prefixes")?;
 
-    let tracked = tracked_paths(root)?;
-    let candidates = state::untracked_and_ignored_paths(root)?;
+    let tracked = tracked_paths(root.git())?;
+    let candidates = state::untracked_and_ignored_paths(root.git())?;
     let matched = crate::git::validate::paths_under_prefixes(&candidates, prefixes);
 
     let mut files = BTreeSet::new();
@@ -318,10 +324,9 @@ pub fn plan_delete_generated_prefix(
                 "matched tracked path `{path}`"
             )));
         }
-        let target = root.join(path);
-        if target.is_file() {
+        if rooted::is_regular_file(root, path)? {
             files.insert(path.clone());
-        } else if target.is_dir() {
+        } else if rooted::is_directory(root, path)? {
             directories.insert(path.clone());
             collect_untracked_files_in_dir(root, path, &tracked, &mut files)?;
         }
@@ -354,26 +359,26 @@ pub fn plan_delete_generated_prefix(
 /// Directories are removed in reverse sorted order so a child is gone before its parent is considered.
 /// A directory that merely became empty is removed only while empty; a directory that matched a prefix
 /// outright may be removed whole, because the caller named it.
-pub fn apply_delete_generated_prefix(
-    root: &Path,
+pub fn apply_delete_generated_prefix<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
     plan: &GeneratedDeletePlan,
 ) -> Result<(), ContextPatchError> {
+    let root = root.into();
     for path in &plan.files {
-        let target = root.join(path);
-        if target.exists() {
-            fs::remove_file(&target).map_err(|error| {
+        if rooted::exists(root, path)? {
+            rooted::remove_file(root, path).map_err(|error| {
                 ContextPatchError::new(format!("failed to delete `{path}`: {error}"))
             })?;
         }
     }
     for path in plan.directories.iter().rev() {
-        let target = root.join(path);
-        if target.is_dir() && directory_is_empty(&target)? {
-            fs::remove_dir(&target).map_err(|error| {
+        let is_directory = rooted::is_directory(root, path)?;
+        if is_directory && rooted::directory_is_empty(root, path)? {
+            rooted::remove_dir(root, path).map_err(|error| {
                 ContextPatchError::new(format!("failed to delete directory `{path}`: {error}"))
             })?;
-        } else if target.is_dir() && plan.matched.contains(path) {
-            fs::remove_dir_all(&target).map_err(|error| {
+        } else if is_directory && plan.matched.contains(path) {
+            rooted::remove_dir_all(root, path).map_err(|error| {
                 ContextPatchError::new(format!(
                     "failed to delete ignored directory `{path}`: {error}"
                 ))
@@ -383,15 +388,6 @@ pub fn apply_delete_generated_prefix(
     Ok(())
 }
 
-fn relative_entry_path(root: &Path, entry: &fs::DirEntry) -> Result<String, ContextPatchError> {
-    Ok(entry
-        .path()
-        .strip_prefix(root)
-        .map_err(|error| ContextPatchError::new(format!("{error}")))?
-        .to_string_lossy()
-        .replace('\\', "/"))
-}
-
 /// Collect every file under a matched ignored directory, refusing if tracked history is found.
 ///
 /// The tracked-path refusal guards a race rather than a routine case: Git only collapses a directory to
@@ -399,47 +395,43 @@ fn relative_entry_path(root: &Path, entry: &fs::DirEntry) -> Result<String, Cont
 /// appeared between the listing and this walk. Keeping the check means that window ends in a refusal
 /// rather than in a recursive delete of tracked history.
 fn collect_untracked_files_in_dir(
-    root: &Path,
+    root: RepositoryRoot<'_>,
     path: &str,
     tracked: &BTreeSet<String>,
     files: &mut BTreeSet<String>,
 ) -> Result<(), ContextPatchError> {
-    let dir = root.join(path);
-    for entry in fs::read_dir(&dir)
-        .map_err(|error| ContextPatchError::new(format!("failed to read `{path}`: {error}")))?
-    {
-        let entry = entry.map_err(|error| {
-            ContextPatchError::new(format!("failed to read entry under `{path}`: {error}"))
-        })?;
-        let relative = relative_entry_path(root, &entry)?;
-        if tracked.contains(&relative) {
+    for entry in rooted::read_dir(root, path)? {
+        if tracked.contains(&entry.relative) {
             return Err(ContextPatchError::new(format!(
-                "ignored directory `{path}` contains tracked path `{relative}`"
+                "ignored directory `{path}` contains tracked path `{}`",
+                entry.relative
             )));
         }
-        let file_type = entry.file_type().map_err(|error| {
-            ContextPatchError::new(format!("failed to inspect `{relative}`: {error}"))
-        })?;
-        if file_type.is_file() {
-            files.insert(relative);
-        } else if file_type.is_dir() {
-            collect_untracked_files_in_dir(root, &relative, tracked, files)?;
-        } else {
-            return Err(ContextPatchError::new(format!(
-                "`{relative}` is not a regular file or directory"
-            )));
+        match entry.kind {
+            rooted::RootedEntryKind::RegularFile => {
+                files.insert(entry.relative);
+            }
+            rooted::RootedEntryKind::Directory => {
+                collect_untracked_files_in_dir(root, &entry.relative, tracked, files)?;
+            }
+            _ => {
+                return Err(ContextPatchError::new(format!(
+                    "`{}` is not a regular file or directory",
+                    entry.relative
+                )))
+            }
         }
     }
     Ok(())
 }
 
 fn collect_empty_dirs_under_prefixes(
-    root: &Path,
+    root: RepositoryRoot<'_>,
     prefixes: &[String],
     dirs: &mut BTreeSet<String>,
 ) -> Result<(), ContextPatchError> {
     for prefix in prefixes {
-        if root.join(prefix).is_dir() {
+        if rooted::is_directory(root, prefix)? {
             collect_empty_dirs(root, prefix, dirs)?;
         }
     }
@@ -447,24 +439,14 @@ fn collect_empty_dirs_under_prefixes(
 }
 
 fn collect_empty_dirs(
-    root: &Path,
+    root: RepositoryRoot<'_>,
     path: &str,
     dirs: &mut BTreeSet<String>,
 ) -> Result<bool, ContextPatchError> {
-    let target = root.join(path);
     let mut empty = true;
-    for entry in fs::read_dir(&target)
-        .map_err(|error| ContextPatchError::new(format!("failed to read `{path}`: {error}")))?
-    {
-        let entry = entry.map_err(|error| {
-            ContextPatchError::new(format!("failed to read entry under `{path}`: {error}"))
-        })?;
-        let relative = relative_entry_path(root, &entry)?;
-        let file_type = entry.file_type().map_err(|error| {
-            ContextPatchError::new(format!("failed to inspect `{relative}`: {error}"))
-        })?;
-        if file_type.is_dir() {
-            if !collect_empty_dirs(root, &relative, dirs)? {
+    for entry in rooted::read_dir(root, path)? {
+        if entry.kind == rooted::RootedEntryKind::Directory {
+            if !collect_empty_dirs(root, &entry.relative, dirs)? {
                 empty = false;
             }
         } else {
@@ -477,22 +459,11 @@ fn collect_empty_dirs(
     Ok(empty)
 }
 
-fn directory_is_empty(path: &Path) -> Result<bool, ContextPatchError> {
-    Ok(fs::read_dir(path)
-        .map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to inspect directory {}: {error}",
-                path.display()
-            ))
-        })?
-        .next()
-        .is_none())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 

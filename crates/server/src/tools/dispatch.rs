@@ -359,15 +359,17 @@ fn call_tool(
         tools::git_restore_exact::NAME => {
             tools::git::handlers::call_git_restore_exact(repository.root(), arguments)
         }
-        tools::move_tracked::NAME => tools::git::handlers::call_move_tracked(repo_root, arguments),
+        tools::move_tracked::NAME => {
+            tools::git::handlers::call_move_tracked(repository.root(), arguments)
+        }
         tools::delete_guarded::NAME => {
-            tools::git::handlers::call_delete_guarded(repo_root, arguments)
+            tools::git::handlers::call_delete_guarded(repository.root(), arguments)
         }
         tools::delete_untracked_exact::NAME => {
-            tools::git::handlers::call_delete_untracked_exact(repo_root, arguments)
+            tools::git::handlers::call_delete_untracked_exact(repository.root(), arguments)
         }
         tools::delete_generated_prefix::NAME => {
-            tools::git::handlers::call_delete_generated_prefix(repo_root, arguments)
+            tools::git::handlers::call_delete_generated_prefix(repository.root(), arguments)
         }
         tools::git_remote_list::NAME => {
             tools::git::handlers::call_git_remote_list(repository.git_repository())
@@ -376,7 +378,7 @@ fn call_tool(
             tools::git::handlers::call_git_remote_check(repository.git_repository(), arguments)
         }
         tools::git_branch_prepare::NAME => {
-            tools::git::handlers::call_git_branch_prepare(repo_root, arguments)
+            tools::git::handlers::call_git_branch_prepare(repository.root(), arguments)
         }
         tools::git_merge_readiness::NAME => {
             tools::git::handlers::call_git_merge_readiness(repository.git_repository(), arguments)

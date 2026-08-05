@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde_json::{json, Value};
 
 use contextpatch_core::git::restore as core_restore;
@@ -86,8 +84,8 @@ pub(crate) fn call_git_restore_exact<'a>(
     .map_err(|error| format!("git_restore_exact refused: {error}"))
 }
 
-pub(crate) fn call_delete_untracked_exact(
-    repo_root: &Path,
+pub(crate) fn call_delete_untracked_exact<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "delete untracked files";
@@ -110,13 +108,18 @@ pub(crate) fn call_delete_untracked_exact(
         ));
     }
 
-    let root = repo_root_for_policy(
-        repo_root,
+    // Confinement, planning, removal, and verification all derive from one authority, so a path cannot be
+    // planned against one directory and deleted from another.
+    let authority = repository_root.into();
+    let policy = repository_under_policy(
+        authority.git(),
         tools::delete_untracked_exact::NAME,
         WorktreeRootPolicy::ResolvedPath,
     )?;
-    let normalized_paths = normalize_git_paths(tools::delete_untracked_exact::NAME, &root, &paths)?;
-    let plan = core_restore::plan_delete_untracked_exact(&root, &normalized_paths)
+    let confined = policy.bind_root(authority);
+    let normalized_paths =
+        normalize_git_paths(tools::delete_untracked_exact::NAME, confined, &paths)?;
+    let plan = core_restore::plan_delete_untracked_exact(confined, &normalized_paths)
         .map_err(|error| refused(tools::delete_untracked_exact::NAME, error))?;
 
     if dry_run {
@@ -131,18 +134,19 @@ pub(crate) fn call_delete_untracked_exact(
     }
 
     // The receipt wraps the removal alone. Planning already happened and verification happens after, so
-    // the journalled window is exactly the mutation.
+    // the journalled window is exactly the mutation. Receipt identity stays path-derived, which is a
+    // deferred boundary rather than part of this migration.
     crate::tools::journal::recorded_deletions(
-        repo_root,
+        confined.logical_path(),
         tools::delete_untracked_exact::NAME,
         &plan.paths,
         || {
-            core_restore::delete_untracked_files(&root, &plan)
+            core_restore::delete_untracked_files(confined, &plan)
                 .map_err(|error| refused(tools::delete_untracked_exact::NAME, error))
         },
     )?;
 
-    let outcome = core_restore::verify_untracked_deleted(&root, &plan)
+    let outcome = core_restore::verify_untracked_deleted(confined, &plan)
         .map_err(|error| refused(tools::delete_untracked_exact::NAME, error))?;
     if !outcome.still_untracked.is_empty() {
         return Err(format!(
@@ -161,8 +165,8 @@ pub(crate) fn call_delete_untracked_exact(
     .map_err(|error| format!("delete_untracked_exact refused: {error}"))
 }
 
-pub(crate) fn call_delete_generated_prefix(
-    repo_root: &Path,
+pub(crate) fn call_delete_generated_prefix<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "delete generated paths";
@@ -186,14 +190,16 @@ pub(crate) fn call_delete_generated_prefix(
         ));
     }
 
-    let root = repo_root_for_policy(
-        repo_root,
+    let authority = repository_root.into();
+    let policy = repository_under_policy(
+        authority.git(),
         tools::delete_generated_prefix::NAME,
         WorktreeRootPolicy::ResolvedPath,
     )?;
+    let confined = policy.bind_root(authority);
     let normalized_prefixes =
-        normalize_git_prefixes(tools::delete_generated_prefix::NAME, &root, &prefixes)?;
-    let plan = core_restore::plan_delete_generated_prefix(&root, &normalized_prefixes)
+        normalize_git_prefixes(tools::delete_generated_prefix::NAME, confined, &prefixes)?;
+    let plan = core_restore::plan_delete_generated_prefix(confined, &normalized_prefixes)
         .map_err(|error| refused(tools::delete_generated_prefix::NAME, error))?;
 
     if dry_run {
@@ -208,7 +214,7 @@ pub(crate) fn call_delete_generated_prefix(
         .map_err(|error| format!("delete_generated_prefix refused: {error}"));
     }
 
-    core_restore::apply_delete_generated_prefix(&root, &plan)
+    core_restore::apply_delete_generated_prefix(confined, &plan)
         .map_err(|error| refused(tools::delete_generated_prefix::NAME, error))?;
 
     serde_json::to_string_pretty(&json!({

@@ -324,39 +324,65 @@ repository into its place, replacing it with a symlink pointing outside the work
 altogether. Each asserts the refusal and that neither the replacement nor the outside directory was
 touched.
 
+**Slice 2 — done.** Path confinement and the filesystem primitives beneath the Git handlers are now
+descriptor-relative. An opaque `RepositoryRoot` carries a logical path plus path-or-descriptor authority,
+keeping the descriptor private so a caller cannot reach past the authority and use the name whenever the
+descriptor is inconvenient. `GitRepository` is its Git projection; `crate::fs::rooted` is its filesystem
+projection.
+
+Confinement walks components from the retained descriptor and inspects the final component with `fstatat`
+rather than opening it, because a path that does not exist yet is a legitimate create target. The
+filesystem primitives — type and metadata checks, no-follow regular-file opening and hashing, required-file
+validation, rename, unlink, recursive removal, and directory listing — all take the root and ask it how to
+reach the entry.
+
+One behavior difference is deliberate and asserted in both directions. A path-backed root resolves by name
+and therefore follows an in-tree symlink; an anchored root refuses a symlink at any component, because
+following one would mean resolving a name again. Anchored roots are stricter, matching the selector walk
+and the guarded file path. The path-backed branch is retained rather than unified away so configured roots
+and existing callers keep their exact refusals.
+
+**Slice 3 — done.** All five mixed filesystem/Git handlers are migrated end to end: `git_branch_prepare`,
+`delete_untracked_exact`, `delete_generated_prefix`, `move_tracked`, and `delete_guarded`. Each derives its
+Git subprocess from the `GitRepository` projection and every filesystem check and mutation from the
+descriptor-relative primitives, both taken from the same root authority, so no operation is split between
+anchored Git and logical-path filesystem access. The exact-worktree-root requirement is applied without
+re-resolving an anchored selection, which was already verified as a worktree root when it was selected.
+
+Project-selection tests exercise dispatch rather than core helpers: tracked moves, guarded deletions, exact
+untracked cleanup, generated-prefix cleanup, and branch required-file checks each act on the selected
+repository only, with siblings holding identically named files and identically named ignored trees, and
+with an outside repository asserted bit-for-bit unchanged. Each pair of assertions runs in both directions
+so none can pass by accident of ordering.
+
 **Remaining unanchored uses.** C13 stays in progress until each of these is descriptor-anchored rather
 than path-derived. Items 1 to 3 and 5 of the original inventory are now closed: dispatch carries an owning
 target, Git execution changes into the retained descriptor through a minimal `fchdir` hook, the guarded
 runner takes a typed working directory, and the worktree check accepts one. What remains:
 
-1. **Git handlers not yet converted.** None remain among the pure Git actions. All eleven Git handlers that
-   do not also touch the filesystem now take the typed target: remote listing, remote check, merge
-   readiness, push, the three commit shapes, staging, the staged scope check, and the exact restore.
+1. **Git handlers not yet converted.** None remain. Every Git handler now takes typed root or repository
+   authority, including the five that also touch the filesystem.
+2. **Repository and file mutation locks**, which remain keyed by the logical path.
+3. **Receipt journal and scratch identity**, which remain derived from a canonicalized root path.
+4. **Filesystem entry points.** `open_regular_file_in_root` and the rest of `guarded_file` already walk
+   components with `openat`, but they start from a root *path* rather than an inherited descriptor, so the
+   general file tools are still path-backed. `crate::fs::rooted` is the pattern they should adopt.
+5. **Process, fixture, GitHub, capability, and native handlers**, none of which take root authority yet.
+6. **`exact_worktree_root` for path-backed roots**, which still canonicalizes and compares by name. That is
+   correct for a configured root reached only by name, and is what the anchored branch now skips.
 
-   `logical_path()` survives at exactly three boundaries, each named at its call site: path confinement,
-   which resolves caller-named paths against a root and therefore needs one by nature; the repository
-   mutation lock, which is still keyed by path; and the receipt journal. Those three are what the remaining
-   slices are about.
-2. **`git_branch_prepare`.** Deferred on purpose rather than for effort: its post-switch required-file check
-   reads the worktree by path, so converting only its Git half would split one action between anchored
-   execution and path-based verification.
-3. **Mixed filesystem Git actions.** `delete_untracked_exact`, `delete_generated_prefix`, `move_tracked`,
-   and `delete_guarded` remove or move files as well as consulting Git, so they belong to the filesystem
-   slice for the same split-authority reason.
-4. **Filesystem entry points.** `open_regular_file_in_root` already walks components with `openat`, but it
-   starts from a root *path* rather than an inherited descriptor, so every file tool is still path-backed.
-5. **Scratch, receipt, and mutation-lock derivation**, which all hash a canonicalized root path. Locking
-   is threaded through the typed target already but deliberately still keyed by the logical path.
+Within the migrated Git surface, `logical_path()` survives at exactly three boundaries, each named at its
+call site: the repository mutation lock, the receipt journal, and the path-backed compatibility branch of
+confinement and the filesystem primitives.
 
 The selector is otherwise sound: it rejects parent and current-directory components, absolute paths,
 trailing and doubled separators, backslashes, control characters, drive prefixes, and the Git
 administrative directory; requires the re-joined path to equal the input; rejects a symlink at every
 component; and then requires an exact worktree root. It cannot escape the workspace boundary.
 
-It reaches that result by path, however, inspecting and then reopening by path later. That is the
-race-prone pattern the rest of the module avoids by design with descriptor-relative opens and
-revalidation. Walk the selector with descriptors and hand the resulting directory descriptor forward,
-so the checked object and the used object are the same object.
+That result is now reached by descriptor rather than by name: the selector walks with descriptor-relative
+opens and hands the resulting directory descriptor forward, so within the Git surface the checked object
+and the used object are the same object. The boundaries listed above are where that is not yet true.
 
 ## Phase 4 — Derive the capability contract
 
