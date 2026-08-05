@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::tools;
 use contextpatch_core::git::state as git_state;
-use contextpatch_core::git::GitRepository;
+use contextpatch_core::git::{GitRepository, RepositoryRoot};
 pub(crate) fn validate_commit_subject(subject: &str) -> Result<String, String> {
     contextpatch_core::git::validate::commit_subject(subject)
         .map_err(|error| format!("{} refused: {error}", tools::git_commit_exact::NAME))
@@ -14,27 +14,27 @@ pub(crate) fn validate_commit_body(body: &str) -> Result<String, String> {
         .map_err(|error| format!("{} refused: {error}", tools::git_commit_exact::NAME))
 }
 
-pub(crate) fn normalize_git_paths(
+pub(crate) fn normalize_git_paths<'a>(
     tool_name: &str,
-    root: &Path,
+    root: impl Into<RepositoryRoot<'a>>,
     paths: &[String],
 ) -> Result<Vec<String>, String> {
     contextpatch_core::git::validate::git_paths(root, paths)
         .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
-pub(crate) fn normalize_git_prefixes(
+pub(crate) fn normalize_git_prefixes<'a>(
     tool_name: &str,
-    root: &Path,
+    root: impl Into<RepositoryRoot<'a>>,
     prefixes: &[String],
 ) -> Result<Vec<String>, String> {
     contextpatch_core::git::validate::git_prefixes(root, prefixes)
         .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
-pub(crate) fn normalize_git_path(
+pub(crate) fn normalize_git_path<'a>(
     tool_name: &str,
-    root: &Path,
+    root: impl Into<RepositoryRoot<'a>>,
     raw: &str,
 ) -> Result<String, String> {
     contextpatch_core::git::validate::git_path(root, raw)
@@ -72,6 +72,17 @@ impl PolicyTarget {
         match self {
             Self::Anchored => original,
             Self::Resolved(path) => GitRepository::from_path(path),
+        }
+    }
+
+    /// The same decision, as a repository root rather than its Git projection.
+    ///
+    /// Path confinement needs the root's authority, not the Git projection, so that a path is checked
+    /// against the same directory it will be used against.
+    pub(crate) fn bind_root<'a>(&'a self, original: RepositoryRoot<'a>) -> RepositoryRoot<'a> {
+        match self {
+            Self::Anchored => original,
+            Self::Resolved(path) => RepositoryRoot::from_path(path),
         }
     }
 }

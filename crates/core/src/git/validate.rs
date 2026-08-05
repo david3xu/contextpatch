@@ -9,9 +9,11 @@
 //! to its caller, which is what lets this policy move without changing a single refusal string.
 
 use std::collections::BTreeSet;
+use std::io::ErrorKind;
 use std::path::{Component, Path};
 
 use crate::error::ContextPatchError;
+use crate::git::root::RepositoryRoot;
 
 /// Longest accepted commit subject, in bytes.
 pub const MAX_COMMIT_SUBJECT_BYTES: usize = 200;
@@ -54,18 +56,11 @@ pub fn commit_body(body: &str) -> Result<String, ContextPatchError> {
     Ok(body.trim().to_string())
 }
 
-/// Confine one caller-named Git path to the repository root.
+/// Reject a path on its spelling alone, before any filesystem access.
 ///
-/// This is the guard that bounds every path-taking Git action, which is why those actions do not also
-/// require an exact worktree root: the paths they name cannot leave the configured tree. Four distinct
-/// escapes are refused. Pathspec metacharacters are rejected because Git would expand them into paths
-/// the caller never wrote. Absolute paths and non-normal components are rejected before any filesystem
-/// access, so `..` never gets a chance to resolve. Finally the candidate is resolved and required to sit
-/// under the root, which catches a symlink whose target leaves the tree.
-///
-/// The original spelling is returned, not the resolved path, because Git must receive exactly what the
-/// caller named.
-pub fn git_path(root: &Path, raw: &str) -> Result<String, ContextPatchError> {
+/// Pathspec metacharacters are rejected because Git would expand them into paths the caller never wrote.
+/// Absolute paths and non-normal components are rejected here so `..` never gets a chance to resolve.
+fn ensure_git_path_shape(raw: &str) -> Result<(), ContextPatchError> {
     if raw.is_empty() || raw.contains('\0') {
         return Err(ContextPatchError::new(
             "path must not be empty or contain NUL",
@@ -84,17 +79,50 @@ pub fn git_path(root: &Path, raw: &str) -> Result<String, ContextPatchError> {
         )));
     }
     for component in path.components() {
-        match component {
-            Component::Normal(_) => {}
-            _ => {
-                return Err(ContextPatchError::new(format!(
-                    "path `{raw}` must be a normalized relative path"
-                )))
-            }
+        if !matches!(component, Component::Normal(_)) {
+            return Err(ContextPatchError::new(format!(
+                "path `{raw}` must be a normalized relative path"
+            )));
         }
     }
+    Ok(())
+}
 
-    let candidate = root.join(path);
+/// Confine one caller-named Git path to the repository root.
+///
+/// This is the guard that bounds every path-taking Git action, which is why those actions do not also
+/// require an exact worktree root: the paths they name cannot leave the configured tree.
+///
+/// How containment is established depends on the root's authority, and the two differ in one way worth
+/// stating plainly. A path-backed root resolves the candidate and requires the result to sit under the
+/// root, so an in-tree symlink is followed and accepted. An anchored root walks the components relative to
+/// the retained descriptor and refuses a symlink at any component, because following one would mean
+/// resolving a name again and the descriptor exists precisely to avoid that. Anchored roots are therefore
+/// stricter, matching the selector walk and the guarded file path, both of which already refuse
+/// intermediate symlinks. That strictness is a deliberate difference, not an oversight.
+///
+/// The original spelling is returned, not the resolved path, because Git must receive exactly what the
+/// caller named.
+pub fn git_path<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
+    raw: &str,
+) -> Result<String, ContextPatchError> {
+    let root = root.into();
+    ensure_git_path_shape(raw)?;
+
+    #[cfg(unix)]
+    if let Some(directory) = root.directory() {
+        confine_relative_to_descriptor(directory, raw)?;
+        return Ok(raw.to_string());
+    }
+
+    confine_under_path(root.logical_path(), raw)?;
+    Ok(raw.to_string())
+}
+
+/// Containment for a root whose authority is its name.
+fn confine_under_path(root: &Path, raw: &str) -> Result<(), ContextPatchError> {
+    let candidate = root.join(Path::new(raw));
     let resolved = if candidate.exists() {
         candidate
             .canonicalize()
@@ -119,17 +147,135 @@ pub fn git_path(root: &Path, raw: &str) -> Result<String, ContextPatchError> {
             "path `{raw}` resolves outside repository root"
         )));
     }
+    Ok(())
+}
 
-    Ok(raw.to_string())
+/// Containment for a root whose authority is a retained descriptor.
+///
+/// Each component is opened relative to the descriptor the previous step returned, so the parent chain
+/// cannot be substituted part way through and the root's name is never resolved again. The final component
+/// is inspected rather than opened, because a path that does not exist yet is a legitimate create target.
+#[cfg(unix)]
+fn confine_relative_to_descriptor(
+    directory: &std::fs::File,
+    raw: &str,
+) -> Result<(), ContextPatchError> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let components = Path::new(raw).components().collect::<Vec<_>>();
+    let mut current: Option<std::fs::File> = None;
+    let mut walked = std::path::PathBuf::new();
+
+    for (index, component) in components.iter().enumerate() {
+        walked.push(component.as_os_str());
+        let name = std::ffi::CString::new(component.as_os_str().as_encoded_bytes())
+            .map_err(|_| ContextPatchError::new("path must not be empty or contain NUL"))?;
+        let parent = current.as_ref().unwrap_or(directory);
+        let is_final = index + 1 == components.len();
+
+        if is_final {
+            // Absence is an answer here, not a failure: the caller may be naming something to create.
+            match inspect_relative(parent, &name) {
+                Ok(Some(mode)) if mode == libc::S_IFLNK => {
+                    return Err(symlink_component(raw, &walked));
+                }
+                Ok(_) => return Ok(()),
+                Err(error) => return Err(error),
+            }
+        }
+
+        let opened = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if opened < 0 {
+            return Err(classify_confinement_failure(parent, &name, raw, &walked));
+        }
+        current = Some(unsafe { std::fs::File::from_raw_fd(opened) });
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn symlink_component(raw: &str, walked: &Path) -> ContextPatchError {
+    ContextPatchError::new(format!(
+        "path `{raw}` contains symlink component `{}`",
+        walked.display()
+    ))
+}
+
+/// The file type of one entry relative to a descriptor, or `None` when it does not exist.
+#[cfg(unix)]
+fn inspect_relative(
+    parent: &std::fs::File,
+    name: &std::ffi::CStr,
+) -> Result<Option<libc::mode_t>, ContextPatchError> {
+    use std::os::fd::AsRawFd;
+
+    let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let inspected = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            status.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if inspected != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(ContextPatchError::new(format!(
+            "failed to inspect path component: {error}"
+        )));
+    }
+    Ok(Some(unsafe { status.assume_init() }.st_mode & libc::S_IFMT))
+}
+
+/// Explain why one descriptor-relative open failed, without leaving the parent descriptor.
+///
+/// `ELOOP` and `ENOTDIR` do not portably distinguish a symlink from a plain file, so the entry is
+/// classified against the same parent rather than guessed from the error code.
+#[cfg(unix)]
+fn classify_confinement_failure(
+    parent: &std::fs::File,
+    name: &std::ffi::CStr,
+    raw: &str,
+    walked: &Path,
+) -> ContextPatchError {
+    match inspect_relative(parent, name) {
+        Ok(None) => ContextPatchError::new(format!(
+            "failed to resolve parent for `{raw}`: No such file or directory (os error 2)"
+        )),
+        Ok(Some(mode)) if mode == libc::S_IFLNK => symlink_component(raw, walked),
+        Ok(Some(_)) => ContextPatchError::new(format!(
+            "path `{raw}` component `{}` is not a directory",
+            walked.display()
+        )),
+        Err(error) => error,
+    }
 }
 
 /// Confine every caller-named Git path, refusing on the first that escapes.
-pub fn git_paths(root: &Path, paths: &[String]) -> Result<Vec<String>, ContextPatchError> {
+pub fn git_paths<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
+    paths: &[String],
+) -> Result<Vec<String>, ContextPatchError> {
+    let root = root.into();
     paths.iter().map(|path| git_path(root, path)).collect()
 }
 
 /// Confine every caller-named Git prefix, tolerating one trailing separator.
-pub fn git_prefixes(root: &Path, prefixes: &[String]) -> Result<Vec<String>, ContextPatchError> {
+pub fn git_prefixes<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
+    prefixes: &[String],
+) -> Result<Vec<String>, ContextPatchError> {
+    let root = root.into();
     prefixes
         .iter()
         .map(|prefix| {
@@ -285,6 +431,152 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
+    fn anchored_root(root: &std::path::Path) -> std::fs::File {
+        std::fs::File::open(root).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_anchored_root_refuses_a_symlink_at_the_final_component() {
+        let root = test_root("anchored_final_symlink");
+        let outside = test_root("anchored_final_symlink_outside");
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("link.txt")).unwrap();
+        let directory = anchored_root(&root);
+
+        let error = git_path(RepositoryRoot::anchored(&root, &directory), "link.txt")
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(error, "path `link.txt` contains symlink component `link.txt`");
+        assert_eq!(
+            fs::read_to_string(outside.join("secret.txt")).unwrap(),
+            "secret"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_anchored_root_refuses_a_symlink_at_an_intermediate_component() {
+        let root = test_root("anchored_intermediate_symlink");
+        let outside = test_root("anchored_intermediate_symlink_outside");
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+        let directory = anchored_root(&root);
+
+        let error = git_path(RepositoryRoot::anchored(&root, &directory), "linked/secret.txt")
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            error,
+            "path `linked/secret.txt` contains symlink component `linked`"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_two_authorities_differ_on_an_in_tree_symlink_and_that_is_deliberate() {
+        // A symlink whose target stays inside the tree is accepted by a name-based root, because resolving
+        // it lands under the root. An anchored root refuses it, because following it would mean resolving a
+        // name again and the descriptor exists to avoid exactly that. Asserting both sides so the
+        // difference is a recorded decision rather than a surprise.
+        let root = test_root("anchored_in_tree_symlink");
+        fs::create_dir_all(root.join("real")).unwrap();
+        fs::write(root.join("real").join("file.txt"), "inside").unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        let directory = anchored_root(&root);
+
+        assert_eq!(
+            git_path(root.as_path(), "alias/file.txt").unwrap(),
+            "alias/file.txt"
+        );
+        assert_eq!(
+            git_path(RepositoryRoot::anchored(&root, &directory), "alias/file.txt")
+                .unwrap_err()
+                .to_string(),
+            "path `alias/file.txt` contains symlink component `alias`"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_anchored_root_refuses_traversal_and_absolute_paths_before_touching_the_filesystem() {
+        // The shape checks run first for both authorities, so `..` never reaches a descriptor walk.
+        let root = test_root("anchored_shape_checks");
+        let directory = anchored_root(&root);
+        let anchored = RepositoryRoot::anchored(&root, &directory);
+
+        assert!(git_path(anchored, "../escape.txt")
+            .unwrap_err()
+            .to_string()
+            .contains("normalized relative path"));
+        assert!(git_path(anchored, "/etc/hosts")
+            .unwrap_err()
+            .to_string()
+            .contains("repository-relative"));
+        assert!(git_path(anchored, "src/*.rs")
+            .unwrap_err()
+            .to_string()
+            .contains("Git pathspec metacharacters"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_anchored_root_accepts_a_leaf_that_does_not_exist_yet() {
+        // A create target is a legitimate answer, so the final component is inspected rather than opened.
+        let root = test_root("anchored_absent_leaf");
+        fs::create_dir_all(root.join("src")).unwrap();
+        let directory = anchored_root(&root);
+        let anchored = RepositoryRoot::anchored(&root, &directory);
+
+        assert_eq!(git_path(anchored, "src/new.rs").unwrap(), "src/new.rs");
+        assert_eq!(git_path(anchored, "new.rs").unwrap(), "new.rs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_anchored_root_reports_a_missing_or_non_directory_parent() {
+        let root = test_root("anchored_bad_parent");
+        fs::write(root.join("file.txt"), "content").unwrap();
+        let directory = anchored_root(&root);
+        let anchored = RepositoryRoot::anchored(&root, &directory);
+
+        assert!(git_path(anchored, "missing/new.rs")
+            .unwrap_err()
+            .to_string()
+            .starts_with("failed to resolve parent for `missing/new.rs`"));
+        assert_eq!(
+            git_path(anchored, "file.txt/inner.rs")
+                .unwrap_err()
+                .to_string(),
+            "path `file.txt/inner.rs` component `file.txt` is not a directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_anchored_root_confines_relative_to_the_descriptor_after_the_name_is_replaced() {
+        // The point of the descriptor: the root's name is swapped for a different directory, and
+        // confinement still answers about the directory that was anchored.
+        let parent = test_root("anchored_after_swap");
+        let original = parent.join("original");
+        let decoy = parent.join("decoy");
+        fs::create_dir_all(original.join("src")).unwrap();
+        fs::create_dir_all(&decoy).unwrap();
+        let directory = anchored_root(&original);
+
+        fs::rename(&original, parent.join("moved-aside")).unwrap();
+        fs::rename(&decoy, &original).unwrap();
+
+        // `src` exists only in the anchored directory, never in the replacement now sitting at that name.
+        let anchored = RepositoryRoot::anchored(&original, &directory);
+        assert_eq!(git_path(anchored, "src/new.rs").unwrap(), "src/new.rs");
+        // A name-based root sees the replacement instead, which is the behaviour being moved away from.
+        assert!(git_path(original.as_path(), "src/new.rs").is_err());
+    }
+
     #[test]
     fn a_symlink_leaving_the_root_is_refused() {
         let root = test_root("symlink_escape");

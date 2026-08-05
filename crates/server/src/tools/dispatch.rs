@@ -342,22 +342,22 @@ fn call_tool(
             tools::native::call_native_device_run(repo_root, arguments)
         }
         tools::git_commit_exact::NAME => {
-            tools::git::handlers::call_git_commit_exact(repository.git_repository(), arguments)
+            tools::git::handlers::call_git_commit_exact(repository.root(), arguments)
         }
         tools::git_commit_scoped::NAME => {
-            tools::git::handlers::call_git_commit_scoped(repository.git_repository(), arguments)
+            tools::git::handlers::call_git_commit_scoped(repository.root(), arguments)
         }
         tools::git_commit_prefix::NAME => {
-            tools::git::handlers::call_git_commit_prefix(repository.git_repository(), arguments)
+            tools::git::handlers::call_git_commit_prefix(repository.root(), arguments)
         }
         tools::git_stage_exact::NAME => {
-            tools::git::handlers::call_git_stage_exact(repository.git_repository(), arguments)
+            tools::git::handlers::call_git_stage_exact(repository.root(), arguments)
         }
         tools::git_staged_scope_check::NAME => {
-            tools::git::handlers::call_git_staged_scope_check(repository.git_repository(), arguments)
+            tools::git::handlers::call_git_staged_scope_check(repository.root(), arguments)
         }
         tools::git_restore_exact::NAME => {
-            tools::git::handlers::call_git_restore_exact(repository.git_repository(), arguments)
+            tools::git::handlers::call_git_restore_exact(repository.root(), arguments)
         }
         tools::move_tracked::NAME => tools::git::handlers::call_move_tracked(repo_root, arguments),
         tools::delete_guarded::NAME => {

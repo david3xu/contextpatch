@@ -16,7 +16,7 @@ fn refused(tool_name: &str, error: contextpatch_core::error::ContextPatchError) 
 }
 
 pub(crate) fn call_git_restore_exact<'a>(
-    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "restore exact paths";
@@ -39,17 +39,18 @@ pub(crate) fn call_git_restore_exact<'a>(
         ));
     }
 
-    let repository = repository.into();
+    let authority = repository_root.into();
     let policy = repository_under_policy(
-        repository,
+        authority.git(),
         tools::git_restore_exact::NAME,
         WorktreeRootPolicy::ResolvedPath,
     )?;
-    let root = policy.bind(repository);
-    // Path confinement resolves caller-named paths against a root, so it needs the logical path. That is
-    // one of the three remaining path-backed boundaries, alongside locks and the receipt journal.
+    // Confinement and Git execution share one authority, so a path cannot be checked against one directory
+    // and then used against another.
+    let confined = policy.bind_root(authority);
+    let root = confined.git();
     let normalized_paths =
-        normalize_git_paths(tools::git_restore_exact::NAME, root.path(), &paths)?;
+        normalize_git_paths(tools::git_restore_exact::NAME, confined, &paths)?;
     let plan = core_restore::plan_restore_exact(root, &normalized_paths)
         .map_err(|error| refused(tools::git_restore_exact::NAME, error))?;
 

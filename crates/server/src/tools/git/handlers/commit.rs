@@ -32,7 +32,7 @@ fn commit_message(
 }
 
 pub(crate) fn call_git_commit_exact<'a>(
-    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "commit exact paths";
@@ -58,12 +58,13 @@ pub(crate) fn call_git_commit_exact<'a>(
         ));
     }
 
-    let repository = repository.into();
-    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let root = policy.bind(repository);
-    // Path confinement resolves caller-named paths against a root, so it needs the logical path. That is
-    // one of the three remaining path-backed boundaries, alongside locks and the receipt journal.
-    let normalized_paths = normalize_git_paths(TOOL, root.path(), &paths)?;
+    let authority = repository_root.into();
+    let policy = repository_under_policy(authority.git(), TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    // Confinement and Git execution share one authority, so a path can never be checked against one
+    // directory and then used against another.
+    let confined = policy.bind_root(authority);
+    let root = confined.git();
+    let normalized_paths = normalize_git_paths(TOOL, confined, &paths)?;
     let plan = core_commit::plan_commit_exact(root, &normalized_paths)
         .map_err(|error| refused(TOOL, error))?;
 
@@ -120,7 +121,7 @@ pub(crate) fn call_git_commit_exact<'a>(
 }
 
 pub(crate) fn call_git_commit_scoped<'a>(
-    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "commit scoped paths";
@@ -146,10 +147,11 @@ pub(crate) fn call_git_commit_scoped<'a>(
         ));
     }
 
-    let repository = repository.into();
-    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let root = policy.bind(repository);
-    let normalized_paths = normalize_git_paths(TOOL, root.path(), &paths)?;
+    let authority = repository_root.into();
+    let policy = repository_under_policy(authority.git(), TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let confined = policy.bind_root(authority);
+    let root = confined.git();
+    let normalized_paths = normalize_git_paths(TOOL, confined, &paths)?;
     let plan = core_commit::plan_commit_scoped(root, &normalized_paths)
         .map_err(|error| refused(TOOL, error))?;
 
@@ -218,7 +220,7 @@ pub(crate) fn call_git_commit_scoped<'a>(
 }
 
 pub(crate) fn call_git_commit_prefix<'a>(
-    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "commit prefix paths";
@@ -244,10 +246,11 @@ pub(crate) fn call_git_commit_prefix<'a>(
         ));
     }
 
-    let repository = repository.into();
-    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let root = policy.bind(repository);
-    let normalized_prefixes = normalize_git_prefixes(TOOL, root.path(), &prefixes)?;
+    let authority = repository_root.into();
+    let policy = repository_under_policy(authority.git(), TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let confined = policy.bind_root(authority);
+    let root = confined.git();
+    let normalized_prefixes = normalize_git_prefixes(TOOL, confined, &prefixes)?;
     let plan = core_commit::plan_commit_prefix(root, &normalized_prefixes)
         .map_err(|error| refused(TOOL, error))?;
 
@@ -319,7 +322,7 @@ pub(crate) fn call_git_commit_prefix<'a>(
 }
 
 pub(crate) fn call_git_stage_exact<'a>(
-    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "stage exact paths";
@@ -344,10 +347,11 @@ pub(crate) fn call_git_stage_exact<'a>(
         ));
     }
 
-    let repository = repository.into();
-    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let root = policy.bind(repository);
-    let normalized_paths = normalize_git_paths(TOOL, root.path(), &paths)?;
+    let authority = repository_root.into();
+    let policy = repository_under_policy(authority.git(), TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let confined = policy.bind_root(authority);
+    let root = confined.git();
+    let normalized_paths = normalize_git_paths(TOOL, confined, &paths)?;
     let plan = core_commit::plan_stage_exact(root, &normalized_paths)
         .map_err(|error| refused(TOOL, error))?;
 
@@ -379,7 +383,7 @@ pub(crate) fn call_git_stage_exact<'a>(
 }
 
 pub(crate) fn call_git_staged_scope_check<'a>(
-    repository: impl Into<contextpatch_core::git::GitRepository<'a>>,
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const TOOL: &str = tools::git_staged_scope_check::NAME;
@@ -407,12 +411,13 @@ pub(crate) fn call_git_staged_scope_check<'a>(
         ));
     }
 
-    let repository = repository.into();
-    let policy = repository_under_policy(repository, TOOL, WorktreeRootPolicy::ResolvedPath)?;
-    let root = policy.bind(repository);
-    let normalized_allowed_paths = normalize_git_paths(TOOL, root.path(), &allowed_paths)?;
-    let normalized_allowed_prefixes = normalize_git_prefixes(TOOL, root.path(), &allowed_prefixes)?;
-    let normalized_required_paths = normalize_git_paths(TOOL, root.path(), &required_paths)?;
+    let authority = repository_root.into();
+    let policy = repository_under_policy(authority.git(), TOOL, WorktreeRootPolicy::ResolvedPath)?;
+    let confined = policy.bind_root(authority);
+    let root = confined.git();
+    let normalized_allowed_paths = normalize_git_paths(TOOL, confined, &allowed_paths)?;
+    let normalized_allowed_prefixes = normalize_git_prefixes(TOOL, confined, &allowed_prefixes)?;
+    let normalized_required_paths = normalize_git_paths(TOOL, confined, &required_paths)?;
 
     let report = core_commit::evaluate_staged_scope(
         root,
