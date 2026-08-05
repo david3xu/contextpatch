@@ -29,16 +29,18 @@ impl StatusSnapshot {
     }
 }
 
-pub fn status_summary(repo_root: &Path) -> Result<String, ContextPatchError> {
+pub fn status_summary<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<String, ContextPatchError> {
     status_summary_for_path(repo_root, None)
 }
 
-pub fn status_snapshot(
-    repo_root: &Path,
+pub fn status_snapshot<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     max_sampled_changes: usize,
     max_sample_bytes: usize,
 ) -> Result<StatusSnapshot, ContextPatchError> {
-    let (_, changes) = status_changes_for_path(repo_root, None)?;
+    let (_, changes) = status_changes_for_path(repo_root.into(), None)?;
     let change_count = changes.len();
     let mut sampled_changes = Vec::new();
     let mut sampled_bytes = 0usize;
@@ -64,9 +66,13 @@ pub fn status_snapshot(
     })
 }
 
-pub fn status_short(repo_root: &Path) -> Result<String, ContextPatchError> {
-    let root = reported_root(repo_root)?;
+pub fn status_short<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<String, ContextPatchError> {
+    let repo_root = repo_root.into();
+    let root = crate::fs::rooted::canonical_label(repo_root)?;
     let output = git_output(
+        repo_root.git(),
         &root,
         &["status", "--short", "--untracked-files=all"],
         "git status --short",
@@ -76,9 +82,13 @@ pub fn status_short(repo_root: &Path) -> Result<String, ContextPatchError> {
     })
 }
 
-pub fn dirty_paths(repo_root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
-    let root = reported_root(repo_root)?;
+pub fn dirty_paths<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let repo_root = repo_root.into();
+    let root = crate::fs::rooted::canonical_label(repo_root)?;
     let output = git_output(
+        repo_root.git(),
         &root,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
         "git status",
@@ -86,11 +96,11 @@ pub fn dirty_paths(repo_root: &Path) -> Result<BTreeSet<String>, ContextPatchErr
     parse_porcelain_paths(&output.stdout, "git status")
 }
 
-pub fn status_summary_for_path(
-    repo_root: &Path,
+pub fn status_summary_for_path<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: Option<&Path>,
 ) -> Result<String, ContextPatchError> {
-    let (scope, changes) = status_changes_for_path(repo_root, path)?;
+    let (scope, changes) = status_changes_for_path(repo_root.into(), path)?;
 
     if changes.is_empty() {
         return Ok(match scope {
@@ -109,11 +119,16 @@ pub fn status_summary_for_path(
     )))
 }
 
+/// Collect Git status, optionally scoped to one path.
+///
+/// Git runs through the root's own authority, so a selected repository is queried through the descriptor
+/// that validated it. The scope pathspec is still normalized against the canonical label, which is a
+/// reporting and pathspec concern rather than an access one and is recorded as a remaining boundary.
 fn status_changes_for_path(
-    repo_root: &Path,
+    repo_root: crate::git::RepositoryRoot<'_>,
     path: Option<&Path>,
 ) -> Result<(Option<PathBuf>, Vec<String>), ContextPatchError> {
-    let root = reported_root(repo_root)?;
+    let root = crate::fs::rooted::canonical_label(repo_root)?;
     let scope = path
         .map(|path| guarded_relative_path(&root, path))
         .transpose()?;
@@ -125,7 +140,7 @@ fn status_changes_for_path(
         args.push("--");
         args.push(&scope_string);
     }
-    let output = git_output(&root, &args, "git status")?;
+    let output = git_output(repo_root.git(), &root, &args, "git status")?;
 
     let stdout = String::from_utf8(output.stdout).map_err(|error| {
         ContextPatchError::new(format!("git status output was not valid UTF-8: {error}"))
@@ -134,21 +149,13 @@ fn status_changes_for_path(
     Ok((scope, changes))
 }
 
-/// Resolve the repository root with this crate's long-standing wording.
+/// Run one bounded Git command for status reporting.
 ///
-/// The resolution itself is shared; only the phrasing is local, which is why this is a two-line wrapper
-/// rather than a second implementation.
-fn reported_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
-    crate::git::resolve_repo_root(repo_root).map_err(|error| {
-        ContextPatchError::new(format!(
-            "failed to resolve repository root {}: {error}",
-            repo_root.display()
-        ))
-    })
-}
-
-fn git_output(
-    root: &Path,
+/// Takes the working directory and the display root separately: the first is authority, the second is only
+/// the name a failure message should carry.
+fn git_output<'a>(
+    cwd: impl Into<crate::process::runner::CommandCwd<'a>>,
+    display_root: &Path,
     args: &[&str],
     label: &str,
 ) -> Result<BoundedProcessOutput, ContextPatchError> {
@@ -156,7 +163,7 @@ fn git_output(
         .iter()
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
-    let output = run_bounded_command(root, "git", &args, GIT_SUBPROCESS_TIMEOUT, label)?;
+    let output = run_bounded_command(cwd, "git", &args, GIT_SUBPROCESS_TIMEOUT, label)?;
 
     if output.timed_out {
         return Err(ContextPatchError::new(format!(
@@ -172,7 +179,7 @@ fn git_output(
     if !output.success() {
         return Err(ContextPatchError::new(format!(
             "{label} failed for {}: {}",
-            root.display(),
+            display_root.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }

@@ -94,25 +94,51 @@ use serde_json::{json, Value};
 use crate::tools;
 use crate::tools::common::*;
 use crate::tools::git::support::resolved_repo_root;
+use contextpatch_core::fs::rooted::canonical_label;
+use contextpatch_core::git::RepositoryRoot;
 
-pub(crate) fn call_read_range(
-    repo_root: &Path,
+/// Address a core refusal to the calling tool.
+fn refused(tool_name: &str, error: contextpatch_core::error::ContextPatchError) -> String {
+    format!("{tool_name} refused: {error}")
+}
+
+/// The canonical path label for the boundaries that are still keyed by name.
+///
+/// Locks, receipts, and scratch identity are derived from a path and remain so. This resolves a configured
+/// root once and returns an anchored selection's logical path untouched, so a selection is never reopened.
+fn label(root: RepositoryRoot<'_>, tool_name: &str) -> Result<PathBuf, String> {
+    canonical_label(root).map_err(|error| refused(tool_name, error))
+}
+
+pub(crate) fn call_read_range<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let path = required_string(arguments, "path")?;
     let start_line = required_usize(arguments, "start_line")?;
     let end_line = required_usize(arguments, "end_line")?;
 
-    read_range_in_root(repo_root, Path::new(path), start_line, end_line)
-        .map_err(|error| format!("read_range refused: {error}"))
+    read_range_in_root(
+        repository_root.into(),
+        Path::new(path),
+        start_line,
+        end_line,
+    )
+    .map_err(|error| format!("read_range refused: {error}"))
 }
 
-pub(crate) fn call_read_write_receipts(
-    repo_root: &Path,
+pub(crate) fn call_read_write_receipts<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     use contextpatch_core::fs::receipt::{self, DEFAULT_RECENT_LIMIT};
 
+    // The receipt journal is a deferred boundary and stays keyed by path.
+    let repo_root = label(
+        repository_root.into(),
+        tools::read_write_receipts::NAME,
+    )?;
+    let repo_root = repo_root.as_path();
     let interrupted_only = optional_bool(arguments, "interrupted_only")?.unwrap_or(false);
     let limit = optional_u64(arguments, "limit")?
         .map(|value| {
@@ -148,20 +174,20 @@ pub(crate) fn call_read_write_receipts(
     .map_err(|error| format!("read_write_receipts refused: {error}"))
 }
 
-pub(crate) fn call_diff_preview(
-    repo_root: &Path,
+pub(crate) fn call_diff_preview<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let path = required_string(arguments, "path")?;
     let old = required_string(arguments, "old")?;
     let new = required_string(arguments, "new")?;
 
-    preview_exact_replacement_in_root(repo_root, Path::new(path), old, new)
+    preview_exact_replacement_in_root(repository_root.into(), Path::new(path), old, new)
         .map_err(|error| format!("diff_preview refused: {error}"))
 }
 
-pub(crate) fn call_replace_exact(
-    repo_root: &Path,
+pub(crate) fn call_replace_exact<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let path = required_string(arguments, "path")?;
@@ -169,11 +195,24 @@ pub(crate) fn call_replace_exact(
     let new = required_string(arguments, "new")?;
     let expected_sha256 = optional_string(arguments, "expected_sha256")?;
 
-    let summary =
-        crate::tools::journal::recorded(repo_root, tools::replace_exact::NAME, path, || {
-            replace_exact_in_root_with_sha256(repo_root, Path::new(path), old, new, expected_sha256)
-                .map_err(|error| format!("replace_exact refused: {error}"))
-        })?;
+    let authority = repository_root.into();
+    // The receipt journal is keyed by path; the replacement itself goes through the authority.
+    let journal_root = label(authority, tools::replace_exact::NAME)?;
+    let summary = crate::tools::journal::recorded(
+        &journal_root,
+        tools::replace_exact::NAME,
+        path,
+        || {
+            replace_exact_in_root_with_sha256(
+                authority,
+                Path::new(path),
+                old,
+                new,
+                expected_sha256,
+            )
+            .map_err(|error| format!("replace_exact refused: {error}"))
+        },
+    )?;
 
     Ok(format!(
         "replaced bytes {}..{} in {} ({} bytes written); sha256={}",
@@ -185,22 +224,24 @@ pub(crate) fn call_replace_exact(
     ))
 }
 
-pub(crate) fn call_status_guard(
-    repo_root: &Path,
+pub(crate) fn call_status_guard<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
+    // Status confinement and Git execution both derive from the root, so the projection happens inside.
+    let root = repository_root.into();
     match optional_string(arguments, "path")? {
-        Some(path) => status_summary_for_path(repo_root, Some(Path::new(path))),
-        None => status_summary(repo_root),
+        Some(path) => status_summary_for_path(root, Some(Path::new(path))),
+        None => status_summary(root),
     }
     .map_err(|error| format!("status_guard refused: {error}"))
 }
 
-pub(crate) fn call_file_info(
-    repo_root: &Path,
+pub(crate) fn call_file_info<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    let root = resolved_repo_root(repo_root, tools::file_info::NAME)?;
+    let root = repository_root.into();
     let path = optional_string(arguments, "path")?;
     let has_paths = arguments.contains_key("paths");
     let paths = if has_paths {
@@ -221,7 +262,7 @@ pub(crate) fn call_file_info(
     }
 
     if let Some(path) = path {
-        let mut value = file_info_value(&root, path)?;
+        let mut value = file_info_value(root, path)?;
         value
             .as_object_mut()
             .expect("file_info values are objects")
@@ -248,7 +289,7 @@ pub(crate) fn call_file_info(
         if !seen.insert(path) {
             return Err(format!("file_info refused: duplicate path `{path}`"));
         }
-        entries.push(file_info_value(&root, path)?);
+        entries.push(file_info_value(root, path)?);
     }
     serde_json::to_string_pretty(&json!({
         "tool": tools::file_info::NAME,
@@ -258,7 +299,7 @@ pub(crate) fn call_file_info(
     .map_err(|error| format!("file_info refused: {error}"))
 }
 
-fn file_info_value(root: &Path, path: &str) -> Result<Value, String> {
+fn file_info_value(root: RepositoryRoot<'_>, path: &str) -> Result<Value, String> {
     let normalized = normalize_repo_relative_path(tools::file_info::NAME, path)?;
     let inspection = match inspect_path_in_root(root, Path::new(&normalized))
         .map_err(|error| format!("file_info refused: failed to inspect `{normalized}`: {error}"))?
@@ -312,8 +353,8 @@ fn file_info_value(root: &Path, path: &str) -> Result<Value, String> {
     }))
 }
 
-pub(crate) fn call_set_file_executable(
-    repo_root: &Path,
+pub(crate) fn call_set_file_executable<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let path = required_string(arguments, "path")?;
@@ -326,7 +367,7 @@ pub(crate) fn call_set_file_executable(
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
     let confirm = optional_string(arguments, "confirm")?;
     let change = contextpatch_core::fs::executable::set_file_executable_in_root(
-        repo_root,
+        repository_root.into(),
         Path::new(path),
         executable,
         expected_sha256,
@@ -351,8 +392,8 @@ pub(crate) fn call_set_file_executable(
     .map_err(|error| format!("set_file_executable refused: {error}"))
 }
 
-pub(crate) fn call_list_directory(
-    repo_root: &Path,
+pub(crate) fn call_list_directory<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const MAX_ALLOWED_ENTRIES: usize = 2000;
@@ -377,9 +418,8 @@ pub(crate) fn call_list_directory(
             "list_directory refused: max_entries must be between 1 and {MAX_ALLOWED_ENTRIES}"
         ));
     }
-    let root = resolved_repo_root(repo_root, tools::list_directory::NAME)?;
     let listing = list_directory_in_root(
-        &root,
+        repository_root.into(),
         Path::new(path),
         include_hidden,
         recursive,
@@ -423,8 +463,8 @@ pub(crate) fn call_list_directory(
     .map_err(|error| format!("list_directory refused: {error}"))
 }
 
-pub(crate) fn call_read_file_bytes(
-    repo_root: &Path,
+pub(crate) fn call_read_file_bytes<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const MAX_BYTES: usize = 1_048_576;
@@ -441,9 +481,8 @@ pub(crate) fn call_read_file_bytes(
     if encoding != "hex" && encoding != "base64" {
         return Err("read_file_bytes refused: encoding must be `hex` or `base64`".to_string());
     }
-    let root = resolved_repo_root(repo_root, tools::read_file_bytes::NAME)?;
     let normalized = normalize_repo_relative_path(tools::read_file_bytes::NAME, path)?;
-    let file = open_regular_file_in_root(&root, Path::new(&normalized))
+    let file = open_regular_file_in_root(repository_root.into(), Path::new(&normalized))
         .map_err(|error| format!("read_file_bytes refused: {error}"))?;
     let read = file
         .read_range_with_digest(offset, max_bytes)
@@ -469,14 +508,14 @@ pub(crate) fn call_read_file_bytes(
     .map_err(|error| format!("read_file_bytes refused: {error}"))
 }
 
-pub(crate) fn call_write_new_file(
-    repo_root: &Path,
+pub(crate) fn call_write_new_file<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let path = required_string(arguments, "path")?;
     let content = required_string(arguments, "content")?;
 
-    let summary = write_new_file_in_root(repo_root, Path::new(path), content)
+    let summary = write_new_file_in_root(repository_root.into(), Path::new(path), content)
         .map_err(|error| format!("write_new_file refused: {error}"))?;
 
     Ok(format!(
@@ -487,8 +526,8 @@ pub(crate) fn call_write_new_file(
     ))
 }
 
-pub(crate) fn call_write_new_file_base64(
-    repo_root: &Path,
+pub(crate) fn call_write_new_file_base64<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const MAX_DECODED_BYTES: usize = 20 * 1024 * 1024;
@@ -516,7 +555,7 @@ pub(crate) fn call_write_new_file_base64(
         }
     }
 
-    let summary = write_new_file_bytes_in_root(repo_root, Path::new(path), &bytes)
+    let summary = write_new_file_bytes_in_root(repository_root.into(), Path::new(path), &bytes)
         .map_err(|error| format!("write_new_file_base64 refused: {error}"))?;
 
     Ok(format!(
@@ -527,8 +566,8 @@ pub(crate) fn call_write_new_file_base64(
     ))
 }
 
-pub(crate) fn call_write_existing_file_exact_hash(
-    repo_root: &Path,
+pub(crate) fn call_write_existing_file_exact_hash<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "write exact hash";
@@ -547,10 +586,12 @@ pub(crate) fn call_write_existing_file_exact_hash(
         ));
     }
 
-    let root = resolved_repo_root(repo_root, tools::write_existing_file_exact_hash::NAME)?;
+    let authority = repository_root.into();
+    // Locks and receipts are keyed by path; access goes through the authority.
+    let root = label(authority, tools::write_existing_file_exact_hash::NAME)?;
     let normalized =
         normalize_repo_relative_path(tools::write_existing_file_exact_hash::NAME, path)?;
-    let file = open_regular_file_in_root(&root, Path::new(&normalized))
+    let file = open_regular_file_in_root(authority, Path::new(&normalized))
         .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
     let current = file
         .read_all()
@@ -578,11 +619,11 @@ pub(crate) fn call_write_existing_file_exact_hash(
     }
 
     crate::tools::journal::recorded(
-        repo_root,
+        &root,
         tools::write_existing_file_exact_hash::NAME,
         &normalized,
         || {
-            let file = open_regular_file_in_root(&root, Path::new(&normalized))
+            let file = open_regular_file_in_root(authority, Path::new(&normalized))
                 .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
             let target = file.target_path();
             let _mutation_lock =
@@ -678,8 +719,8 @@ pub(crate) fn call_artifact_write_base64(
     )
 }
 
-pub(crate) fn call_bulk_write_new_files_base64(
-    repo_root: &Path,
+pub(crate) fn call_bulk_write_new_files_base64<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const MAX_FILES: usize = 500;
@@ -699,7 +740,10 @@ pub(crate) fn call_bulk_write_new_files_base64(
         ));
     }
     let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
-    let root = resolved_repo_root(repo_root, tools::bulk_write_new_files_base64::NAME)?;
+    let root = label(
+        repository_root.into(),
+        tools::bulk_write_new_files_base64::NAME,
+    )?;
 
     let mut decoded_entries = Vec::with_capacity(entries.len());
     let mut seen_paths = BTreeSet::new();
@@ -919,8 +963,8 @@ fn inspect_exact_artifact_file(
 /// Every entry is validated before the first write. Application is not a cross-file transaction: each
 /// file is revalidated and atomically replaced under its target lock, and a later failure can leave an
 /// applied prefix. Each attempt is journalled separately for recovery through `read_write_receipts`.
-pub(crate) fn call_bulk_replace_exact(
-    repo_root: &Path,
+pub(crate) fn call_bulk_replace_exact<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     struct ParsedEntry {
@@ -931,6 +975,9 @@ pub(crate) fn call_bulk_replace_exact(
     }
 
     let tool_name = tools::bulk_replace_exact::NAME;
+    let authority = repository_root.into();
+    // Receipts are keyed by path; planning and applying go through the authority.
+    let journal_root = label(authority, tool_name)?;
     let entries = arguments
         .get("entries")
         .and_then(Value::as_array)
@@ -986,7 +1033,7 @@ pub(crate) fn call_bulk_replace_exact(
         )
         .collect();
     let planned = match contextpatch_core::replace::exact::plan_bulk_replace_exact_in_root(
-        repo_root,
+        authority,
         &core_entries,
     ) {
         Ok(planned) => planned,
@@ -1003,7 +1050,7 @@ pub(crate) fn call_bulk_replace_exact(
             let mut refusal =
                 format!("{tool_name} refused during validation: {error}; no file was changed");
             for auxiliary in
-                crate::tools::journal::record_refused_batch(repo_root, tool_name, &targets)
+                crate::tools::journal::record_refused_batch(&journal_root, tool_name, &targets)
             {
                 refusal.push_str("; ");
                 refusal.push_str(&auxiliary);
@@ -1019,7 +1066,7 @@ pub(crate) fn call_bulk_replace_exact(
         .map(|plan| plan.relative_path().to_string_lossy().to_string())
         .collect::<Vec<_>>();
     let mut receipt_batch =
-        crate::tools::journal::begin_file_batch(repo_root, tool_name, &receipt_paths).map_err(
+        crate::tools::journal::begin_file_batch(&journal_root, tool_name, &receipt_paths).map_err(
             |error| format!("{error}; receipt capacity was not reserved, so no file was changed"),
         )?;
 
@@ -1028,11 +1075,11 @@ pub(crate) fn call_bulk_replace_exact(
         let path = plan.relative_path().to_string_lossy().to_string();
         let result = crate::tools::journal::recorded_in_batch(
             &mut receipt_batch,
-            repo_root,
+            &journal_root,
             tool_name,
             &path,
             || {
-                contextpatch_core::replace::exact::apply_planned_replacement(repo_root, plan)
+                contextpatch_core::replace::exact::apply_planned_replacement(authority, plan)
                     .map_err(|error| format!("{tool_name} refused for `{path}`: {error}"))
             },
         );
@@ -1167,14 +1214,14 @@ fn base64_encode(bytes: &[u8]) -> String {
     output
 }
 
-pub(crate) fn call_create_directory(
-    repo_root: &Path,
+pub(crate) fn call_create_directory<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let path = required_string(arguments, "path")?;
     let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
 
-    let summary = create_directory_in_root(repo_root, Path::new(path), parents)
+    let summary = create_directory_in_root(repository_root.into(), Path::new(path), parents)
         .map_err(|error| format!("create_directory refused: {error}"))?;
 
     Ok(format!(

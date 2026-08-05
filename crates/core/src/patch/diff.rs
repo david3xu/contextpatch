@@ -15,8 +15,8 @@ pub fn preview_exact_replacement(
     preview_exact_replacement_in_root(&repo_root, path, old, new)
 }
 
-pub fn preview_exact_replacement_in_root(
-    repo_root: &Path,
+pub fn preview_exact_replacement_in_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     path: &Path,
     old: &str,
     new: &str,
@@ -25,7 +25,7 @@ pub fn preview_exact_replacement_in_root(
         return Err(ContextPatchError::new("old text must not be empty"));
     }
 
-    let target = open_regular_file_in_root(repo_root, path)?;
+    let target = open_regular_file_in_root(repo_root.into(), path)?;
     let target_path = target.target_path();
     let current = String::from_utf8(target.read_all()?).map_err(|error| {
         ContextPatchError::new(format!("failed to read {}: {error}", target_path.display()))
