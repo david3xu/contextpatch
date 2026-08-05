@@ -9,5 +9,6 @@ pub mod mutation_lock;
 pub mod path;
 pub mod read_range;
 pub mod receipt;
+pub mod rooted;
 pub mod scratch;
 pub mod write_new_file;
