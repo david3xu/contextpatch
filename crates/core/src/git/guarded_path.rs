@@ -3,7 +3,7 @@ use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::ContextPatchError;
-use crate::process::runner::{run_bounded_command, BoundedProcessOutput};
+use crate::process::runner::{run_bounded_command, BoundedProcessOutput, CommandCwd};
 use crate::process::GIT_SUBPROCESS_TIMEOUT;
 
 /// Canonicalize a repository root, asserting nothing about worktrees.
@@ -32,6 +32,24 @@ pub fn resolve_repo_root(repo_root: &Path) -> std::io::Result<PathBuf> {
 /// operator never configured. Path-taking actions have their own confinement and use the weaker
 /// resolution.
 pub fn exact_worktree_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+    worktree_root(repo_root, None)
+}
+
+/// The same check, with `rev-parse` running in an already-open directory rather than a named one.
+///
+/// Used while a workspace selection still holds its descriptor, so the worktree this confirms is the
+/// worktree that was validated rather than whatever the name resolves to by the time the check runs.
+pub fn exact_worktree_root_in(
+    repo_root: &Path,
+    cwd: CommandCwd<'_>,
+) -> Result<PathBuf, ContextPatchError> {
+    worktree_root(repo_root, Some(cwd))
+}
+
+fn worktree_root(
+    repo_root: &Path,
+    anchored_cwd: Option<CommandCwd<'_>>,
+) -> Result<PathBuf, ContextPatchError> {
     let root = resolve_repo_root(repo_root).map_err(|error| {
         ContextPatchError::new(format!(
             "failed to resolve repository root {}: {error}",
@@ -45,7 +63,8 @@ pub fn exact_worktree_root(repo_root: &Path) -> Result<PathBuf, ContextPatchErro
         )));
     }
 
-    let output = git_output(&root, &["rev-parse", "--show-toplevel"], "resolve Git root")?;
+    let cwd = anchored_cwd.unwrap_or(CommandCwd::Path(&root));
+    let output = git_output(cwd, &["rev-parse", "--show-toplevel"], "resolve Git root")?;
     let git_root = std::str::from_utf8(&output.stdout)
         .map_err(|error| ContextPatchError::new(format!("Git root is not UTF-8: {error}")))?
         .trim();
@@ -336,12 +355,12 @@ fn ensure_no_symlink_components(
     Ok(())
 }
 
-fn git_output(
-    root: &Path,
+fn git_output<'a>(
+    cwd: impl Into<CommandCwd<'a>>,
     args: &[&str],
     label: &str,
 ) -> Result<BoundedProcessOutput, ContextPatchError> {
-    let output = git_output_allow_failure(root, args, label)?;
+    let output = git_output_allow_failure(cwd, args, label)?;
     if !output.success() {
         return Err(ContextPatchError::new(format!(
             "{label} failed: {}",
@@ -351,8 +370,8 @@ fn git_output(
     Ok(output)
 }
 
-fn git_output_allow_failure(
-    root: &Path,
+fn git_output_allow_failure<'a>(
+    cwd: impl Into<CommandCwd<'a>>,
     args: &[&str],
     label: &str,
 ) -> Result<BoundedProcessOutput, ContextPatchError> {
@@ -360,7 +379,7 @@ fn git_output_allow_failure(
         .iter()
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
-    let output = run_bounded_command(root, "git", &args, GIT_SUBPROCESS_TIMEOUT, label)?;
+    let output = run_bounded_command(cwd, "git", &args, GIT_SUBPROCESS_TIMEOUT, label)?;
     if output.timed_out {
         return Err(ContextPatchError::new(format!(
             "{label} timed out after {} seconds; the Git process was terminated",

@@ -73,15 +73,107 @@ pub(crate) fn run_no_shell_command(
 /// The caller owns command policy. This function supplies execution mechanics only: no shell is
 /// involved, Git paging is disabled, output pipes are drained concurrently, and the child is
 /// killed when the timeout expires.
-pub fn run_bounded_command(
-    cwd: &Path,
+/// Where a guarded command runs.
+///
+/// Most callers only have a path. A selected repository has a validated directory descriptor, and passing
+/// that instead means the child changes into the directory that was actually checked rather than
+/// re-resolving a name that may have been replaced since. The logical path is still carried, but only for
+/// messages and receipts.
+#[derive(Clone, Copy, Debug)]
+pub enum CommandCwd<'a> {
+    /// Resolve the working directory by name at spawn time.
+    Path(&'a Path),
+    /// Change into the directory this descriptor names, whatever it is now called.
+    #[cfg(unix)]
+    Anchored {
+        directory: &'a std::fs::File,
+        logical_path: &'a Path,
+    },
+}
+
+impl<'a> From<&'a Path> for CommandCwd<'a> {
+    fn from(path: &'a Path) -> Self {
+        Self::Path(path)
+    }
+}
+
+impl<'a> From<&'a std::path::PathBuf> for CommandCwd<'a> {
+    fn from(path: &'a std::path::PathBuf) -> Self {
+        Self::Path(path.as_path())
+    }
+}
+
+impl<'a> CommandCwd<'a> {
+    /// The path to name in messages and receipts.
+    ///
+    /// Never used to establish the working directory when a descriptor is present, which is the whole
+    /// point of the distinction.
+    pub fn logical_path(&self) -> &'a Path {
+        match self {
+            Self::Path(path) => path,
+            #[cfg(unix)]
+            Self::Anchored { logical_path, .. } => logical_path,
+        }
+    }
+
+    /// Clone the retained descriptor so the runner owns one for the duration of the spawn.
+    ///
+    /// `try_clone` duplicates with close-on-exec set, so the copy does not survive into the executed
+    /// program either.
+    fn clone_anchor(&self) -> Result<Option<std::fs::File>, ContextPatchError> {
+        match self {
+            Self::Path(_) => Ok(None),
+            #[cfg(unix)]
+            Self::Anchored {
+                directory,
+                logical_path,
+            } => directory.try_clone().map(Some).map_err(|error| {
+                ContextPatchError::new(format!(
+                    "failed to retain the anchored working directory for {}: {error}",
+                    logical_path.display()
+                ))
+            }),
+        }
+    }
+}
+
+/// Make the child change into an already-open directory instead of resolving a path.
+///
+/// The hook runs between `fork` and `exec`, where only async-signal-safe work is permitted. It calls
+/// `fchdir` and reads `errno`; it allocates nothing, takes no lock, logs nothing, and captures only a raw
+/// descriptor.
+#[cfg(unix)]
+fn anchor_command_to_directory(command: &mut Command, directory: &std::fs::File) {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+
+    let directory = directory.as_raw_fd();
+    // SAFETY: see the doc comment. The closure performs one `fchdir` and returns the resulting errno,
+    // which is the minimum needed to anchor the working directory and is async-signal-safe.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fchdir(directory) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+}
+
+/// Non-Unix never produces an anchored working directory, so there is nothing to anchor.
+#[cfg(not(unix))]
+fn anchor_command_to_directory(_command: &mut Command, _directory: &std::fs::File) {}
+
+pub fn run_bounded_command<'a>(
+    cwd: impl Into<CommandCwd<'a>>,
     program: &str,
     args: &[String],
     timeout: Duration,
     operation_label: &str,
 ) -> Result<BoundedProcessOutput, ContextPatchError> {
     run_bounded_command_with_wait(
-        cwd,
+        cwd.into(),
         program,
         args,
         timeout,
@@ -91,7 +183,7 @@ pub fn run_bounded_command(
 }
 
 fn run_bounded_command_with_wait(
-    cwd: &Path,
+    cwd: CommandCwd<'_>,
     program: &str,
     args: &[String],
     timeout: Duration,
@@ -100,13 +192,23 @@ fn run_bounded_command_with_wait(
         &mut std::process::Child,
     ) -> std::io::Result<Option<std::process::ExitStatus>>,
 ) -> Result<BoundedProcessOutput, ContextPatchError> {
+    // Cloned before the spawn so the descriptor the child changes into is owned here and outlives it.
+    let anchored_directory = cwd.clone_anchor()?;
+    // Shadowed to the logical path, which is what every message and receipt below already expects.
+    let cwd = cwd.logical_path();
+
     let resolved_program = resolve_program(program);
     let mut command = Command::new(
         resolved_program
             .as_deref()
             .unwrap_or_else(|| Path::new(program)),
     );
-    command.current_dir(cwd);
+    match anchored_directory.as_ref() {
+        Some(directory) => anchor_command_to_directory(&mut command, directory),
+        None => {
+            command.current_dir(cwd);
+        }
+    }
     if program == "git" {
         command.arg("--no-pager");
     }
@@ -821,7 +923,7 @@ mod tests {
         let child_id = Cell::new(None);
         let started = Instant::now();
         let result = run_bounded_command_with_wait(
-            std::env::current_dir().unwrap().as_path(),
+            super::CommandCwd::Path(std::env::current_dir().unwrap().as_path()),
             "sh",
             &["-c".to_string(), "sleep 30".to_string()],
             Duration::from_secs(5),

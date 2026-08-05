@@ -3,8 +3,9 @@ use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::ContextPatchError;
+use crate::process::runner::CommandCwd;
 
-use super::guarded_path::exact_worktree_root;
+use super::guarded_path::exact_worktree_root_in;
 
 /// A workspace selection, anchored to the directory descriptor it was validated through.
 ///
@@ -30,6 +31,18 @@ impl SelectedRepository {
     /// The normalized selector this came from.
     pub fn relative(&self) -> &str {
         &self.relative
+    }
+
+    /// A working directory anchored to the retained descriptor.
+    ///
+    /// Handing this to the guarded runner makes the child change into the directory that was validated,
+    /// rather than resolving a name that may since have been replaced.
+    #[cfg(unix)]
+    pub fn command_cwd(&self) -> CommandCwd<'_> {
+        CommandCwd::Anchored {
+            directory: &self.directory,
+            logical_path: &self.path,
+        }
     }
 
     /// Prove the resolved path still names the directory the descriptor is anchored to.
@@ -107,9 +120,16 @@ pub fn select_workspace_repository(
         )));
     }
 
+    let path = exact_worktree_root_in(
+        &resolved,
+        CommandCwd::Anchored {
+            directory: &directory,
+            logical_path: &resolved,
+        },
+    )?;
     let selected = SelectedRepository {
         relative,
-        path: exact_worktree_root(&resolved)?,
+        path,
         directory,
     };
     // The path was produced by canonicalizing, and the descriptor by walking. Requiring them to agree
@@ -312,6 +332,107 @@ mod tests {
     ) -> Result<PathBuf, ContextPatchError> {
         select_workspace_repository(workspace, repository)
             .map(|selected| selected.path().to_path_buf())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchored_git_queries_and_mutations_reach_the_selected_original_inode() {
+        // The end-to-end proof that the descriptor is doing work. Two distinct repositories, one selected;
+        // then the selected directory is swapped for the other at the same name. Anchored Git execution
+        // must keep operating on the original inode, and the replacement must be left completely alone.
+        use crate::git::state;
+
+        let workspace = temp_root("anchored_execution_swap");
+        let target = workspace.join("target");
+        let decoy = workspace.join("decoy");
+        init_git_repo(&target);
+        init_git_repo(&decoy);
+        commit_marker(&target, "original\n");
+        commit_marker(&decoy, "replacement\n");
+
+        let selected = select_workspace_repository(&workspace, "target").unwrap();
+        let original_head = state::stdout(selected.command_cwd(), &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let decoy_head_before = state::stdout(&decoy, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_ne!(
+            original_head, decoy_head_before,
+            "the two repositories must be distinguishable"
+        );
+
+        // Swap `target` for `decoy` behind the selection's back.
+        let moved_aside = workspace.join("moved-aside");
+        fs::rename(&target, &moved_aside).unwrap();
+        fs::rename(&decoy, &target).unwrap();
+
+        // A query still reads the original repository, not the one now sitting at that name.
+        let head_after_swap = state::stdout(selected.command_cwd(), &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(head_after_swap, original_head);
+        assert_eq!(
+            state::stdout(selected.command_cwd(), &["show", "-s", "--format=%s", "HEAD"])
+                .unwrap()
+                .trim(),
+            "original"
+        );
+
+        // And a mutation lands in the original repository too.
+        state::success(
+            selected.command_cwd(),
+            &[
+                "commit".to_string(),
+                "--allow-empty".to_string(),
+                "--quiet".to_string(),
+                "-m".to_string(),
+                "anchored".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(state::rev_count(&moved_aside, "HEAD").unwrap(), 2);
+        assert_eq!(
+            state::stdout(&moved_aside, &["show", "-s", "--format=%s", "HEAD"])
+                .unwrap()
+                .trim(),
+            "anchored"
+        );
+
+        // The replacement is untouched: same head, same subject, still one commit.
+        assert_eq!(state::rev_count(&target, "HEAD").unwrap(), 1);
+        assert_eq!(
+            state::stdout(&target, &["rev-parse", "HEAD"]).unwrap().trim(),
+            decoy_head_before
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("marker.txt")).unwrap(),
+            "replacement\n"
+        );
+    }
+
+    #[cfg(unix)]
+    fn commit_marker(root: &Path, contents: &str) {
+        fs::write(root.join("marker.txt"), contents).unwrap();
+        run_git(root, &["add", "."]);
+        run_git(
+            root,
+            &["commit", "--quiet", "-m", contents.trim()],
+        );
+    }
+
+    #[cfg(unix)]
+    fn run_git(root: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
     }
 
     #[cfg(unix)]
