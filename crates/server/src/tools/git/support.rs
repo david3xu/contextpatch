@@ -333,6 +333,45 @@ pub(crate) fn git_output(root: &Path, args: &[&str]) -> Result<BoundedProcessOut
     git_output_for_tool(tools::git_commit_exact::NAME, root, args)
 }
 
+/// How strictly an action must verify its configured repository root.
+///
+/// The distinction is blast radius, not caution. An action that names the paths it touches is already
+/// bounded by path normalization, which rejects parent components, absolute paths, and pathspec
+/// metacharacters, so resolving the root is enough and a descendant root stays useful. An action that
+/// names no paths has nothing else bounding it: run under a subdirectory root, branch switching and
+/// pushing act on the *enclosing* repository and reach files the operator never configured.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorktreeRootPolicy {
+    /// The root must be exactly a Git worktree root. Required for repository- and remote-scoped
+    /// mutations that take no paths.
+    ExactWorktreeRoot,
+    /// The root only has to resolve. Correct for read-only reporting and for path-confined mutations.
+    ResolvedPath,
+}
+
+/// Resolve the configured repository root under one action's policy.
+///
+/// The strict branch delegates to `core`, so there is exactly one implementation of the worktree-root
+/// check rather than a second copy grown here.
+pub(crate) fn repo_root_for_policy(
+    repo_root: &Path,
+    tool_name: &str,
+    policy: WorktreeRootPolicy,
+) -> Result<PathBuf, String> {
+    match policy {
+        WorktreeRootPolicy::ResolvedPath => canonical_repo_root(repo_root, tool_name),
+        WorktreeRootPolicy::ExactWorktreeRoot => {
+            contextpatch_core::git::exact_worktree_root(repo_root).map_err(|error| {
+                format!(
+                    "{tool_name} refused: this action mutates repository or remote state without \
+                     naming any paths, so it requires the configured repo root to be exactly a Git \
+                     worktree root; {error}"
+                )
+            })
+        }
+    }
+}
+
 pub(crate) fn canonical_repo_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
     repo_root
         .canonicalize()

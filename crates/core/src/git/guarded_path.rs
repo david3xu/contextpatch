@@ -6,7 +6,18 @@ use crate::error::ContextPatchError;
 use crate::process::runner::{run_bounded_command, BoundedProcessOutput};
 use crate::process::GIT_SUBPROCESS_TIMEOUT;
 
-pub(crate) fn canonical_repo_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+/// Resolve a repository root that must be *exactly* a Git worktree root.
+///
+/// Canonicalizes, requires a directory, and requires `rev-parse --show-toplevel` to equal the result.
+/// It deliberately does not walk upward: a subdirectory of a worktree is refused rather than silently
+/// promoted to its enclosing repository.
+///
+/// This is the policy an action needs whenever its blast radius is the repository or its remote rather
+/// than a set of caller-named paths. Branch switching and pushing take no paths, so nothing else bounds
+/// them; run under a subdirectory root they would act on the enclosing repository, touching files the
+/// operator never configured. Path-taking actions have their own confinement and use the weaker
+/// resolution.
+pub fn exact_worktree_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
     let root = repo_root.canonicalize().map_err(|error| {
         ContextPatchError::new(format!(
             "failed to resolve repository root {}: {error}",

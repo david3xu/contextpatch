@@ -114,7 +114,11 @@ pub(crate) fn call_delete_untracked_exact(
         ));
     }
 
-    let root = canonical_repo_root(repo_root, tools::delete_untracked_exact::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::delete_untracked_exact::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let normalized_paths = normalize_git_paths(tools::delete_untracked_exact::NAME, &root, &paths)?;
     let requested_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
     if requested_paths.len() != normalized_paths.len() {
@@ -216,7 +220,11 @@ pub(crate) fn call_delete_generated_prefix(
         ));
     }
 
-    let root = canonical_repo_root(repo_root, tools::delete_generated_prefix::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::delete_generated_prefix::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let normalized_prefixes =
         normalize_git_prefixes(tools::delete_generated_prefix::NAME, &root, &prefixes)?;
     let prefix_set: BTreeSet<String> = normalized_prefixes.iter().cloned().collect();

@@ -1388,6 +1388,7 @@ Optional inputs:
 
 Rules:
 
+- The configured repository root must be exactly a Git worktree root. This action names no paths, so nothing else bounds it: under a subdirectory root it would fetch, switch, and reset the *enclosing* repository, touching files the operator never configured. A descendant worktree remains reachable through the wrapper `repository` selector, which resolves to an exact worktree root.
 - The default dry-run must validate the repository, remote, clean-worktree gate, branch names, and required-file path syntax without fetching, updating refs, creating/resetting branches, or switching the worktree.
 - The dry-run response must report the exact `git fetch` and branch command argv that `dry_run: false` would run. Guards that depend on the newly fetched ref remain explicitly deferred until execution.
 - Branch preparation may execute only when `dry_run` is explicitly `false`.
@@ -1439,6 +1440,7 @@ Required inputs:
 
 Rules:
 
+- The configured repository root must be exactly a Git worktree root. This action names no paths, so nothing else bounds it: under a subdirectory root it would push the *enclosing* repository. A descendant worktree remains reachable through the wrapper `repository` selector.
 - The tool must require a clean worktree before pushing.
 - The current branch must exactly match `branch`.
 - The current `HEAD` must match `expected_head`.

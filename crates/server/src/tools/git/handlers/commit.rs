@@ -163,7 +163,11 @@ pub(crate) fn call_git_commit_scoped(
         ));
     }
 
-    let root = canonical_repo_root(repo_root, tools::git_commit_scoped::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_commit_scoped::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let normalized_paths = normalize_git_paths(tools::git_commit_scoped::NAME, &root, &paths)?;
     let requested_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
     if requested_paths.len() != normalized_paths.len() {
@@ -324,7 +328,11 @@ pub(crate) fn call_git_commit_prefix(
         ));
     }
 
-    let root = canonical_repo_root(repo_root, tools::git_commit_prefix::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_commit_prefix::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let normalized_prefixes =
         normalize_git_prefixes(tools::git_commit_prefix::NAME, &root, &prefixes)?;
     let prefix_set: BTreeSet<String> = normalized_prefixes.iter().cloned().collect();
@@ -487,7 +495,11 @@ pub(crate) fn call_git_stage_exact(
         ));
     }
 
-    let root = canonical_repo_root(repo_root, tools::git_stage_exact::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_stage_exact::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let normalized_paths = normalize_git_paths(tools::git_stage_exact::NAME, &root, &paths)?;
     let requested_paths: BTreeSet<String> = normalized_paths.iter().cloned().collect();
     if requested_paths.len() != normalized_paths.len() {
@@ -578,7 +590,11 @@ pub(crate) fn call_git_staged_scope_check(
         );
     }
 
-    let root = canonical_repo_root(repo_root, tools::git_staged_scope_check::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_staged_scope_check::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let normalized_allowed_paths =
         normalize_git_paths(tools::git_staged_scope_check::NAME, &root, &allowed_paths)?;
     let normalized_allowed_prefixes = normalize_git_prefixes(

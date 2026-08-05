@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::error::ContextPatchError;
 use crate::fs::hash::sha256_file;
 use crate::git::guarded_path::{
-    canonical_repo_root, ensure_index_clean, ensure_not_tracked, ensure_path_clean, ensure_tracked,
+    ensure_index_clean, ensure_not_tracked, ensure_path_clean, ensure_tracked, exact_worktree_root,
     move_with_git, path_is_tracked, resolve_absent_file, resolve_existing_regular_file,
 };
 
@@ -33,7 +33,7 @@ pub fn move_tracked(
         )));
     }
 
-    let root = canonical_repo_root(repo_root)?;
+    let root = exact_worktree_root(repo_root)?;
     let (from, source) = resolve_existing_regular_file(&root, from)?;
     let (to, destination) = resolve_absent_file(&root, to)?;
     if from == to {

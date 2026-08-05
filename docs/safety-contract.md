@@ -104,6 +104,18 @@ through a directory descriptor, so a privileged external process that renames th
 the final identity check remains outside the cooperative-writer guarantee. Callers must use current
 hash/state checks when unrelated external programs may mutate the same tree.
 
+Git actions carry an explicit per-action worktree-root policy, because the configured root bounds them
+unequally. An action that names the paths it touches is already confined by path normalization, which
+rejects parent components, absolute paths, and pathspec metacharacters, so it only needs the root to
+resolve and a descendant root stays useful. An action that names no paths has nothing else bounding it:
+branch preparation and pushing act on whatever repository encloses the configured root, so under a
+subdirectory root they would reach files and refs the operator never configured. Those actions therefore
+require the root to be exactly a Git worktree root, verified by resolving it and requiring Git's own
+reported top level to equal it, with no upward walk. The check runs before any fetch, ref update, branch
+switch, or push, so a refusal leaves the enclosing repository untouched. Argument-shape validation may
+precede it, which is harmless because it cannot mutate. Descendant worktrees stay reachable through the
+wrapper `repository` selector, which itself resolves to an exact worktree root.
+
 Every successful file mutation reports the SHA-256 digest of the content it wrote. `replace_exact`,
 `write_new_file`, `write_new_file_base64`, `bulk_replace_exact`, `bulk_write_new_files_base64`, the
 artifact writers, and `write_existing_file_exact_hash` all carry it, so a caller can pass a reported

@@ -344,7 +344,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::git_branch_prepare::NAME,
-                    "description": "Dry-run or prepare and switch to a local branch from one explicit remote base branch with guard checks.",
+                    "description": "Dry-run or prepare and switch to a local branch from one explicit remote base branch with guard checks. Names no paths, so it requires the configured repo root to be exactly a Git worktree root; a subdirectory root is refused rather than acting on the enclosing repository.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -419,7 +419,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::git_push_exact::NAME,
-                    "description": "Push the current branch HEAD to the matching remote branch only after exact hash and divergence checks.",
+                    "description": "Push the current branch HEAD to the matching remote branch only after exact hash and divergence checks. Names no paths, so it requires the configured repo root to be exactly a Git worktree root; a subdirectory root is refused rather than pushing the enclosing repository.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

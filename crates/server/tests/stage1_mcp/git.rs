@@ -346,6 +346,67 @@ fn stage2_git_remote_check_and_push_exact_are_gated() {
 }
 
 #[test]
+fn stage2_unscoped_repository_mutations_require_an_exact_worktree_root() {
+    // git_branch_prepare and git_push_exact name no paths, so nothing else bounds their blast radius.
+    // Run under a subdirectory root they would act on the enclosing repository and reach files the
+    // operator never configured. Both must refuse before doing anything, and neither may leave a trace.
+    let root = git_repo("stage2_unscoped_mutations_need_worktree_root");
+    fs::write(root.join("tracked.txt"), "alpha\n").unwrap();
+    fs::create_dir_all(root.join("nested")).unwrap();
+    fs::write(root.join("nested").join("inner.txt"), "beta\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    let nested = root.join("nested");
+
+    // Sequential dispatch on purpose: concurrent requests contend for the repository mutation lock, and
+    // a lock refusal would mask the policy refusal this test exists to prove.
+    let refused = run_server_sequential(
+        &nested,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_branch_prepare","arguments":{"branch":"feature","base_branch":"main","dry_run":false}}}"#,
+            // A well-formed hash on purpose. Argument-shape validation runs before the root policy,
+            // which is harmless because it cannot mutate, but a malformed value would mask the policy.
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_push_exact","arguments":{"remote":"origin","branch":"main","expected_head":"0000000000000000000000000000000000000000","confirm":"push exact commit"}}}"#,
+        ],
+    );
+
+    for response in refused.iter().take(2) {
+        let text = response_text(response);
+        assert_eq!(response["result"]["isError"], true, "{text}");
+        assert!(
+            text.contains("exactly a Git worktree root"),
+            "the refusal must name the policy it enforced rather than fail incidentally: {text}"
+        );
+    }
+
+    // Nothing reached the enclosing repository.
+    assert!(
+        !root
+            .join(".git")
+            .join("refs")
+            .join("heads")
+            .join("feature")
+            .exists(),
+        "a refused branch preparation must not create a ref"
+    );
+
+    // Read-only reporting still works from a descendant root, because its blast radius is bounded by
+    // something other than the configured root. The policy is per action, not a blanket tightening.
+    let allowed = run_server(
+        &nested,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git_remote_list","arguments":{}}}"#,
+        ],
+    );
+    assert_ne!(
+        allowed[0]["result"]["isError"],
+        true,
+        "{}",
+        response_text(&allowed[0])
+    );
+}
+
+#[test]
 fn stage2_git_push_exact_refuses_remote_ahead() {
     let origin = bare_repo("stage2_git_push_exact_refuses_remote_ahead_origin");
     let root = git_repo("stage2_git_push_exact_refuses_remote_ahead");

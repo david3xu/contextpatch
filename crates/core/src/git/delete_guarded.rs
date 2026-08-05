@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::error::ContextPatchError;
 use crate::fs::hash::{sha256_file, validate_sha256};
 use crate::git::guarded_path::{
-    canonical_repo_root, ensure_path_clean, ensure_tracked, path_has_unstaged_deletion,
+    ensure_path_clean, ensure_tracked, exact_worktree_root, path_has_unstaged_deletion,
     path_is_tracked, resolve_existing_regular_file,
 };
 
@@ -33,7 +33,7 @@ pub fn delete_guarded(
         )));
     }
 
-    let root = canonical_repo_root(repo_root)?;
+    let root = exact_worktree_root(repo_root)?;
     let (path, target) = resolve_existing_regular_file(&root, path)?;
     ensure_tracked(&root, &path, "file")?;
     ensure_path_clean(&root, &path)?;

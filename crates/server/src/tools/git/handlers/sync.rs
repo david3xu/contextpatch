@@ -8,7 +8,11 @@ use crate::tools::common::*;
 use crate::tools::git::support::*;
 
 pub(crate) fn call_git_remote_list(repo_root: &Path) -> Result<String, String> {
-    let root = canonical_repo_root(repo_root, tools::git_remote_list::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_remote_list::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let output = git_stdout_for_tool(tools::git_remote_list::NAME, &root, &["remote", "-v"])?;
     let mut remotes = Vec::new();
     for line in output.lines().filter(|line| !line.trim().is_empty()) {
@@ -40,7 +44,11 @@ pub(crate) fn call_git_remote_check(
 ) -> Result<String, String> {
     let remote = validate_git_remote(optional_string(arguments, "remote")?.unwrap_or("origin"))?;
     let branch = validate_git_branch(required_string(arguments, "branch")?)?;
-    let root = canonical_repo_root(repo_root, tools::git_remote_check::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_remote_check::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     ensure_remote_exists(tools::git_remote_check::NAME, &root, &remote)?;
     let source_status_before = git_status_short(&root)?;
 
@@ -121,7 +129,11 @@ pub(crate) fn call_git_branch_prepare(
         validate_required_file_path_syntax(tools::git_branch_prepare::NAME, required_file)?;
     }
 
-    let root = canonical_repo_root(repo_root, tools::git_branch_prepare::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_branch_prepare::NAME,
+        WorktreeRootPolicy::ExactWorktreeRoot,
+    )?;
     ensure_remote_exists(tools::git_branch_prepare::NAME, &root, &remote)?;
     let status_before = git_status_short(&root)?;
     if !status_before.trim().is_empty() {
@@ -356,7 +368,11 @@ pub(crate) fn call_git_merge_readiness(
     let base_ref = validate_git_ref_expression(required_string(arguments, "base_ref")?)?;
     let target_ref = validate_git_ref_expression(required_string(arguments, "target_ref")?)?;
     let fetch = optional_bool(arguments, "fetch")?.unwrap_or(false);
-    let root = canonical_repo_root(repo_root, tools::git_merge_readiness::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_merge_readiness::NAME,
+        WorktreeRootPolicy::ResolvedPath,
+    )?;
     let source_status_before = git_status_short(&root)?;
 
     let mut fetched_remote = None;
@@ -480,7 +496,11 @@ pub(crate) fn call_git_push_exact(
         ));
     }
 
-    let root = canonical_repo_root(repo_root, tools::git_push_exact::NAME)?;
+    let root = repo_root_for_policy(
+        repo_root,
+        tools::git_push_exact::NAME,
+        WorktreeRootPolicy::ExactWorktreeRoot,
+    )?;
     ensure_remote_exists(tools::git_push_exact::NAME, &root, &remote)?;
     let status = git_status_short(&root)?;
     if !status.trim().is_empty() {

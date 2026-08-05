@@ -157,7 +157,16 @@ duplicate helpers below are that unfinished migration, not a new defect.
 This phase is ordered so that policy is *decided* before it is *moved*, and moved before it is
 *deduplicated*. Consolidating helpers first would bake in whichever semantics happened to survive.
 
-### 3.1 Define per-tool worktree requirements (C12)
+### 3.1 Define per-tool worktree requirements (C12) — complete
+
+Each Git action now declares its policy explicitly, so the classification is auditable rather than
+implied by which helper a handler happened to call. Actions that name paths keep the resolving-only
+policy, because path normalization already bounds them and a descendant root stays useful. Actions that
+name no paths, `git_branch_prepare` and `git_push_exact`, require the configured root to be exactly a
+Git worktree root; the strict check is delegated to `core` so no second implementation was grown.
+
+This does not close C11: the two canonicalize-only helpers that share the name `canonical_repo_root`
+still exist and are removed in 3.3.
 
 Decide explicitly, per tool, whether an exact worktree root is required, and state it in the schema.
 Today the same configured root can be accepted by the status path and refused by the mutation path.
@@ -422,7 +431,7 @@ Phase-specific checks:
 | C09 | Cheap discovery projections are undocumented; meta action unlisted | 2.4 | Complete |
 | C10 | Git policy lives in the server crate against the stated boundary | 3.2 | Open |
 | C11 | Three helpers share one name with two semantics | 3.3 | Open |
-| C12 | Worktree-root requirement is inconsistent across tools | 3.1 | Open |
+| C12 | Worktree-root requirement is inconsistent across tools | 3.1 | Complete |
 | C13 | Workspace selector validates by path, not by descriptor | 3.4 | Open |
 | C14 | Confirmation phrases duplicated between handler and schema | 4.1 | Open |
 | C15 | Capability contract is hand-maintained inline JSON | 4.2 | Open |

@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::ContextPatchError;
 
-use super::guarded_path::canonical_repo_root;
+use super::guarded_path::exact_worktree_root;
 
 /// Resolve one exact Git worktree root beneath a fixed workspace boundary.
 pub fn resolve_workspace_git_root(
@@ -38,7 +38,7 @@ pub fn resolve_workspace_git_root(
         )));
     }
 
-    canonical_repo_root(&resolved)
+    exact_worktree_root(&resolved)
 }
 
 fn normalize_repository_selector(repository: &str) -> Result<String, ContextPatchError> {
