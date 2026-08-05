@@ -270,10 +270,10 @@ mod tests {
 
         let scratch = crate::fs::scratch::scratch_root(&root);
         assert_eq!(
-            fs::read_to_string(scratch.join("result.txt")).unwrap(),
+            fs::read_to_string(scratch.as_ref().unwrap().join("result.txt")).unwrap(),
             "outside repo\n"
         );
-        assert!(output.contains(&scratch.display().to_string()));
+        assert!(output.contains(&scratch.as_ref().unwrap().display().to_string()));
         assert!(!root.join("result.txt").exists());
     }
 

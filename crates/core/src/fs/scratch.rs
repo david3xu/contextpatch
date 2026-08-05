@@ -20,15 +20,10 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use crate::error::ContextPatchError;
 
 /// The token a caller writes inside an argument to mean "the scratch directory for this repository".
 pub const SCRATCH_TOKEN: &str = "{scratch}";
-
-/// Enough digest to make collisions irrelevant while keeping the path readable in logs and errors.
-const DIGEST_PREFIX_LENGTH: usize = 16;
 
 /// Where scratch directories live, independent of any repository.
 #[cfg(not(target_os = "windows"))]
@@ -58,27 +53,30 @@ fn container() -> PathBuf {
 
 /// A stable, repository-specific scratch path. Does not touch the filesystem.
 ///
-/// Derived from the canonical repository path so two instances serving different repositories never
-/// share a directory, and so the same repository resolves to the same directory across restarts.
-pub fn scratch_root(repo_root: &Path) -> PathBuf {
-    let canonical = repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.as_os_str().as_encoded_bytes());
-    let digest = format!("{:x}", hasher.finalize());
-    let leaf = canonical
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "repository".to_string());
-    // Name carries the repository leaf as well as the digest so a human reading a path or an error
-    // can tell at a glance which repository it belongs to.
-    container().join(format!("{leaf}-{}", &digest[..DIGEST_PREFIX_LENGTH]))
+/// Keyed by repository identity rather than by path spelling, so a rename keeps its scratch directory and
+/// two names for one directory never split into two. The label half of the name carries the repository leaf
+/// so a human reading a path or an error can tell at a glance which repository it belongs to; only the
+/// digest distinguishes repositories.
+pub fn scratch_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<PathBuf, ContextPatchError> {
+    let identity = crate::fs::repository_identity::identity_of(repo_root.into())?;
+    Ok(container().join(identity.directory_name()))
+}
+
+/// The scratch path a path-keyed build would have produced.
+///
+/// Kept so receipts written before identity keying stay readable. Never used for new writes.
+pub fn legacy_scratch_root<'a>(repo_root: impl Into<crate::git::RepositoryRoot<'a>>) -> PathBuf {
+    let identity = crate::fs::repository_identity::legacy_path_identity(repo_root.into());
+    container().join(identity.directory_name())
 }
 
 /// The scratch directory for this repository, created if absent.
-pub fn ensure_scratch_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
-    let root = scratch_root(repo_root);
+pub fn ensure_scratch_root<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<PathBuf, ContextPatchError> {
+    let root = scratch_root(repo_root)?;
     fs::create_dir_all(&root).map_err(|error| {
         ContextPatchError::invalid(format!(
             "could not create the scratch directory `{}`: {error}",
@@ -184,8 +182,15 @@ pub fn expand_scratch_tokens(
 ///
 /// Used by the path policy to admit an expanded scratch path while continuing to refuse every other
 /// location outside the repository.
-pub fn is_within_scratch(repo_root: &Path, path: &Path) -> bool {
-    let root = scratch_root(repo_root);
+pub fn is_within_scratch<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+    path: &Path,
+) -> bool {
+    // An unidentifiable repository admits nothing, which is the safe direction: the caller's path stays
+    // subject to the ordinary repository-confinement rules.
+    let Ok(root) = scratch_root(repo_root) else {
+        return false;
+    };
     path == root || path.starts_with(&root)
 }
 
@@ -194,8 +199,10 @@ pub fn is_within_scratch(repo_root: &Path, path: &Path) -> bool {
 /// Offered so a caller can reclaim space deliberately. Never called implicitly: a caller that writes
 /// a scratch file in one call and reads it in the next would be broken by automatic cleanup, and
 /// surprising deletion is worse than accumulated bytes.
-pub fn purge_scratch(repo_root: &Path) -> Result<usize, ContextPatchError> {
-    let root = scratch_root(repo_root);
+pub fn purge_scratch<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<usize, ContextPatchError> {
+    let root = scratch_root(repo_root)?;
     if !root.exists() {
         return Ok(0);
     }
@@ -239,14 +246,14 @@ mod tests {
     #[test]
     fn scratch_root_is_outside_the_repository_and_stable() {
         let root = repo();
-        let first = scratch_root(&root);
-        let second = scratch_root(&root);
+        let first = scratch_root(&root).unwrap();
+        let second = scratch_root(&root).unwrap();
         assert_eq!(
             first, second,
             "the scratch path must be stable across calls"
         );
         assert!(
-            !first.starts_with(root.canonicalize().unwrap_or(root.clone())),
+            !first.starts_with(&root),
             "the scratch path must not live inside the repository"
         );
     }
@@ -308,7 +315,7 @@ mod tests {
     #[test]
     fn membership_recognises_expanded_paths() {
         let root = repo();
-        let scratch = scratch_root(&root);
+        let scratch = scratch_root(&root).unwrap();
         assert!(is_within_scratch(&root, &scratch));
         assert!(is_within_scratch(&root, &scratch.join("run-1/output")));
         assert!(!is_within_scratch(&root, Path::new("/etc/passwd")));

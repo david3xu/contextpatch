@@ -37,7 +37,7 @@ fn lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
 }
 
 fn file_lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
-    let repository_scratch = scratch_root(repo_root);
+    let repository_scratch = scratch_root(repo_root)?;
     let scratch_container = repository_scratch.parent().ok_or_else(|| {
         ContextPatchError::new(format!(
             "could not determine shared lock directory from `{}`",

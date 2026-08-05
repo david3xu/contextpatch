@@ -8,6 +8,7 @@ pub mod hash;
 pub mod mutation_lock;
 pub mod read_range;
 pub mod receipt;
+pub mod repository_identity;
 pub mod rooted;
 pub mod scratch;
 pub mod write_new_file;

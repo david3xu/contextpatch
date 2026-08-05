@@ -106,7 +106,9 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
         "repo_root": root.display().to_string(),
         "scratch": {
             "token": contextpatch_core::fs::scratch::SCRATCH_TOKEN,
-            "root": contextpatch_core::fs::scratch::scratch_root(root).display().to_string(),
+            "root": contextpatch_core::fs::scratch::scratch_root(root)
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
             "note": "Write byproducts here instead of into the repository. The token expands inside \
                      data and output arguments, so `--output-dir={scratch}/run-1` works, and paths \
                      that climb out of it are refused. It cannot be used as the Python script path; \

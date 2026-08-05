@@ -89,7 +89,9 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
 }
 
-pub fn journal_path(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+pub fn journal_path<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<PathBuf, ContextPatchError> {
     Ok(ensure_scratch_root(repo_root)?.join(RECEIPT_FILENAME))
 }
 
@@ -118,7 +120,9 @@ fn append(path: &Path, record: &Value) -> Result<(), ContextPatchError> {
     })
 }
 
-fn lock_file(repo_root: &Path) -> Result<File, ContextPatchError> {
+fn lock_file<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<File, ContextPatchError> {
     let path = ensure_scratch_root(repo_root)?.join(RECEIPT_LOCK_FILENAME);
     OpenOptions::new()
         .create(true)
@@ -150,8 +154,8 @@ fn with_exclusive_lock<T>(
     result
 }
 
-fn with_shared_lock<T>(
-    repo_root: &Path,
+fn with_shared_lock<'a, T>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     work: impl FnOnce() -> Result<T, ContextPatchError>,
 ) -> Result<T, ContextPatchError> {
     let lock = lock_file(repo_root)?;
@@ -564,9 +568,29 @@ fn all_from_path(journal: &Path) -> Result<Vec<Receipt>, ContextPatchError> {
         .collect())
 }
 
-pub fn all(repo_root: &Path) -> Result<Vec<Receipt>, ContextPatchError> {
+/// Every receipt for this repository, including any written before identity keying.
+///
+/// Receipts are evidence a caller reaches for after losing an answer, so a keying change must not make the
+/// previous ones disappear. The identity-keyed journal is read, and a path-keyed journal left over from
+/// before the change is folded in ahead of it so the combined sequence stays oldest-first. Legacy records
+/// are read only; nothing new is written there.
+pub fn all<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+) -> Result<Vec<Receipt>, ContextPatchError> {
+    let repo_root = repo_root.into();
     let journal = journal_path(repo_root)?;
-    with_shared_lock(repo_root, || all_from_path(&journal))
+    let legacy = crate::fs::scratch::legacy_scratch_root(repo_root).join(RECEIPT_FILENAME);
+
+    let current = with_shared_lock(repo_root, || all_from_path(&journal))?;
+    if legacy == journal || !legacy.is_file() {
+        return Ok(current);
+    }
+
+    // A legacy journal is parsed without the lock: nothing writes to it any more, so there is no writer to
+    // exclude, and a failure to read it must not deny access to the current receipts.
+    let mut combined = all_from_path(&legacy).unwrap_or_default();
+    combined.extend(current);
+    Ok(combined)
 }
 
 fn validate_limit(limit: usize) -> Result<(), ContextPatchError> {
@@ -578,7 +602,10 @@ fn validate_limit(limit: usize) -> Result<(), ContextPatchError> {
     Ok(())
 }
 
-pub fn recent(repo_root: &Path, limit: usize) -> Result<Vec<Receipt>, ContextPatchError> {
+pub fn recent<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+    limit: usize,
+) -> Result<Vec<Receipt>, ContextPatchError> {
     validate_limit(limit)?;
     let mut receipts = all(repo_root)?;
     receipts.reverse();
@@ -586,7 +613,10 @@ pub fn recent(repo_root: &Path, limit: usize) -> Result<Vec<Receipt>, ContextPat
     Ok(receipts)
 }
 
-pub fn unsettled(repo_root: &Path, limit: usize) -> Result<Vec<Receipt>, ContextPatchError> {
+pub fn unsettled<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
+    limit: usize,
+) -> Result<Vec<Receipt>, ContextPatchError> {
     validate_limit(limit)?;
     Ok(all(repo_root)?
         .into_iter()
