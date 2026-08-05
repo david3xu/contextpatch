@@ -313,6 +313,206 @@ fn project_surface_selects_exact_child_repositories_within_a_workspace() {
     assert_text(&responses[10], "sample.txt");
 }
 
+/// Whether a ref resolves in a repository, without asserting success.
+///
+/// Test-local rather than reusing the asserting `git` helper, because absence is the expected answer half
+/// the time here.
+fn has_ref(root: &std::path::Path, reference: &str) -> bool {
+    std::process::Command::new("git")
+        .current_dir(root)
+        .args(["rev-parse", "--verify", "--quiet", reference])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+/// Whether an object actually exists in a repository.
+///
+/// `rev-parse --verify` is not enough: given a full hash it reports success on format alone, without
+/// requiring the object to be present.
+fn has_object(root: &std::path::Path, object: &str) -> bool {
+    std::process::Command::new("git")
+        .current_dir(root)
+        .args(["cat-file", "-e", object])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+/// Resolve a ref to its commit, for comparing repositories against each other.
+fn commit_at(root: &std::path::Path, reference: &str) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["rev-parse", reference])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "rev-parse {reference} failed");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// An empty bare repository standing in for a remote.
+///
+/// Bare on purpose: pushing to a non-bare repository's checked-out branch is refused by Git itself, which
+/// would mask the guard under test.
+fn bare_remote(parent: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let bare = parent.join(name);
+    fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--quiet", "--bare", "--initial-branch=main"]);
+    bare
+}
+
+/// A repository with its own distinct remote and its own distinct commit.
+fn repo_with_remote(
+    workspace: &std::path::Path,
+    remotes: &std::path::Path,
+    name: &str,
+    marker: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let bare = bare_remote(remotes, &format!("{name}.git"));
+    let repo = workspace.join(name);
+    fs::create_dir_all(&repo).unwrap();
+    init_git_repo(&repo);
+    fs::write(repo.join("marker.txt"), marker).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", marker.trim()]);
+    git(&repo, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(&repo, &["push", "--quiet", "origin", "main"]);
+    (repo, bare)
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_fetches_only_the_selected_repository_refs() {
+    // Deterministic rather than timing based: no swap is needed to show which repository a fetch reached,
+    // because neither repository has a remote-tracking ref until one is fetched. After the call exactly
+    // one of them does.
+    let workspace = temp_root("project_surface_fetch_isolation");
+    let remotes = temp_root("project_surface_fetch_isolation_remotes");
+    let (target, _target_remote) = repo_with_remote(&workspace, &remotes, "target", "target\n");
+    let (decoy, _decoy_remote) = repo_with_remote(&workspace, &remotes, "decoy", "decoy\n");
+
+    let tracking = "refs/remotes/origin/main";
+    // The initial push already created tracking refs, so both are cleared to make the fetch's effect
+    // observable rather than pre-satisfied.
+    git(&target, &["update-ref", "-d", tracking]);
+    git(&decoy, &["update-ref", "-d", tracking]);
+    assert!(!has_ref(&target, tracking), "no tracking ref before fetching");
+    assert!(!has_ref(&decoy, tracking), "no tracking ref before fetching");
+    let decoy_head_before = commit_at(&decoy, "HEAD");
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+    let checked = server.exchange(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_remote_check","arguments":{"branch":"main"}}}}"#,
+    );
+
+    assert_ne!(
+        checked["result"]["isError"],
+        true,
+        "{}",
+        response_text(&checked)
+    );
+    let report: Value = serde_json::from_str(response_text(&checked)).unwrap();
+    assert_eq!(report["head"], commit_at(&target, "HEAD"));
+
+    // Only the selected repository advanced.
+    assert!(has_ref(&target, tracking), "the selected repository fetched");
+    assert!(
+        !has_ref(&decoy, tracking),
+        "the sibling repository must not have been fetched into"
+    );
+    assert_eq!(commit_at(&decoy, "HEAD"), decoy_head_before);
+
+    // Replacing the logical path does not let a later call reach through a stale selection: the swapped
+    // directory answers as itself, and the repository moved aside is left alone.
+    let moved_aside = workspace.join("moved-aside");
+    fs::rename(&target, &moved_aside).unwrap();
+    fs::rename(&decoy, &target).unwrap();
+    let after_swap = server.exchange(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_remote_check","arguments":{"branch":"main"}}}}"#,
+    );
+    let swapped: Value = serde_json::from_str(response_text(&after_swap)).unwrap();
+    assert_eq!(swapped["head"], decoy_head_before, "the swapped directory answers as itself");
+    assert_eq!(commit_at(&moved_aside, "HEAD"), report["head"].as_str().unwrap());
+
+    server.finish();
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_pushes_only_to_the_selected_repository_remote() {
+    // Two repositories, two bare remotes, two distinct commits. A push through the selected repository
+    // must reach that repository's remote and nothing else.
+    let workspace = temp_root("project_surface_push_isolation");
+    let remotes = temp_root("project_surface_push_isolation_remotes");
+    let (target, target_remote) = repo_with_remote(&workspace, &remotes, "target", "target\n");
+    let (decoy, decoy_remote) = repo_with_remote(&workspace, &remotes, "decoy", "decoy\n");
+
+    // A commit the target's remote has not seen yet.
+    fs::write(target.join("marker.txt"), "target advanced\n").unwrap();
+    git(&target, &["add", "."]);
+    git(&target, &["commit", "--quiet", "-m", "advance target"]);
+    let pushed_commit = commit_at(&target, "HEAD");
+    let target_remote_before = commit_at(&target_remote, "refs/heads/main");
+    let decoy_remote_before = commit_at(&decoy_remote, "refs/heads/main");
+    let decoy_head_before = commit_at(&decoy, "HEAD");
+    assert_ne!(pushed_commit, target_remote_before);
+
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "project_execute",
+            "arguments": {
+                "repository": "target",
+                "action": "git_push_exact",
+                "arguments": {
+                    "remote": "origin",
+                    "branch": "main",
+                    "expected_head": pushed_commit,
+                    "confirm": "push exact commit"
+                }
+            }
+        }
+    })
+    .to_string();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+    let pushed = server.exchange(&request);
+    server.finish();
+
+    assert_ne!(
+        pushed["result"]["isError"],
+        true,
+        "{}",
+        response_text(&pushed)
+    );
+    let report: Value = serde_json::from_str(response_text(&pushed)).unwrap();
+    assert_eq!(report["pushed"], true);
+    assert_eq!(report["commit"], pushed_commit);
+
+    // The selected repository's remote received exactly that commit.
+    assert_eq!(
+        commit_at(&target_remote, "refs/heads/main"),
+        pushed_commit,
+        "the selected repository's remote received the push"
+    );
+
+    // The sibling remote and the sibling repository are untouched.
+    assert_eq!(
+        commit_at(&decoy_remote, "refs/heads/main"),
+        decoy_remote_before,
+        "the sibling remote must not have received the push"
+    );
+    assert!(
+        !has_object(&decoy_remote, &pushed_commit),
+        "the pushed commit must not exist in the sibling remote at all"
+    );
+    assert_eq!(commit_at(&decoy, "HEAD"), decoy_head_before);
+}
+
 #[test]
 fn project_surface_refuses_unsafe_or_inexact_repository_selectors() {
     use std::os::unix::fs::symlink;
