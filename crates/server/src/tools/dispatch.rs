@@ -258,7 +258,6 @@ fn call_tool(
 ) -> Result<String, String> {
     // Tools not yet migrated still take a path, and receive the logical path until each one moves to the
     // typed target. That is what lets this proceed one tool at a time instead of all at once.
-    let repo_root = repository.logical_path();
     match name {
         tools::capability_manifest::NAME => {
             tools::capability::call_capability_manifest(repository.root(), arguments, surface)
@@ -339,10 +338,10 @@ fn call_tool(
             tools::process::call_task_image_python_run(repository.root(), arguments)
         }
         tools::harbor_run_start::NAME => {
-            tools::process::call_harbor_run_start(repo_root, arguments)
+            tools::process::call_harbor_run_start(repository.root(), arguments)
         }
         tools::validation_profile_run::NAME => {
-            tools::process::call_validation_profile_run(repo_root, arguments)
+            tools::process::call_validation_profile_run(repository.root(), arguments)
         }
         tools::setup_profile_run::NAME => {
             tools::setup::call_setup_profile_run(repository.root(), arguments)

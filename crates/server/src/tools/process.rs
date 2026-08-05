@@ -400,8 +400,8 @@ pub(crate) fn call_task_image_python_run<'a>(
     .map_err(|error| format!("task_image_python_run refused: {error}"))
 }
 
-pub(crate) fn call_harbor_run_start(
-    repo_root: &Path,
+pub(crate) fn call_harbor_run_start<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let project = optional_string(arguments, "project")?.unwrap_or("task");
@@ -431,10 +431,8 @@ pub(crate) fn call_harbor_run_start(
         );
     }
     let project = normalize_repo_relative_path(crate::tools::harbor_run_start::NAME, project)?;
-    let root = repo_root
-        .canonicalize()
-        .map_err(|error| format!("harbor_run_start refused: {error}"))?;
-    validate_harbor_project_directory(&root, Path::new(&project))?;
+    let root = repository_root.into();
+    validate_harbor_project_directory(root, Path::new(&project))?;
     let command_args = vec![
         "run".to_string(),
         "-p".to_string(),
@@ -447,14 +445,18 @@ pub(crate) fn call_harbor_run_start(
         shell_display_arg(&project),
         shell_display_arg(agent)
     );
-    let worker_root = root;
+    // Retained before scheduling and carried for the job's lifetime, so the directory Harbor runs in and the
+    // directory its evidence is read from are both the one that was validated here, however long the run
+    // takes and whatever happens to the name meanwhile.
+    let worker_authority = contextpatch_core::git::OwnedRepositoryRoot::retain(root)
+        .map_err(|error| format!("harbor_run_start refused: {error}"))?;
     let log_id = start_background_job(
         crate::tools::harbor_run_start::NAME,
         "harbor",
         &initial_log,
         move |worker_log_id| {
             let output = run_guarded_command(
-                &worker_root,
+                worker_authority.borrow(),
                 None,
                 "harbor",
                 &command_args,
@@ -477,7 +479,7 @@ pub(crate) fn call_harbor_run_start(
                 "log_id": worker_log_id,
                 "status": status,
                 "command_output": output,
-                "harbor": crate::tools::harbor::structured_evidence(&worker_root, &output)
+                "harbor": crate::tools::harbor::structured_evidence(worker_authority.borrow(), &output)
             });
             Ok(BackgroundJobOutcome {
                 status,
@@ -502,8 +504,18 @@ pub(crate) fn call_harbor_run_start(
     .map_err(|error| format!("harbor_run_start refused: {error}"))
 }
 
-fn validate_harbor_project_directory(root: &Path, project: &Path) -> Result<(), String> {
-    let mut current = root.to_path_buf();
+/// Confirm the Harbor project directory through the repository's own authority.
+///
+/// The component walk survives because it enforces something the rooted primitives do not: a component may
+/// not begin with `-`, since Harbor receives the project as an argv string and a leading dash would be read
+/// as an option. What no longer happens is joining each component onto a pathname and inspecting it, then
+/// canonicalizing the leaf to test containment: the rooted lookup refuses a symlink at any component and
+/// cannot leave the repository, so containment is structural.
+fn validate_harbor_project_directory(
+    root: contextpatch_core::git::RepositoryRoot<'_>,
+    project: &Path,
+) -> Result<(), String> {
+    let mut parts = Vec::new();
     for component in project.components() {
         let Component::Normal(component) = component else {
             return Err(
@@ -511,39 +523,31 @@ fn validate_harbor_project_directory(root: &Path, project: &Path) -> Result<(), 
                     .to_string(),
             );
         };
-        if component.to_string_lossy().starts_with('-') {
+        let component = component.to_string_lossy();
+        if component.starts_with('-') {
             return Err(
                 "harbor_run_start refused: project path components must not start with `-`"
                     .to_string(),
             );
         }
-        current.push(component);
-        let metadata = fs::symlink_metadata(&current).map_err(|error| {
-            format!(
-                "harbor_run_start refused: failed to inspect project `{}`: {error}",
-                project.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "harbor_run_start refused: project `{}` must not contain symlink components",
-                project.display()
-            ));
-        }
+        parts.push(component.into_owned());
     }
-    let resolved = current.canonicalize().map_err(|error| {
-        format!(
-            "harbor_run_start refused: failed to resolve project `{}`: {error}",
+    let relative = parts.join("/");
+    match contextpatch_core::fs::rooted::entry_kind(root, &relative) {
+        Ok(Some(contextpatch_core::fs::rooted::RootedEntryKind::Directory)) => Ok(()),
+        Ok(Some(contextpatch_core::fs::rooted::RootedEntryKind::Symlink)) => Err(format!(
+            "harbor_run_start refused: project `{}` must not contain symlink components",
             project.display()
-        )
-    })?;
-    if !resolved.starts_with(root) || !resolved.is_dir() {
-        return Err(format!(
+        )),
+        Ok(_) => Err(format!(
             "harbor_run_start refused: project `{}` is not an existing repository directory",
             project.display()
-        ));
+        )),
+        Err(error) => Err(format!(
+            "harbor_run_start refused: failed to inspect project `{}`: {error}",
+            project.display()
+        )),
     }
-    Ok(())
 }
 
 fn task_image_command_value(
@@ -764,8 +768,8 @@ pub(crate) fn call_artifact_python_run<'a>(
     Ok(format!("log_id: {log_id}\n{text}"))
 }
 
-pub(crate) fn call_validation_profile_run(
-    repo_root: &Path,
+pub(crate) fn call_validation_profile_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let profile = required_string(arguments, "profile")?;
@@ -779,7 +783,12 @@ pub(crate) fn call_validation_profile_run(
     }
     validation_profile(profile)?;
 
-    let worker_root = repo_root.to_path_buf();
+    // Retained before the job is scheduled, so the worker carries the repository's authority rather than its
+    // name. Capturing a path here would mean the directory each command runs in is resolved after this call
+    // has already returned, which is the longest possible gap between validating a repository and acting on
+    // it.
+    let worker_authority = contextpatch_core::git::OwnedRepositoryRoot::retain(repository_root.into())
+        .map_err(|error| format!("validation_profile_run refused: {error}"))?;
     let worker_arguments = arguments.clone();
     let profile_name = profile.to_string();
     let initial_log = json!({
@@ -793,7 +802,7 @@ pub(crate) fn call_validation_profile_run(
         "validation",
         &initial_log,
         move |_| {
-            let log = run_validation_profile_sync(&worker_root, &worker_arguments)?;
+            let log = run_validation_profile_sync(worker_authority.borrow(), &worker_arguments)?;
             let failed = extract_field(&log, "failed") == Some("true");
             let timed_out = log.contains("| timed_out: true |");
             Ok(BackgroundJobOutcome {
@@ -825,7 +834,7 @@ pub(crate) fn call_validation_profile_run(
 }
 
 fn run_validation_profile_sync(
-    repo_root: &Path,
+    root: contextpatch_core::git::RepositoryRoot<'_>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let profile = required_string(arguments, "profile")?;
@@ -850,7 +859,7 @@ fn run_validation_profile_sync(
         let timeout_secs = timeout_override.or(command.timeout_secs);
         let effective_timeout_secs = timeout_secs.unwrap_or(120);
         let output = run_guarded_command(
-            repo_root,
+            root,
             command.cwd.map(Path::new),
             command.program,
             &command
@@ -878,7 +887,7 @@ fn run_validation_profile_sync(
             let agent = harbor_agent(&command.args).unwrap_or("unknown");
             // Prefer the result file Harbor writes over its rendered table: the table splits the word
             // "reward" and its value across two lines, which no single-line scan can read.
-            let rewards = crate::tools::harbor::rewards_for_run(repo_root, &output)
+            let rewards = crate::tools::harbor::rewards_for_run(root, &output)
                 .or_else(|| crate::tools::harbor::rewards_from_output(&output));
             match (rewards, agent) {
                 (Some(values), "oracle") => harbor_oracle_rewards.extend(values),

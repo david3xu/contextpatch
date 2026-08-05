@@ -15,6 +15,7 @@
 
 use std::path::Path;
 
+use crate::error::ContextPatchError;
 use crate::git::repository::GitRepository;
 
 /// What establishes which directory a root refers to.
@@ -119,6 +120,111 @@ impl<'a> RepositoryRoot<'a> {
 impl<'a> From<&'a Path> for RepositoryRoot<'a> {
     fn from(path: &'a Path) -> Self {
         Self::from_path(path)
+    }
+}
+
+/// A repository authority that owns what identifies it.
+///
+/// [`RepositoryRoot`] borrows its descriptor, which is right for a call that completes before returning. An
+/// asynchronous job cannot use it: the closure outlives the call that scheduled it, so a borrow cannot be
+/// held and the only thing left to capture would be the name. Capturing the name is exactly the substitution
+/// this phase removes, and it is worse in a worker than anywhere else, because the gap between validating a
+/// directory and acting on it is now as long as the job takes to run.
+///
+/// So this owns the descriptor instead. A worker captures one of these, borrows it back into a
+/// `RepositoryRoot` when it needs to act, and never resolves a name at all.
+///
+/// A path-backed root retains nothing, deliberately. A configured root *is* reached by name, its pathname is
+/// the authority rather than a stand-in for one, and pretending otherwise would change configured-root
+/// behaviour rather than preserve it.
+pub struct OwnedRepositoryRoot {
+    logical_path: std::path::PathBuf,
+    /// Present only for a root that carried descriptor authority.
+    #[cfg(unix)]
+    directory: Option<std::fs::File>,
+}
+
+impl std::fmt::Debug for OwnedRepositoryRoot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OwnedRepositoryRoot")
+            .field("logical_path", &self.logical_path)
+            .field("anchored", &self.is_anchored())
+            .finish()
+    }
+}
+
+impl OwnedRepositoryRoot {
+    /// Retain whatever authority a root carries, so it can outlive the call that had it.
+    pub fn retain(root: RepositoryRoot<'_>) -> Result<Self, ContextPatchError> {
+        #[cfg(unix)]
+        {
+            let directory = if root.is_anchored() {
+                // The root's own authority is asked for a duplicate of itself, so no name is resolved.
+                Some(crate::fs::rooted::open_directory(root, "")?)
+            } else {
+                None
+            };
+            Ok(Self {
+                logical_path: root.logical_path().to_path_buf(),
+                directory,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {
+                logical_path: root.logical_path().to_path_buf(),
+            })
+        }
+    }
+
+    /// Borrow this authority back for one operation.
+    pub fn borrow(&self) -> RepositoryRoot<'_> {
+        #[cfg(unix)]
+        if let Some(directory) = &self.directory {
+            return RepositoryRoot::anchored(&self.logical_path, directory);
+        }
+        RepositoryRoot::from_path(&self.logical_path)
+    }
+
+    /// Whether this authority is descriptor-backed.
+    pub fn is_anchored(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.directory.is_some()
+        }
+        #[cfg(not(unix))]
+        false
+    }
+
+    /// The name to use in messages and receipts, never to reach the repository.
+    pub fn logical_path(&self) -> &Path {
+        &self.logical_path
+    }
+}
+
+impl Clone for OwnedRepositoryRoot {
+    /// Duplicate the retained descriptor rather than the name.
+    ///
+    /// A failed duplication degrades to the name rather than panicking, and `is_anchored` reports that
+    /// honestly, so a caller can tell the difference instead of being told a clone is anchored when it is not.
+    fn clone(&self) -> Self {
+        #[cfg(unix)]
+        {
+            Self {
+                logical_path: self.logical_path.clone(),
+                directory: self
+                    .directory
+                    .as_ref()
+                    .and_then(|directory| directory.try_clone().ok()),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Self {
+                logical_path: self.logical_path.clone(),
+            }
+        }
     }
 }
 

@@ -20,6 +20,7 @@ use std::path::{Component, Path, PathBuf};
 use contextpatch_core::fs::guarded_file::{
     inspect_path_in_root, open_regular_file_in_root, GuardedPathKind,
 };
+use contextpatch_core::git::RepositoryRoot;
 use contextpatch_core::process::guarded_command::redact_and_truncate_output;
 use serde_json::Value;
 
@@ -85,9 +86,13 @@ pub(crate) fn rewards_from_result_json(document: &Value) -> Vec<f64> {
 /// `None` means neither source produced a reward, which is the only case the caller should report as
 /// missing. An empty vector is treated as no answer for the same reason: a result file that parses but
 /// records nothing is not evidence of a reward.
-pub(crate) fn rewards_for_run(repo_root: &Path, output: &str) -> Option<Vec<f64>> {
-    let (root, _, result_relative, _) = resolve_result_file(repo_root, output).ok()?;
-    let (text, truncated, _) = read_bounded_text(&root, &result_relative, 2_000_000).ok()?;
+pub(crate) fn rewards_for_run<'a>(
+    root: impl Into<RepositoryRoot<'a>>,
+    output: &str,
+) -> Option<Vec<f64>> {
+    let root = root.into();
+    let (_, result_relative, _) = resolve_result_file(output).ok()?;
+    let (text, truncated, _) = read_bounded_text(root, &result_relative, 2_000_000).ok()?;
     if truncated {
         return None;
     }
@@ -104,8 +109,9 @@ pub(crate) fn rewards_for_run(repo_root: &Path, output: &str) -> Option<Vec<f64>
 ///
 /// The job result is the authority for trial names. Result and trial paths must use Harbor's exact
 /// `jobs/<job>/...` layout, remain beneath that job directory, and contain no symlink components.
-pub(crate) fn structured_evidence(repo_root: &Path, output: &str) -> Value {
-    structured_evidence_result(repo_root, output).unwrap_or_else(|error| {
+pub(crate) fn structured_evidence<'a>(root: impl Into<RepositoryRoot<'a>>, output: &str) -> Value {
+    let root = root.into();
+    structured_evidence_result(root, output).unwrap_or_else(|error| {
         serde_json::json!({
             "available": false,
             "reported_result_path": result_path(output),
@@ -114,10 +120,9 @@ pub(crate) fn structured_evidence(repo_root: &Path, output: &str) -> Value {
     })
 }
 
-fn structured_evidence_result(repo_root: &Path, output: &str) -> Result<Value, String> {
-    let (root, job_relative, result_relative, result_display) =
-        resolve_result_file(repo_root, output)?;
-    let (text, result_truncated, _) = read_bounded_text(&root, &result_relative, 2_000_000)?;
+fn structured_evidence_result(root: RepositoryRoot<'_>, output: &str) -> Result<Value, String> {
+    let (job_relative, result_relative, result_display) = resolve_result_file(output)?;
+    let (text, result_truncated, _) = read_bounded_text(root, &result_relative, 2_000_000)?;
     if result_truncated {
         return Err("Harbor job result exceeds the 2000000-byte evidence limit".to_string());
     }
@@ -173,7 +178,7 @@ fn structured_evidence_result(repo_root: &Path, output: &str) -> Result<Value, S
         }
 
         let trial_relative = job_relative.join(trial_relative);
-        match require_directory_in_root(&root, &trial_relative) {
+        match require_directory_in_root(root, &trial_relative) {
             Ok(()) => {}
             Err(error) => {
                 trial.insert("trial_path".to_string(), Value::Null);
@@ -187,7 +192,7 @@ fn structured_evidence_result(repo_root: &Path, output: &str) -> Result<Value, S
             Value::String(display_relative(&trial_relative)),
         );
 
-        match read_bounded_text(&root, &trial_relative.join("result.json"), 1_000_000) {
+        match read_bounded_text(root, &trial_relative.join("result.json"), 1_000_000) {
             Ok((trial_text, false, trial_result)) => {
                 trial.insert(
                     "result_path".to_string(),
@@ -255,7 +260,7 @@ fn structured_evidence_result(repo_root: &Path, output: &str) -> Result<Value, S
             "verifier".to_string(),
             serde_json::json!({
                 "reward": text_artifact(
-                    &root,
+                    root,
                     &trial_relative,
                     Path::new("verifier/reward.txt"),
                     4096,
@@ -263,7 +268,7 @@ fn structured_evidence_result(repo_root: &Path, output: &str) -> Result<Value, S
                     true
                 ),
                 "stdout": text_artifact(
-                    &root,
+                    root,
                     &trial_relative,
                     Path::new("verifier/test-stdout.txt"),
                     200_000,
@@ -334,10 +339,12 @@ fn enforce_structured_evidence_limit(
     }
 }
 
-fn resolve_result_file(
-    repo_root: &Path,
-    output: &str,
-) -> Result<(PathBuf, PathBuf, PathBuf, String), String> {
+/// Validate the reported result path against Harbor's exact layout.
+///
+/// Pure validation: it decides which repository-relative names are acceptable and touches no filesystem, so
+/// there is no root to resolve here. Reaching the files is the caller's job, through the repository's own
+/// authority.
+fn resolve_result_file(output: &str) -> Result<(PathBuf, PathBuf, String), String> {
     let reported = result_path(output)
         .ok_or_else(|| "Harbor output did not report a result path".to_string())?;
     if reported.contains('\\') {
@@ -357,19 +364,13 @@ fn resolve_result_file(
         );
     }
 
-    let root = repo_root
-        .canonicalize()
-        .map_err(|error| format!("failed to resolve repository root: {error}"))?;
-    if !root.is_dir() {
-        return Err("repository root is not a directory".to_string());
-    }
     let job_relative = relative
         .parent()
         .ok_or_else(|| "Harbor result has no job directory".to_string())?
         .to_path_buf();
     let result_relative = relative.to_path_buf();
     let display = display_relative(&result_relative);
-    Ok((root, job_relative, result_relative, display))
+    Ok((job_relative, result_relative, display))
 }
 
 #[derive(Default)]
@@ -423,7 +424,7 @@ fn trial_summaries(document: &Value) -> BTreeMap<String, TrialSummary> {
     trials
 }
 
-fn require_directory_in_root(root: &Path, relative: &Path) -> Result<(), String> {
+fn require_directory_in_root(root: RepositoryRoot<'_>, relative: &Path) -> Result<(), String> {
     let inspection = inspect_path_in_root(root, relative).map_err(|error| {
         format!(
             "failed to inspect evidence path `{}`: {error}",
@@ -444,7 +445,7 @@ fn require_directory_in_root(root: &Path, relative: &Path) -> Result<(), String>
 }
 
 fn read_bounded_text(
-    base: &Path,
+    base: RepositoryRoot<'_>,
     relative: &Path,
     max_bytes: u64,
 ) -> Result<(String, bool, PathBuf), String> {
@@ -468,7 +469,7 @@ fn read_bounded_text(
 }
 
 fn text_artifact(
-    repo_root: &Path,
+    root: RepositoryRoot<'_>,
     trial_dir: &Path,
     relative: &Path,
     max_file_bytes: u64,
@@ -477,7 +478,7 @@ fn text_artifact(
 ) -> Value {
     let artifact_relative = trial_dir.join(relative);
     let expected_path = display_relative(&artifact_relative);
-    match read_bounded_text(repo_root, &artifact_relative, max_file_bytes) {
+    match read_bounded_text(root, &artifact_relative, max_file_bytes) {
         Ok((value, file_truncated, opened_relative)) => {
             let (text, output_truncated) = redact_and_truncate_output(&value, max_output_chars);
             serde_json::json!({

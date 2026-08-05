@@ -18,4 +18,4 @@ pub use workspace::{select_workspace_repository, SelectedRepository};
 /// they differ solely in what they demand beyond resolution.
 pub use guarded_path::{exact_worktree_root, exact_worktree_root_in, resolve_repo_root};
 pub use repository::GitRepository;
-pub use root::RepositoryRoot;
+pub use root::{OwnedRepositoryRoot, RepositoryRoot};
