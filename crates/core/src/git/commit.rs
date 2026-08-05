@@ -15,9 +15,9 @@
 //! Refusals carry the detail only; the adapter supplies the prefix.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use crate::error::ContextPatchError;
+use crate::git::repository::GitRepository;
 use crate::git::restore::format_path_set;
 use crate::git::state;
 use crate::git::validate;
@@ -81,8 +81,10 @@ fn ensure_no_duplicates(
     )))
 }
 
-fn dirty_or_refuse(root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
-    let dirty_paths = state::status_paths(root)?;
+fn dirty_or_refuse<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let dirty_paths = state::status_paths(repository)?;
     if dirty_paths.is_empty() {
         return Err(ContextPatchError::new("repository has no dirty paths"));
     }
@@ -90,8 +92,11 @@ fn dirty_or_refuse(root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
 }
 
 /// Require a clean index so a partial commit cannot sweep in unrelated staged work.
-fn ensure_index_clean(root: &Path, reason: &str) -> Result<(), ContextPatchError> {
-    let staged_before = state::cached_paths(root)?;
+fn ensure_index_clean<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    reason: &str,
+) -> Result<(), ContextPatchError> {
+    let staged_before = state::cached_paths(repository)?;
     if !staged_before.is_empty() {
         return Err(ContextPatchError::new(format!(
             "{reason}\nstaged_paths:\n{}",
@@ -153,14 +158,14 @@ pub struct StagedScopeReport {
 ///
 /// An inexact list means the caller is working from a stale view of the repository, so it is refused
 /// rather than narrowed. The refusal reports all four sets so the caller can see which way it is stale.
-pub fn plan_commit_exact(
-    root: &Path,
+pub fn plan_commit_exact<'a>(
+    repository: impl Into<GitRepository<'a>>,
     paths: &[String],
 ) -> Result<ExactCommitPlan, ContextPatchError> {
     let expected_paths: BTreeSet<String> = paths.iter().cloned().collect();
     ensure_no_duplicates(paths, &expected_paths, "paths")?;
 
-    let dirty_paths = dirty_or_refuse(root)?;
+    let dirty_paths = dirty_or_refuse(repository)?;
     if dirty_paths != expected_paths {
         // The `expected_paths` and `actual_dirty_paths` labels are swapped relative to the sets they
         // print. That is preserved deliberately: this migration is behavior-neutral, and correcting the
@@ -181,14 +186,15 @@ pub fn plan_commit_exact(
 }
 
 /// Plan a commit of a named subset of the dirty set.
-pub fn plan_commit_scoped(
-    root: &Path,
+pub fn plan_commit_scoped<'a>(
+    repository: impl Into<GitRepository<'a>>,
     paths: &[String],
 ) -> Result<PartialCommitPlan, ContextPatchError> {
+    let repository = repository.into();
     let requested_paths: BTreeSet<String> = paths.iter().cloned().collect();
     ensure_no_duplicates(paths, &requested_paths, "paths")?;
 
-    let dirty_paths = dirty_or_refuse(root)?;
+    let dirty_paths = dirty_or_refuse(repository)?;
     let not_dirty = requested_paths
         .difference(&dirty_paths)
         .cloned()
@@ -201,7 +207,7 @@ pub fn plan_commit_scoped(
     }
 
     ensure_index_clean(
-        root,
+        repository,
         "index must be clean before scoped commit so unrelated staged work is not included",
     )?;
 
@@ -218,14 +224,15 @@ pub fn plan_commit_scoped(
 }
 
 /// Plan a commit of every dirty path under the named prefixes.
-pub fn plan_commit_prefix(
-    root: &Path,
+pub fn plan_commit_prefix<'a>(
+    repository: impl Into<GitRepository<'a>>,
     prefixes: &[String],
 ) -> Result<PartialCommitPlan, ContextPatchError> {
+    let repository = repository.into();
     let prefix_set: BTreeSet<String> = prefixes.iter().cloned().collect();
     ensure_no_duplicates(prefixes, &prefix_set, "prefixes")?;
 
-    let dirty_paths = dirty_or_refuse(root)?;
+    let dirty_paths = dirty_or_refuse(repository)?;
     let requested_paths = validate::paths_under_prefixes(&dirty_paths, prefixes);
     if requested_paths.is_empty() {
         return Err(ContextPatchError::new(format!(
@@ -241,7 +248,7 @@ pub fn plan_commit_prefix(
     }
 
     ensure_index_clean(
-        root,
+        repository,
         "index must be clean before prefix commit so unrelated staged work is not included",
     )?;
 
@@ -258,11 +265,15 @@ pub fn plan_commit_prefix(
 }
 
 /// Plan staging a named subset without committing.
-pub fn plan_stage_exact(root: &Path, paths: &[String]) -> Result<StagePlan, ContextPatchError> {
+pub fn plan_stage_exact<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    paths: &[String],
+) -> Result<StagePlan, ContextPatchError> {
+    let repository = repository.into();
     let requested_paths: BTreeSet<String> = paths.iter().cloned().collect();
     ensure_no_duplicates(paths, &requested_paths, "paths")?;
 
-    let dirty_paths = dirty_or_refuse(root)?;
+    let dirty_paths = dirty_or_refuse(repository)?;
     let not_dirty = requested_paths
         .difference(&dirty_paths)
         .cloned()
@@ -274,7 +285,7 @@ pub fn plan_stage_exact(root: &Path, paths: &[String]) -> Result<StagePlan, Cont
         )));
     }
 
-    ensure_index_clean(root, "index must be clean before staging exact paths")?;
+    ensure_index_clean(repository, "index must be clean before staging exact paths")?;
     Ok(StagePlan {
         paths: paths.to_vec(),
         requested_paths,
@@ -285,19 +296,23 @@ pub fn plan_stage_exact(root: &Path, paths: &[String]) -> Result<StagePlan, Cont
 ///
 /// Separate from verification because a failure here is a plain refusal while a failed verification is
 /// addressed as happening *after* staging.
-pub fn stage_paths(root: &Path, paths: &[String]) -> Result<(), ContextPatchError> {
-    state::success(root, &stage_argv(paths))
+pub fn stage_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    paths: &[String],
+) -> Result<(), ContextPatchError> {
+    state::success(repository, &stage_argv(paths))
 }
 
 /// Verify the index holds exactly the exact-commit set, and that the dirty set has not moved.
 ///
 /// Both checks matter: the first catches `git add` picking up something else, the second catches the tree
 /// changing between planning and staging, which would commit content the caller never reviewed.
-pub fn verify_exact_staged(
-    root: &Path,
+pub fn verify_exact_staged<'a>(
+    repository: impl Into<GitRepository<'a>>,
     plan: &ExactCommitPlan,
 ) -> Result<(), ContextPatchError> {
-    let staged_paths = state::cached_paths(root)?;
+    let repository = repository.into();
+    let staged_paths = state::cached_paths(repository)?;
     if staged_paths != plan.expected_paths {
         return Err(ContextPatchError::new(format!(
             "staged paths differ from requested exact set\nrequested:\n{}\nstaged:\n{}",
@@ -305,7 +320,7 @@ pub fn verify_exact_staged(
             format_path_set(&staged_paths)
         )));
     }
-    let dirty_paths_after_stage = state::status_paths(root)?;
+    let dirty_paths_after_stage = state::status_paths(repository)?;
     if dirty_paths_after_stage != plan.expected_paths {
         return Err(ContextPatchError::new(format!(
             "dirty paths changed before commit\nrequested:\n{}\ncurrent_dirty_paths:\n{}",
@@ -317,11 +332,11 @@ pub fn verify_exact_staged(
 }
 
 /// Verify the index holds exactly the scoped set.
-pub fn verify_scoped_staged(
-    root: &Path,
+pub fn verify_scoped_staged<'a>(
+    repository: impl Into<GitRepository<'a>>,
     plan: &PartialCommitPlan,
 ) -> Result<(), ContextPatchError> {
-    let staged_paths = state::cached_paths(root)?;
+    let staged_paths = state::cached_paths(repository)?;
     if staged_paths != plan.requested_paths {
         return Err(ContextPatchError::new(format!(
             "staged paths differ from requested scoped set\nrequested:\n{}\nstaged:\n{}",
@@ -333,11 +348,11 @@ pub fn verify_scoped_staged(
 }
 
 /// Verify the index holds exactly the prefix-expanded set.
-pub fn verify_prefix_staged(
-    root: &Path,
+pub fn verify_prefix_staged<'a>(
+    repository: impl Into<GitRepository<'a>>,
     plan: &PartialCommitPlan,
 ) -> Result<(), ContextPatchError> {
-    let staged_paths = state::cached_paths(root)?;
+    let staged_paths = state::cached_paths(repository)?;
     if staged_paths != plan.requested_paths {
         return Err(ContextPatchError::new(format!(
             "staged paths differ from expanded prefix set\nexpanded:\n{}\nstaged:\n{}",
@@ -349,8 +364,11 @@ pub fn verify_prefix_staged(
 }
 
 /// Verify the index holds exactly the staged set a staging request planned.
-pub fn verify_stage_exact(root: &Path, plan: &StagePlan) -> Result<(), ContextPatchError> {
-    let staged_paths = state::cached_paths(root)?;
+pub fn verify_stage_exact<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    plan: &StagePlan,
+) -> Result<(), ContextPatchError> {
+    let staged_paths = state::cached_paths(repository)?;
     if staged_paths != plan.requested_paths {
         return Err(ContextPatchError::new(format!(
             "staged paths differ from requested exact set\nrequested:\n{}\nstaged:\n{}",
@@ -362,16 +380,20 @@ pub fn verify_stage_exact(root: &Path, plan: &StagePlan) -> Result<(), ContextPa
 }
 
 /// Commit whatever is staged. Exactly one commit, never more.
-pub fn commit_staged(root: &Path, subject: &str, body: &str) -> Result<(), ContextPatchError> {
-    state::success(root, &commit_argv(subject, body))
+pub fn commit_staged<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    subject: &str,
+    body: &str,
+) -> Result<(), ContextPatchError> {
+    state::success(repository, &commit_argv(subject, body))
 }
 
 /// Requested paths that are still dirty after a commit, which must be empty.
-pub fn requested_still_dirty(
-    root: &Path,
+pub fn requested_still_dirty<'a>(
+    repository: impl Into<GitRepository<'a>>,
     requested: &BTreeSet<String>,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>), ContextPatchError> {
-    let dirty_after = state::status_paths(root)?;
+    let dirty_after = state::status_paths(repository)?;
     let still_dirty = requested
         .intersection(&dirty_after)
         .cloned()
@@ -380,13 +402,18 @@ pub fn requested_still_dirty(
 }
 
 /// Read the commit a mutation produced.
-pub fn read_commit_identity(root: &Path) -> Result<CommitIdentity, ContextPatchError> {
+pub fn read_commit_identity<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<CommitIdentity, ContextPatchError> {
+    let repository = repository.into();
     Ok(CommitIdentity {
-        commit: state::stdout(root, &["rev-parse", "HEAD"])?.trim().to_string(),
-        short_commit: state::stdout(root, &["rev-parse", "--short", "HEAD"])?
+        commit: state::stdout(repository, &["rev-parse", "HEAD"])?
             .trim()
             .to_string(),
-        status_short: state::stdout(root, &["status", "--short"])?,
+        short_commit: state::stdout(repository, &["rev-parse", "--short", "HEAD"])?
+            .trim()
+            .to_string(),
+        status_short: state::stdout(repository, &["status", "--short"])?,
     })
 }
 
@@ -394,8 +421,8 @@ pub fn read_commit_identity(root: &Path) -> Result<CommitIdentity, ContextPatchE
 ///
 /// Read-only: it reports rather than refuses, because the caller is asking a question about scope, not
 /// requesting a change.
-pub fn evaluate_staged_scope(
-    root: &Path,
+pub fn evaluate_staged_scope<'a>(
+    repository: impl Into<GitRepository<'a>>,
     allowed_paths: &[String],
     allowed_prefixes: &[String],
     required_paths: &[String],
@@ -407,7 +434,7 @@ pub fn evaluate_staged_scope(
     let required_path_set: BTreeSet<String> = required_paths.iter().cloned().collect();
     ensure_no_duplicates(required_paths, &required_path_set, "required_paths")?;
 
-    let staged_paths = state::cached_paths(root)?;
+    let staged_paths = state::cached_paths(repository)?;
     let disallowed_paths = staged_paths
         .iter()
         .filter(|path| {
@@ -435,7 +462,7 @@ pub fn evaluate_staged_scope(
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 

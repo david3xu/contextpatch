@@ -82,6 +82,14 @@ impl<'a> From<&'a Path> for GitRepository<'a> {
     }
 }
 
+/// Accepting a reference as well as a value keeps call sites that hold a target in a local binding from
+/// having to spell the copy, which matters because a handler threads the same target through many calls.
+impl<'a, 'b> From<&'b GitRepository<'a>> for GitRepository<'a> {
+    fn from(repository: &'b GitRepository<'a>) -> Self {
+        *repository
+    }
+}
+
 impl<'a> From<&'a std::path::PathBuf> for GitRepository<'a> {
     fn from(path: &'a std::path::PathBuf) -> Self {
         Self::from_path(path.as_path())

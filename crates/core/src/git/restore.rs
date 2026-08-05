@@ -19,6 +19,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
+use crate::git::repository::GitRepository;
 use crate::git::state;
 
 /// Most paths one restore may name.
@@ -135,12 +136,16 @@ pub fn tracked_paths(root: &Path) -> Result<BTreeSet<String>, ContextPatchError>
 /// Require that every named path is tracked, so a restore has something to restore *from*.
 ///
 /// An untracked path has no version in HEAD, so restoring it would either fail or silently do nothing.
-pub fn ensure_paths_are_tracked(root: &Path, paths: &[String]) -> Result<(), ContextPatchError> {
+pub fn ensure_paths_are_tracked<'a>(
+    repository: impl Into<GitRepository<'a>>,
+    paths: &[String],
+) -> Result<(), ContextPatchError> {
+    let repository = repository.into();
     let untracked = paths
         .iter()
         .filter_map(|path| {
             let args = ["ls-files", "--error-unmatch", "--", path.as_str()];
-            match state::output(root, &args) {
+            match state::output(repository, &args) {
                 Ok(_) => None,
                 Err(_) => Some(path.clone()),
             }
@@ -160,14 +165,15 @@ pub fn ensure_paths_are_tracked(root: &Path, paths: &[String]) -> Result<(), Con
 ///
 /// Requires every path to be dirty now, because restoring a clean path is a no-op the caller did not ask
 /// for and cannot distinguish from success.
-pub fn plan_restore_exact(
-    root: &Path,
+pub fn plan_restore_exact<'a>(
+    repository: impl Into<GitRepository<'a>>,
     paths: &[String],
 ) -> Result<RestorePlan, ContextPatchError> {
+    let repository = repository.into();
     let requested: BTreeSet<String> = paths.iter().cloned().collect();
     ensure_no_duplicates(paths, &requested, "paths")?;
 
-    let dirty_paths = state::status_paths(root)?;
+    let dirty_paths = state::status_paths(repository)?;
     let missing_dirty = requested
         .difference(&dirty_paths)
         .cloned()
@@ -178,7 +184,7 @@ pub fn plan_restore_exact(
             format_path_set(&missing_dirty)
         )));
     }
-    ensure_paths_are_tracked(root, paths)?;
+    ensure_paths_are_tracked(repository, paths)?;
 
     let remaining_dirty_after = dirty_paths
         .difference(&requested)
@@ -195,14 +201,15 @@ pub fn plan_restore_exact(
 ///
 /// The postcondition is returned rather than raised, because a failed postcondition is addressed to the
 /// caller differently from a refusal that happened before anything changed.
-pub fn apply_restore_exact(
-    root: &Path,
+pub fn apply_restore_exact<'a>(
+    repository: impl Into<GitRepository<'a>>,
     plan: &RestorePlan,
 ) -> Result<RestoreOutcome, ContextPatchError> {
-    state::success(root, &restore_argv(&plan.paths))?;
+    let repository = repository.into();
+    state::success(repository, &restore_argv(&plan.paths))?;
 
     let requested: BTreeSet<String> = plan.paths.iter().cloned().collect();
-    let dirty_after = state::status_paths(root)?;
+    let dirty_after = state::status_paths(repository)?;
     let still_dirty = requested
         .intersection(&dirty_after)
         .cloned()

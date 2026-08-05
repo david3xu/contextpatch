@@ -325,20 +325,25 @@ altogether. Each asserts the refusal and that neither the replacement nor the ou
 touched.
 
 **Remaining unanchored uses.** C13 stays in progress until each of these is descriptor-anchored rather
-than path-derived. The descriptor currently pins *identity* and revalidation proves it at handoff, but the
-uses below still reopen by path:
+than path-derived. Items 1 to 3 and 5 of the original inventory are now closed: dispatch carries an owning
+target, Git execution changes into the retained descriptor through a minimal `fchdir` hook, the guarded
+runner takes a typed working directory, and the worktree check accepts one. What remains:
 
-1. `execute_tool` receives `&Path`, and every tool reopens from it. This is the widest surface and the
-   reason the remaining work is large.
-2. Git execution. `core::git::state` runs `git` through the shared process primitive, whose working
-   directory is a path. Anchoring this needs `fchdir` to the retained descriptor in a pre-exec hook,
-   because `Command::current_dir` takes a path by construction.
-3. The guarded process runner generally, for the same reason.
-4. Filesystem entry points. `open_regular_file_in_root` already walks components with `openat`, but it
-   starts from a root *path* rather than an inherited descriptor.
-5. `exact_worktree_root` shells out to `rev-parse` with a path working directory, so the worktree check
-   itself is not yet anchored.
-6. Scratch, receipt, and mutation-lock derivation, which all hash a canonicalized root path.
+1. **Git handlers not yet converted.** `git_commit_exact`, `git_commit_scoped`, `git_commit_prefix`,
+   `git_stage_exact`, `git_staged_scope_check`, and `git_restore_exact` still receive a path from dispatch,
+   even though the core policy behind all six now accepts a descriptor-backed target. Converting them is
+   mechanical: the signature, the policy resolution, and the few sites that genuinely need a path, namely
+   path confinement and the receipt journal.
+2. **`git_branch_prepare`.** Deferred on purpose rather than for effort: its post-switch required-file check
+   reads the worktree by path, so converting only its Git half would split one action between anchored
+   execution and path-based verification.
+3. **Mixed filesystem Git actions.** `delete_untracked_exact`, `delete_generated_prefix`, `move_tracked`,
+   and `delete_guarded` remove or move files as well as consulting Git, so they belong to the filesystem
+   slice for the same split-authority reason.
+4. **Filesystem entry points.** `open_regular_file_in_root` already walks components with `openat`, but it
+   starts from a root *path* rather than an inherited descriptor, so every file tool is still path-backed.
+5. **Scratch, receipt, and mutation-lock derivation**, which all hash a canonicalized root path. Locking
+   is threaded through the typed target already but deliberately still keyed by the logical path.
 
 The selector is otherwise sound: it rejects parent and current-directory components, absolute paths,
 trailing and doubled separators, backslashes, control characters, drive prefixes, and the Git
