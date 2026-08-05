@@ -316,16 +316,16 @@ fn call_tool(
             tools::process::call_run_guarded_command(repository.root(), arguments)
         }
         tools::fixture_generator_run::NAME => {
-            tools::fixtures::call_fixture_generator_run(repo_root, arguments)
+            tools::fixtures::call_fixture_generator_run(repository.root(), arguments)
         }
         tools::base_image_check_run::NAME => {
-            tools::fixtures::call_base_image_check_run(repo_root, arguments)
+            tools::fixtures::call_base_image_check_run(repository.root(), arguments)
         }
         tools::fixture_manifest_verify::NAME => {
-            tools::fixtures::call_fixture_manifest_verify(repo_root, arguments)
+            tools::fixtures::call_fixture_manifest_verify(repository.root(), arguments)
         }
         tools::fixture_manifest_refresh::NAME => {
-            tools::fixtures::call_fixture_manifest_refresh(repo_root, arguments)
+            tools::fixtures::call_fixture_manifest_refresh(repository.root(), arguments)
         }
         tools::read_command_log::NAME => tools::process::call_read_command_log(arguments),
         tools::image_cleanliness_check_run::NAME => {

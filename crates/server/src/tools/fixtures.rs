@@ -15,22 +15,29 @@ pub mod fixture_manifest_verify {
 }
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use contextpatch_core::error::ContextPatchError;
+use contextpatch_core::fs::guarded_file::open_regular_file_in_root;
+use contextpatch_core::fs::rooted::{self, RootedEntryKind};
+use contextpatch_core::fs::write_new_file::write_new_file_bytes_in_root;
+use contextpatch_core::git::RepositoryRoot;
 use contextpatch_core::process::guarded_command::run_guarded_command;
 use serde_json::{json, Value};
 
 use crate::tools;
 use crate::tools::common::*;
 use crate::tools::git::support::{
-    format_set, git_status_paths_for_tool, normalize_git_path, resolved_repo_root,
-    normalize_git_paths,
+    format_set, git_status_paths_for_tool, normalize_git_path, normalize_git_paths,
 };
 
-pub(crate) fn call_fixture_generator_run(
-    repo_root: &Path,
+/// The one base-image check script this surface is allowed to run.
+///
+/// Named once so the presence check, the argument vector, and the refusal text cannot drift apart.
+const BASE_IMAGE_CHECK_SCRIPT: &str = "references/check-base-image.sh";
+
+pub(crate) fn call_fixture_generator_run<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "run fixture generator";
@@ -48,9 +55,13 @@ pub(crate) fn call_fixture_generator_run(
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
     let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
     let cwd = optional_string(arguments, "cwd")?;
-    let root = resolved_repo_root(repo_root, tools::fixture_generator_run::NAME)?;
-    let script = normalize_git_path(tools::fixture_generator_run::NAME, &root, script_path)?;
-    if !root.join(&script).is_file() {
+    // Confinement, the script check, Git status, and the child's working directory all derive from one
+    // authority, so a generator cannot be validated against one repository and run in another.
+    let root = repository_root.into();
+    let script = normalize_git_path(tools::fixture_generator_run::NAME, root, script_path)?;
+    if !rooted::is_regular_file(root, &script)
+        .map_err(|error| format!("fixture_generator_run refused: {error}"))?
+    {
         return Err(format!(
             "fixture_generator_run refused: script_path `{script}` is not a file"
         ));
@@ -64,7 +75,7 @@ pub(crate) fn call_fixture_generator_run(
     let allowed_existing_dirty = if arguments.contains_key("allowed_existing_dirty_paths") {
         normalize_git_paths(
             tools::fixture_generator_run::NAME,
-            &root,
+            root,
             &required_string_array(arguments, "allowed_existing_dirty_paths")?,
         )?
     } else {
@@ -73,7 +84,7 @@ pub(crate) fn call_fixture_generator_run(
     .into_iter()
     .collect::<BTreeSet<_>>();
 
-    let before = git_status_paths_for_tool(tools::fixture_generator_run::NAME, &root)?;
+    let before = git_status_paths_for_tool(tools::fixture_generator_run::NAME, root.git())?;
     let unexpected_before = before
         .difference(&allowed_existing_dirty)
         .cloned()
@@ -119,7 +130,7 @@ pub(crate) fn call_fixture_generator_run(
     }
 
     let output = run_guarded_command(
-        &root,
+        root,
         cwd.map(Path::new),
         "python3",
         &command_args,
@@ -132,7 +143,8 @@ pub(crate) fn call_fixture_generator_run(
         ));
     }
 
-    let after = git_status_paths_for_tool(tools::fixture_generator_run::NAME, &root)?;
+    // Outputs are rechecked through the same authority that validated them before the run.
+    let after = git_status_paths_for_tool(tools::fixture_generator_run::NAME, root.git())?;
     let unauthorized = after
         .iter()
         .filter(|path| {
@@ -167,21 +179,24 @@ pub(crate) fn call_fixture_generator_run(
     .map_err(|error| format!("fixture_generator_run refused: {error}"))
 }
 
-pub(crate) fn call_base_image_check_run(
-    repo_root: &Path,
+pub(crate) fn call_base_image_check_run<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "run base image check";
-    const SCRIPT: &str = "references/check-base-image.sh";
 
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
     let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
     let project_path = optional_string(arguments, "project_path")?;
     let command_args = base_image_check_args(project_path)?;
-    let root = resolved_repo_root(repo_root, tools::base_image_check_run::NAME)?;
-    if !root.join(SCRIPT).is_file() {
+    // The presence check and the run share one authority, so the script that was found is the script the
+    // child resolves inside its anchored working directory.
+    let root = repository_root.into();
+    if !rooted::is_regular_file(root, BASE_IMAGE_CHECK_SCRIPT)
+        .map_err(|error| format!("base_image_check_run refused: {error}"))?
+    {
         return Err(format!(
-            "base_image_check_run refused: required script `{SCRIPT}` is not present"
+            "base_image_check_run refused: required script `{BASE_IMAGE_CHECK_SCRIPT}` is not present"
         ));
     }
     if dry_run {
@@ -211,7 +226,7 @@ pub(crate) fn call_base_image_check_run(
         ));
     }
 
-    let output = run_guarded_command(&root, None, "bash", &command_args, Some(timeout_secs))
+    let output = run_guarded_command(root, None, "bash", &command_args, Some(timeout_secs))
         .map_err(|error| format!("base_image_check_run refused: {error}"))?;
     if !guarded_output_succeeded(&output) {
         return Err(format!(
@@ -222,7 +237,7 @@ pub(crate) fn call_base_image_check_run(
     serde_json::to_string_pretty(&json!({
         "tool": tools::base_image_check_run::NAME,
         "ran": true,
-        "script": SCRIPT,
+        "script": BASE_IMAGE_CHECK_SCRIPT,
         "args": command_args,
         "command_output": output
     }))
@@ -230,13 +245,15 @@ pub(crate) fn call_base_image_check_run(
 }
 
 fn base_image_check_args(project_path: Option<&str>) -> Result<Vec<String>, String> {
-    const SCRIPT: &str = "references/check-base-image.sh";
     match project_path {
-        Some("task") => Ok(vec![SCRIPT.to_string(), "task".to_string()]),
+        Some("task") => Ok(vec![
+            BASE_IMAGE_CHECK_SCRIPT.to_string(),
+            "task".to_string(),
+        ]),
         Some(other) => Err(format!(
             "base_image_check_run refused: project_path must be exactly `task` when provided, got `{other}`"
         )),
-        None => Ok(vec![SCRIPT.to_string()]),
+        None => Ok(vec![BASE_IMAGE_CHECK_SCRIPT.to_string()]),
     }
 }
 
@@ -307,9 +324,14 @@ fn parse_fixture_manifest(
     Ok(entries)
 }
 
+/// Collect fixture files and their digests through the repository's own authority.
+///
+/// Every existence check, directory walk, and content read goes through the root, so a manifest is verified
+/// against the repository that was selected. Symlinks are refused rather than followed at any component,
+/// which the previous path-based walk only checked at the entry it happened to be looking at.
 fn collect_fixture_files_from_args(
     tool_name: &str,
-    root: &Path,
+    root: RepositoryRoot<'_>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<BTreeMap<String, String>, String> {
     let fixture_paths = optional_string_array(arguments, "fixture_paths")?;
@@ -320,10 +342,11 @@ fn collect_fixture_files_from_args(
         ));
     }
 
+    let refused = |error: ContextPatchError| format!("{tool_name} refused: {error}");
+
     let mut paths = BTreeSet::new();
     for path in normalize_repo_relative_paths(tool_name, &fixture_paths)? {
-        let target = root.join(&path);
-        if !target.is_file() {
+        if !rooted::is_regular_file(root, &path).map_err(refused)? {
             return Err(format!(
                 "{tool_name} refused: fixture path `{path}` is not a regular file"
             ));
@@ -331,104 +354,90 @@ fn collect_fixture_files_from_args(
         paths.insert(path);
     }
     for prefix in normalize_repo_relative_paths(tool_name, &fixture_prefixes)? {
-        let target = root.join(&prefix);
-        if target.is_file() {
-            paths.insert(prefix);
-        } else if target.is_dir() {
-            collect_regular_files(tool_name, root, &target, &mut paths)?;
-        } else {
-            return Err(format!(
-                "{tool_name} refused: fixture prefix `{prefix}` is not a file or directory"
-            ));
+        match rooted::entry_kind(root, &prefix).map_err(refused)? {
+            Some(RootedEntryKind::RegularFile) => {
+                paths.insert(prefix);
+            }
+            Some(RootedEntryKind::Directory) => {
+                collect_regular_files(tool_name, root, &prefix, &mut paths)?;
+            }
+            _ => {
+                return Err(format!(
+                    "{tool_name} refused: fixture prefix `{prefix}` is not a file or directory"
+                ));
+            }
         }
     }
 
     let mut result = BTreeMap::new();
     for path in paths {
-        let target = root.join(&path);
-        let bytes = fs::read(&target)
+        let digest = rooted::sha256(root, &path)
             .map_err(|error| format!("{tool_name} refused: failed to read `{path}`: {error}"))?;
-        result.insert(path, sha256_hex(&bytes));
+        result.insert(path, digest);
     }
     Ok(result)
 }
 
 fn collect_regular_files(
     tool_name: &str,
-    root: &Path,
-    directory: &Path,
+    root: RepositoryRoot<'_>,
+    directory: &str,
     paths: &mut BTreeSet<String>,
 ) -> Result<(), String> {
-    let mut entries = fs::read_dir(directory)
-        .map_err(|error| format!("{tool_name} refused: failed to read directory: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("{tool_name} refused: failed to read directory entry: {error}"))?;
-    entries.sort_by_key(|entry| entry.path());
+    // Entries arrive sorted and named relative to the repository root, so the manifest order is
+    // deterministic without a second sort and without reconstructing relative paths from absolute ones.
+    let entries = rooted::read_dir(root, directory)
+        .map_err(|error| format!("{tool_name} refused: failed to read directory: {error}"))?;
     for entry in entries {
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            format!(
-                "{tool_name} refused: failed to inspect `{}`: {error}",
-                path.display()
-            )
-        })?;
-        if file_type.is_symlink() {
-            return Err(format!(
-                "{tool_name} refused: fixture path `{}` is a symlink",
-                path.display()
-            ));
-        }
-        if file_type.is_dir() {
-            collect_regular_files(tool_name, root, &path, paths)?;
-        } else if file_type.is_file() {
-            paths.insert(repo_relative_string(tool_name, root, &path)?);
+        match entry.kind {
+            RootedEntryKind::Symlink => {
+                return Err(format!(
+                    "{tool_name} refused: fixture path `{}` is a symlink",
+                    entry.relative
+                ));
+            }
+            RootedEntryKind::Directory => {
+                collect_regular_files(tool_name, root, &entry.relative, paths)?;
+            }
+            RootedEntryKind::RegularFile => {
+                paths.insert(entry.relative);
+            }
+            RootedEntryKind::Other => {}
         }
     }
     Ok(())
 }
 
-fn repo_relative_string(tool_name: &str, root: &Path, path: &Path) -> Result<String, String> {
-    let relative = path.strip_prefix(root).map_err(|error| {
-        format!(
-            "{tool_name} refused: path `{}` is outside repository root: {error}",
-            path.display()
-        )
-    })?;
-    let parts = relative
-        .components()
-        .map(|component| match component {
-            std::path::Component::Normal(value) => Ok(value.to_string_lossy().into_owned()),
-            _ => Err(format!(
-                "{tool_name} refused: collected path must be normalized relative"
-            )),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(parts.join("/"))
-}
-
-pub(crate) fn call_fixture_manifest_verify(
-    repo_root: &Path,
+pub(crate) fn call_fixture_manifest_verify<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let manifest_path = required_string(arguments, "manifest_path")?;
-    let root = resolved_repo_root(repo_root, tools::fixture_manifest_verify::NAME)?;
+    // The manifest and the fixtures it describes are reached through one authority, so a manifest cannot be
+    // read from one repository and then compared against another repository's files.
+    let root = repository_root.into();
     let manifest_normalized =
         normalize_repo_relative_path(tools::fixture_manifest_verify::NAME, manifest_path)?;
-    let manifest_target = root.join(&manifest_normalized);
-    if !manifest_target.is_file() {
+    if !rooted::is_regular_file(root, &manifest_normalized)
+        .map_err(|error| format!("fixture_manifest_verify refused: {error}"))?
+    {
         return Err(format!(
             "fixture_manifest_verify refused: manifest `{manifest_normalized}` is not an existing file"
         ));
     }
-    let manifest_bytes = fs::read(&manifest_target).map_err(|error| {
-        format!("fixture_manifest_verify refused: failed to read `{manifest_normalized}`: {error}")
-    })?;
+    let manifest_bytes = open_regular_file_in_root(root, Path::new(&manifest_normalized))
+        .and_then(|manifest| manifest.read_all())
+        .map_err(|error| {
+            format!(
+                "fixture_manifest_verify refused: failed to read `{manifest_normalized}`: {error}"
+            )
+        })?;
     let manifest_value: Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
         format!("fixture_manifest_verify refused: manifest JSON is invalid: {error}")
     })?;
     let expected = parse_fixture_manifest(tools::fixture_manifest_verify::NAME, &manifest_value)?;
     let actual =
-        collect_fixture_files_from_args(tools::fixture_manifest_verify::NAME, &root, arguments)?;
+        collect_fixture_files_from_args(tools::fixture_manifest_verify::NAME, root, arguments)?;
     let expected_paths = expected.keys().cloned().collect::<BTreeSet<_>>();
     let actual_paths = actual.keys().cloned().collect::<BTreeSet<_>>();
     let missing_files = expected_paths
@@ -474,8 +483,8 @@ pub(crate) fn call_fixture_manifest_verify(
     Ok(report)
 }
 
-pub(crate) fn call_fixture_manifest_refresh(
-    repo_root: &Path,
+pub(crate) fn call_fixture_manifest_refresh<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "refresh fixture manifest";
@@ -488,27 +497,42 @@ pub(crate) fn call_fixture_manifest_refresh(
             "fixture_manifest_refresh refused: dry_run=false requires confirm: {CONFIRMATION:?}"
         ));
     }
-    let root = resolved_repo_root(repo_root, tools::fixture_manifest_refresh::NAME)?;
+    let root = repository_root.into();
     let manifest_normalized =
         normalize_repo_relative_path(tools::fixture_manifest_refresh::NAME, manifest_path)?;
-    let manifest_target = root.join(&manifest_normalized);
-    let current_manifest = if manifest_target.exists() {
-        if !manifest_target.is_file() {
+    // Opened once and held, so the digest that gates the overwrite and the write that follows refer to the
+    // same file rather than to the same name twice. A symlink is refused here rather than followed, which is
+    // the uniform rule the rooted primitives apply everywhere else.
+    let existing = match rooted::entry_kind(root, &manifest_normalized)
+        .map_err(|error| format!("fixture_manifest_refresh refused: {error}"))?
+    {
+        None => None,
+        Some(RootedEntryKind::RegularFile) => Some(
+            open_regular_file_in_root(root, Path::new(&manifest_normalized)).map_err(|error| {
+                format!(
+                    "fixture_manifest_refresh refused: failed to read `{manifest_normalized}`: {error}"
+                )
+            })?,
+        ),
+        Some(_) => {
             return Err(format!(
                 "fixture_manifest_refresh refused: manifest path `{manifest_normalized}` is not a regular file"
-            ));
+            ))
         }
-        let bytes = fs::read(&manifest_target).map_err(|error| {
-            format!(
-                "fixture_manifest_refresh refused: failed to read `{manifest_normalized}`: {error}"
-            )
-        })?;
-        Some((sha256_hex(&bytes), bytes))
-    } else {
-        None
+    };
+    let current_manifest = match &existing {
+        Some(manifest) => {
+            let bytes = manifest.read_all().map_err(|error| {
+                format!(
+                    "fixture_manifest_refresh refused: failed to read `{manifest_normalized}`: {error}"
+                )
+            })?;
+            Some(sha256_hex(&bytes))
+        }
+        None => None,
     };
     if !dry_run {
-        if let Some((current_sha, _)) = &current_manifest {
+        if let Some(current_sha) = &current_manifest {
             let expected = optional_string(arguments, "expected_manifest_sha256")?.ok_or_else(|| {
                 "fixture_manifest_refresh refused: expected_manifest_sha256 is required when overwriting an existing manifest".to_string()
             })?;
@@ -522,12 +546,15 @@ pub(crate) fn call_fixture_manifest_refresh(
     }
 
     let actual =
-        collect_fixture_files_from_args(tools::fixture_manifest_refresh::NAME, &root, arguments)?;
+        collect_fixture_files_from_args(tools::fixture_manifest_refresh::NAME, root, arguments)?;
     let files = actual
         .iter()
         .map(|(path, sha256)| {
-            let bytes = fs::metadata(root.join(path))
-                .map(|metadata| metadata.len())
+            // Reported through the same authority that produced the digest. A size that cannot be read is
+            // still reported as zero rather than failing the refresh, which is the behaviour this response
+            // has always had.
+            let bytes = open_regular_file_in_root(root, Path::new(path))
+                .and_then(|fixture| fixture.size_bytes())
                 .unwrap_or(0);
             json!({
                 "path": path,
@@ -553,38 +580,46 @@ pub(crate) fn call_fixture_manifest_refresh(
             "would_write": true,
             "manifest_path": manifest_normalized,
             "file_count": actual.len(),
-            "current_manifest_sha256": current_manifest.as_ref().map(|(sha, _)| sha),
+            "current_manifest_sha256": current_manifest.as_ref(),
             "new_manifest_sha256": new_sha256,
             "confirm_required": CONFIRMATION
         }))
         .map_err(|error| format!("fixture_manifest_refresh refused: {error}"));
     }
 
-    if let Some(parent) = manifest_target.parent() {
-        if !parent.is_dir() {
+    if let Some(parent) = manifest_parent(&manifest_normalized) {
+        if !rooted::is_directory(root, parent)
+            .map_err(|error| format!("fixture_manifest_refresh refused: {error}"))?
+        {
             return Err(format!(
                 "fixture_manifest_refresh refused: parent directory for `{manifest_normalized}` does not exist"
             ));
         }
     }
-    let temporary = manifest_target.with_extension(format!(
-        "contextpatch-tmp-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("fixture_manifest_refresh refused: {error}"))?
-            .as_nanos()
-    ));
-    fs::write(&temporary, manifest_text).map_err(|error| {
-        format!(
-            "fixture_manifest_refresh refused: failed to write temporary manifest for `{manifest_normalized}`: {error}"
-        )
-    })?;
-    fs::rename(&temporary, &manifest_target).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        format!(
-            "fixture_manifest_refresh refused: failed to replace `{manifest_normalized}`: {error}"
-        )
-    })?;
+    // An existing manifest is replaced through the handle that was already opened and hashed, so the
+    // temporary file, its permission bits, and the rename are the guarded layer's concern rather than this
+    // handler's. A manifest that is not there yet is created, which keeps the write create-only.
+    match existing {
+        Some(manifest) => manifest
+            .replace_atomic(manifest_text.as_bytes())
+            .map_err(|error| {
+                format!(
+                    "fixture_manifest_refresh refused: failed to replace `{manifest_normalized}`: {error}"
+                )
+            })?,
+        None => {
+            write_new_file_bytes_in_root(
+                root,
+                Path::new(&manifest_normalized),
+                manifest_text.as_bytes(),
+            )
+            .map_err(|error| {
+                format!(
+                    "fixture_manifest_refresh refused: failed to write `{manifest_normalized}`: {error}"
+                )
+            })?;
+        }
+    }
 
     serde_json::to_string_pretty(&json!({
         "tool": tools::fixture_manifest_refresh::NAME,
@@ -595,4 +630,14 @@ pub(crate) fn call_fixture_manifest_refresh(
         "sha256": new_sha256
     }))
     .map_err(|error| format!("fixture_manifest_refresh refused: {error}"))
+}
+
+/// The manifest's parent directory, named relative to the repository root.
+///
+/// `None` when the manifest sits directly under the root, which needs no check: a root that any authority
+/// exists for is already a directory.
+fn manifest_parent(manifest_normalized: &str) -> Option<&str> {
+    manifest_normalized
+        .rsplit_once('/')
+        .map(|(parent, _leaf)| parent)
 }
