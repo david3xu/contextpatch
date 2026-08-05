@@ -1,23 +1,8 @@
 //! Server adapters that bracket mutations with durable receipt evidence.
 
-use std::io::ErrorKind;
-use std::path::Path;
-
-use contextpatch_core::fs::hash::sha256_bytes;
 use contextpatch_core::fs::receipt::{self, Outcome};
 
 use crate::tools::common::normalize_repo_relative_path;
-
-fn digest_of(path: &Path) -> Result<Option<String>, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(sha256_bytes(&bytes))),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!(
-            "failed to read `{}` for receipt evidence: {error}",
-            path.display()
-        )),
-    }
-}
 
 /// Digest one repository file for receipt evidence, through the repository's own authority.
 ///
@@ -155,8 +140,8 @@ pub(crate) fn recorded_in_batch<'a, T>(
 ///
 /// Paths must already be repository-relative and normalized. Auxiliary problems are returned rather
 /// than raised, so a journal failure never masks the validation refusal that caused it.
-pub(crate) fn record_refused_batch(
-    repo_root: &Path,
+pub(crate) fn record_refused_batch<'a>(
+    repo_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     tool: &str,
     relative_paths: &[String],
 ) -> Vec<String> {
@@ -165,16 +150,8 @@ pub(crate) fn record_refused_batch(
         return auxiliary_errors;
     }
 
-    let root = match repo_root.canonicalize() {
-        Ok(root) => root,
-        Err(error) => {
-            auxiliary_errors.push(format!(
-                "{tool} could not journal refused receipts: failed to resolve repo root: {error}"
-            ));
-            return auxiliary_errors;
-        }
-    };
-    let mut batch = match receipt::begin_file_batch(repo_root, tool, relative_paths) {
+    let root = repo_root.into();
+    let mut batch = match receipt::begin_file_batch(root, tool, relative_paths) {
         Ok(batch) => batch,
         Err(error) => {
             auxiliary_errors.push(format!(
@@ -185,8 +162,7 @@ pub(crate) fn record_refused_batch(
     };
 
     for normalized in relative_paths {
-        let target = root.join(normalized);
-        let before = match digest_of(&target) {
+        let before = match digest_in_root(root, normalized) {
             Ok(before) => before,
             Err(error) => {
                 auxiliary_errors.push(format!(
@@ -205,7 +181,7 @@ pub(crate) fn record_refused_batch(
             }
         };
 
-        let after = digest_of(&target);
+        let after = digest_in_root(root, normalized);
         let outcome = match &after {
             Ok(after) if *after == before => Outcome::Refused,
             Ok(_) | Err(_) => Outcome::Unknown,
@@ -228,28 +204,26 @@ pub(crate) fn record_refused_batch(
     auxiliary_errors
 }
 
-pub(crate) fn recorded_deletions<T>(
-    repo_root: &Path,
+pub(crate) fn recorded_deletions<'a, T>(
+    repo_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     tool: &str,
     relative_paths: &[String],
     work: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
-    let root = repo_root
-        .canonicalize()
-        .map_err(|error| format!("{tool} refused: failed to resolve repo root: {error}"))?;
+    let root = repo_root.into();
     let mut planned = Vec::with_capacity(relative_paths.len());
 
     for relative in relative_paths {
         let normalized = normalize_repo_relative_path(tool, relative)?;
-        let before = digest_of(&root.join(&normalized))
-            .map_err(|error| format!("{tool} refused: {error}"))?;
-        match receipt::begin_file(&root, tool, &normalized, before.as_deref()) {
+        let before =
+            digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
+        match receipt::begin_file(root, tool, &normalized, before.as_deref()) {
             Ok(id) => planned.push((normalized, before, id)),
             Err(error) => {
                 let mut settlement_errors = Vec::new();
                 for (_, before, id) in &planned {
                     if let Err(settle_error) =
-                        receipt::settle_file(&root, id, Outcome::Refused, before.as_deref())
+                        receipt::settle_file(root, id, Outcome::Refused, before.as_deref())
                     {
                         settlement_errors.push(settlement_error(tool, settle_error));
                     }
@@ -268,7 +242,7 @@ pub(crate) fn recorded_deletions<T>(
     let work_succeeded = result.is_ok();
     let mut auxiliary_errors = Vec::new();
     for (relative, before, id) in planned {
-        let after = digest_of(&root.join(&relative));
+        let after = digest_in_root(root, &relative);
         let outcome = if work_succeeded {
             Outcome::Applied
         } else {
@@ -278,8 +252,8 @@ pub(crate) fn recorded_deletions<T>(
             }
         };
         let settlement = match &after {
-            Ok(after) => receipt::settle_file(&root, &id, outcome, after.as_deref()),
-            Err(_) => receipt::settle_file(&root, &id, outcome, None),
+            Ok(after) => receipt::settle_file(root, &id, outcome, after.as_deref()),
+            Err(_) => receipt::settle_file(root, &id, outcome, None),
         };
         if let Err(error) = after {
             auxiliary_errors.push(format!(
@@ -293,8 +267,8 @@ pub(crate) fn recorded_deletions<T>(
     combine_result(result, auxiliary_errors)
 }
 
-pub(crate) fn begin_git(
-    repo_root: &Path,
+pub(crate) fn begin_git<'a>(
+    repo_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     tool: &str,
     before_git_head: &str,
 ) -> Result<String, String> {
@@ -302,8 +276,8 @@ pub(crate) fn begin_git(
         .map_err(|error| format!("{tool} refused before Git mutation: {error}"))
 }
 
-pub(crate) fn settle_git<T>(
-    repo_root: &Path,
+pub(crate) fn settle_git<'a, T>(
+    repo_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     tool: &str,
     id: &str,
     before_git_head: &str,
