@@ -135,8 +135,8 @@ fn lock_file<'a>(
         })
 }
 
-fn with_exclusive_lock<T>(
-    repo_root: &Path,
+fn with_exclusive_lock<'a, T>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     work: impl FnOnce() -> Result<T, ContextPatchError>,
 ) -> Result<T, ContextPatchError> {
     let lock = lock_file(repo_root)?;
@@ -361,13 +361,14 @@ fn append_settle_record(
     )
 }
 
-fn begin_record(
-    repo_root: &Path,
+fn begin_record<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     tool: &str,
     path: Option<&str>,
     before_sha256: Option<&str>,
     before_git_head: Option<&str>,
 ) -> Result<String, ContextPatchError> {
+    let repo_root = repo_root.into();
     let journal = journal_path(repo_root)?;
     with_exclusive_lock(repo_root, || {
         rotate_if_oversized(&journal)?;
@@ -375,8 +376,8 @@ fn begin_record(
     })
 }
 
-pub fn begin_file(
-    repo_root: &Path,
+pub fn begin_file<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     tool: &str,
     path: &str,
     before_sha256: Option<&str>,
@@ -384,8 +385,8 @@ pub fn begin_file(
     begin_record(repo_root, tool, Some(path), before_sha256, None)
 }
 
-pub fn begin_git(
-    repo_root: &Path,
+pub fn begin_git<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     tool: &str,
     before_git_head: &str,
 ) -> Result<String, ContextPatchError> {
@@ -404,8 +405,8 @@ pub struct FileReceiptBatch {
     next_path: usize,
 }
 
-pub fn begin_file_batch(
-    repo_root: &Path,
+pub fn begin_file_batch<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     tool: &str,
     paths: &[String],
 ) -> Result<FileReceiptBatch, ContextPatchError> {
@@ -414,6 +415,7 @@ pub fn begin_file_batch(
             "write receipt batch requires at least one path",
         ));
     }
+    let repo_root = repo_root.into();
     let reserved_bytes = file_batch_reservation(tool, paths)?;
     let journal = journal_path(repo_root)?;
     let lock = lock_file(repo_root)?;
@@ -461,21 +463,22 @@ impl FileReceiptBatch {
     }
 }
 
-fn settle_record(
-    repo_root: &Path,
+fn settle_record<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     id: &str,
     outcome: Outcome,
     after_sha256: Option<&str>,
     after_git_head: Option<&str>,
 ) -> Result<(), ContextPatchError> {
+    let repo_root = repo_root.into();
     let journal = journal_path(repo_root)?;
     with_exclusive_lock(repo_root, || {
         append_settle_record(&journal, id, outcome, after_sha256, after_git_head)
     })
 }
 
-pub fn settle_file(
-    repo_root: &Path,
+pub fn settle_file<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     id: &str,
     outcome: Outcome,
     after_sha256: Option<&str>,
@@ -483,8 +486,8 @@ pub fn settle_file(
     settle_record(repo_root, id, outcome, after_sha256, None)
 }
 
-pub fn settle_git(
-    repo_root: &Path,
+pub fn settle_git<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     id: &str,
     outcome: Outcome,
     after_git_head: Option<&str>,
