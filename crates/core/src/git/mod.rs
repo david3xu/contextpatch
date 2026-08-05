@@ -9,7 +9,7 @@ pub mod tracked_move;
 pub mod validate;
 mod workspace;
 
-pub use workspace::resolve_workspace_git_root;
+pub use workspace::{select_workspace_repository, SelectedRepository};
 
 /// Exposed so the MCP layer can enforce a per-action worktree-root policy without duplicating the
 /// check. The rest of `guarded_path` stays private on purpose; only the two resolvers are public, and

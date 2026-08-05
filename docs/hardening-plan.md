@@ -302,7 +302,43 @@ resolver reports the shared resolution failure. A server regression pins the MCP
 
 C13 remains separate and untouched.
 
-### 3.4 Rebuild the workspace selector on descriptors (C13)
+### 3.4 Rebuild the workspace selector on descriptors (C13) — in progress
+
+**Slice 1 — done.** The selector walk is descriptor-relative. Each component is opened with `openat` from
+the descriptor the previous step returned, using `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`, so the parent
+chain cannot be substituted mid-walk and no full path is ever handed to the kernel after the first open.
+Because `ELOOP` and `ENOTDIR` do not portably distinguish a symlink from a plain file, a failed open is
+classified with `fstatat` against the same parent descriptor, which keeps all four existing refusal strings
+exact.
+
+The walk now returns a typed `SelectedRepository` that retains the final directory descriptor rather than
+discarding it. Dispatch binds that selection for the whole call, so the validated directory stays open
+while the tool runs, and `revalidate` proves the resolved path still names the anchored directory
+immediately before the path is handed to `execute_tool`. Selection also revalidates once at construction,
+so a swap during canonicalization or the worktree check is caught before the selection is handed out.
+Non-Unix fails closed: without descriptor-relative opens the walk cannot be made safe, so the selector is
+refused outright rather than silently falling back to paths.
+
+Three adversarial tests cover the window: renaming the validated directory aside and moving a different
+repository into its place, replacing it with a symlink pointing outside the workspace, and unlinking it
+altogether. Each asserts the refusal and that neither the replacement nor the outside directory was
+touched.
+
+**Remaining unanchored uses.** C13 stays in progress until each of these is descriptor-anchored rather
+than path-derived. The descriptor currently pins *identity* and revalidation proves it at handoff, but the
+uses below still reopen by path:
+
+1. `execute_tool` receives `&Path`, and every tool reopens from it. This is the widest surface and the
+   reason the remaining work is large.
+2. Git execution. `core::git::state` runs `git` through the shared process primitive, whose working
+   directory is a path. Anchoring this needs `fchdir` to the retained descriptor in a pre-exec hook,
+   because `Command::current_dir` takes a path by construction.
+3. The guarded process runner generally, for the same reason.
+4. Filesystem entry points. `open_regular_file_in_root` already walks components with `openat`, but it
+   starts from a root *path* rather than an inherited descriptor.
+5. `exact_worktree_root` shells out to `rev-parse` with a path working directory, so the worktree check
+   itself is not yet anchored.
+6. Scratch, receipt, and mutation-lock derivation, which all hash a canonicalized root path.
 
 The selector is otherwise sound: it rejects parent and current-directory components, absolute paths,
 trailing and doubled separators, backslashes, control characters, drive prefixes, and the Git
@@ -536,7 +572,7 @@ Phase-specific checks:
 | C10 | Git policy lives in the server crate against the stated boundary | 3.2 | Complete |
 | C11 | Three helpers share one name with two semantics | 3.3 | Complete |
 | C12 | Worktree-root requirement is inconsistent across tools | 3.1 | Complete |
-| C13 | Workspace selector validates by path, not by descriptor | 3.4 | Open |
+| C13 | Workspace selector validates by path, not by descriptor | 3.4 | In progress |
 | C14 | Confirmation phrases duplicated between handler and schema | 4.1 | Open |
 | C15 | Capability contract is hand-maintained inline JSON | 4.2 | Open |
 | C16 | Enforcement prose duplicated across five files | 4.3 | Open |

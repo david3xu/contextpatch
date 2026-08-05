@@ -46,29 +46,43 @@ pub(crate) fn handle_tool_call(
     let result = match resolved {
         Err(message) => Err(message),
         Ok(ProjectCall::Describe { text, repository }) => {
-            effective_repository_root(repo_root, repository.as_deref()).map(|_| text)
+            selected_repository(repo_root, repository.as_deref()).map(|_| text)
         }
         Ok(ProjectCall::Execute {
             name,
             arguments,
             repository,
-        }) => effective_repository_root(repo_root, repository.as_deref())
-            .and_then(|root| execute_tool(&root, surface, &name, &arguments)),
+        }) => match selected_repository(repo_root, repository.as_deref()) {
+            Err(message) => Err(message),
+            Ok(None) => execute_tool(repo_root, surface, &name, &arguments),
+            // The selection is bound for the whole call, so the descriptor that validated the directory
+            // stays open while the tool runs. Revalidating immediately before handing over the path is what
+            // closes the window between validating a selector and using it.
+            Ok(Some(selected)) => selected
+                .revalidate()
+                .map_err(|error| format!("project_execute refused: {error}"))
+                .and_then(|()| execute_tool(selected.path(), surface, &name, &arguments)),
+        },
     };
 
     bounded_tool_result_response(id, name, result)
 }
 
-fn effective_repository_root(
+/// Resolve a wrapper `repository` selector into a descriptor-anchored selection.
+///
+/// Returns `None` when no selector was supplied, in which case the configured root is used directly and
+/// there is nothing to anchor.
+fn selected_repository(
     configured_root: &Path,
     repository: Option<&str>,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<Option<contextpatch_core::git::SelectedRepository>, String> {
     match repository {
         Some(repository) => {
-            contextpatch_core::git::resolve_workspace_git_root(configured_root, repository)
+            contextpatch_core::git::select_workspace_repository(configured_root, repository)
+                .map(Some)
                 .map_err(|error| format!("project_execute refused: {error}"))
         }
-        None => Ok(configured_root.to_path_buf()),
+        None => Ok(None),
     }
 }
 
