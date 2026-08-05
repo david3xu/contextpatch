@@ -355,25 +355,64 @@ repository only, with siblings holding identically named files and identically n
 with an outside repository asserted bit-for-bit unchanged. Each pair of assertions runs in both directions
 so none can pass by accident of ordering.
 
-**Remaining unanchored uses.** C13 stays in progress until each of these is descriptor-anchored rather
-than path-derived. Items 1 to 3 and 5 of the original inventory are now closed: dispatch carries an owning
-target, Git execution changes into the retained descriptor through a minimal `fchdir` hook, the guarded
-runner takes a typed working directory, and the worktree check accepts one. What remains:
+**Slice 4 — done. Uniform no-follow authority.** The two authorities no longer differ. An anchored root
+lends the descriptor it retains; a path-backed root has one opened for it with `O_DIRECTORY | O_NOFOLLOW`,
+and that single open is the only name resolution. Everything after it is descriptor-relative under either
+authority, so a configured root is exactly as safe as a selected one.
 
-1. **Git handlers not yet converted.** None remain. Every Git handler now takes typed root or repository
-   authority, including the five that also touch the filesystem.
-2. **Repository and file mutation locks**, which remain keyed by the logical path.
-3. **Receipt journal and scratch identity**, which remain derived from a canonicalized root path.
-4. **Filesystem entry points.** `open_regular_file_in_root` and the rest of `guarded_file` already walk
-   components with `openat`, but they start from a root *path* rather than an inherited descriptor, so the
-   general file tools are still path-backed. `crate::fs::rooted` is the pattern they should adopt.
-5. **Process, fixture, GitHub, capability, and native handlers**, none of which take root authority yet.
-6. **`exact_worktree_root` for path-backed roots**, which still canonicalizes and compares by name. That is
-   correct for a configured root reached only by name, and is what the anchored branch now skips.
+This supersedes the deliberate asymmetry recorded in slice 2, and the change is user-visible rather than
+internal. A configured root no longer accepts an in-tree symlink that it previously followed and allowed,
+and a configured root whose own *name* has become a symlink is refused rather than followed to whatever
+replaced it. That second case previously succeeded and returned the replacement's content. The tests that
+asserted the old asymmetry are replaced by tests asserting the new uniformity in both directions.
 
-Within the migrated Git surface, `logical_path()` survives at exactly three boundaries, each named at its
-call site: the repository mutation lock, the receipt journal, and the path-backed compatibility branch of
-confinement and the filesystem primitives.
+Inspection is deliberately not folded in with access. `fstatat` with `AT_SYMLINK_NOFOLLOW` still reports a
+symlink as a symlink, so `file_info` and `list_directory` keep describing what is present. What no longer
+happens anywhere is *following* one.
+
+**Slice 5 — done. The repository-file surface.** Every repository-rooted core primitive takes
+`RepositoryRoot`: reads, ranges, metadata, directory listing, replacement, diff preview, text and base64
+creation, exact-hash overwrite, bulk planning and apply, executable mode, and directory creation.
+`guarded_file` walks from a descriptor supplied by `crate::fs::rooted` rather than opening the root by name,
+and `GuardedRegularFile` retains its own root descriptor so revalidation re-walks from the authority that
+opened the file. `create_directory` inspects with `fstatat`, creates with `mkdirat`, and descends with
+`openat`. `fs/path.rs` was deleted rather than migrated: it had no callers and implemented the
+canonicalize-and-compare form this phase removes.
+
+Fifteen actions now receive `EffectiveRepository::root()` from dispatch: `read_range`,
+`read_write_receipts`, `diff_preview`, `replace_exact`, `bulk_replace_exact`, `status_guard`, `file_info`,
+`list_directory`, `read_file_bytes`, `set_file_executable`, `write_new_file`, `write_new_file_base64`,
+`write_existing_file_exact_hash`, `bulk_write_new_files_base64`, and `create_directory`. Every non-artifact
+`resolved_repo_root` call is gone, because resolving a name to decide where to work is precisely what an
+anchored selection must not do.
+
+The boundaries that legitimately need a name ask for one through `canonical_label`, which resolves a
+configured root once and returns an anchored selection's logical path untouched. Locks, receipts, and
+scratch identity use it; nothing else does.
+
+Five grouped dispatch tests cover the surface, each running in both directions: reads and listing, writes
+and replacement and mode and hash-gated overwrite, bulk atomicity including a validation refusal that
+leaves every target unchanged, symlink refusals at intermediate and leaf components across five action
+families, and a replaced root that is refused rather than followed. Siblings carry identically named files
+and outside repositories are asserted unchanged.
+
+**Remaining unanchored uses.** C13 stays open only for the boundaries listed here, each deferred
+deliberately rather than pending:
+
+1. **Repository and file mutation locks**, keyed by the canonical path label. Lock identity must be stable
+   across aliases and across processes, which a descriptor cannot provide.
+2. **Receipt journal and scratch identity**, derived from the canonical path label for the same reason.
+3. **Sidecar artifact operations** — `artifact_write_text`, `artifact_write_base64`,
+   `artifact_delete_exact`, and `artifact_python_run` — which resolve a sidecar root rather than the
+   repository root and keep `resolved_repo_root`.
+4. **Process, fixture, GitHub, capability, and native handlers**, none of which take root authority.
+5. **`exact_worktree_root` for path-backed roots**, which canonicalizes and compares by name. Correct for a
+   configured root reached only by name, and skipped entirely for an anchored selection.
+6. **The Git status scope pathspec**, normalized against the canonical label. It is a pathspec handed to
+   Git rather than a path used for access, but it is recorded here rather than left implicit.
+
+Across the migrated surface, `logical_path()` is read only through `canonical_label`, and only for the
+label boundaries above. No handler reads it to gain access to a file.
 
 The selector is otherwise sound: it rejects parent and current-directory components, absolute paths,
 trailing and doubled separators, backslashes, control characters, drive prefixes, and the Git

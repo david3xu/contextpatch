@@ -20,6 +20,29 @@ This keeps the edit engine reusable by the CLI, context server, editor integrati
 
 The safe edit engine is the product center. CLI and server crates are adapters.
 
+## Repository authority
+
+Operations do not take a repository *path*. They take `RepositoryRoot`, which carries a logical path plus
+the authority that identifies the directory: either a retained directory descriptor, for a validated
+workspace selection, or the name itself, for the configured root. The descriptor is deliberately private, so
+a caller cannot reach past the authority and use the name whenever the descriptor is inconvenient.
+
+Two projections narrow the root to what a boundary needs. `GitRepository` is the Git projection and supplies
+the working directory a guarded subprocess runs in. `crate::fs::rooted` is the filesystem projection and
+supplies descriptor-relative, no-follow primitives for metadata, reads, hashing, listing, rename, unlink,
+and recursive removal.
+
+Both authorities run the same implementation. A selection lends its descriptor; a configured root has one
+opened once with `O_DIRECTORY | O_NOFOLLOW`. Every component after that single open is reached relative to a
+descriptor, so the directory that was checked is the directory that is used, and a configured root is
+exactly as safe as a selected one.
+
+The server's `EffectiveRepository::root()` is the single place a call's authority is decided. Handlers take
+it; they do not resolve names themselves. Boundaries that need a stable name rather than authority — mutation
+locks, the receipt journal, and scratch identity — obtain it from `canonical_label`, which resolves a
+configured root once and returns a selection's recorded path unchanged. That label is never used to reach a
+file.
+
 ## Crate ownership
 
 ### `core`

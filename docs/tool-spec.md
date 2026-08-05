@@ -21,7 +21,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `write_existing_file_exact_hash` | Yes | Existing regular file, exact current SHA-256, dry-run default, explicit confirmation |
 | `file_info` | No | Repo-root-confined metadata for one path or up to 64 unique paths, including mode, symlink status, SHA-256 for files, and UTF-8 line count |
 | `set_file_executable` | Executable bits only | Existing regular file, exact current SHA-256 and mode, dry-run default, explicit confirmation |
-| `list_directory` | No | Bounded deterministic directory listing with optional depth-limited recursion that never follows symlink directories |
+| `list_directory` | No | Bounded deterministic directory listing with optional depth-limited recursion that reports symlink entries without ever following them |
 | `read_file_bytes` | No | Bounded byte range from a regular file as hex or base64 |
 | `artifact_write_text` | Sidecar artifact only | Writes outside repo under fixed artifact root; create-only, no repo mutation |
 | `artifact_write_base64` | Sidecar artifact only | Binary sidecar artifact under fixed artifact root; create-only, size/byte-count guards |
@@ -119,6 +119,14 @@ Rules:
   repository mutation lock, handler, receipt/log identity, refusal text, and timeout recovery guidance.
 - Reuse the existing action handlers and all repository, path, hash, Git-state, dry-run, confirmation,
   process, timeout, and receipt policy without weakening or duplicating it.
+- Hand every repository-rooted action the selection's retained directory authority rather than its name.
+  Git actions and the repository-file actions — content reads, byte ranges, metadata, directory listing,
+  status, diff preview, exact replacement, bulk replacement, text and base64 creation, bulk creation,
+  exact-hash overwrite, executable mode, and directory creation — must all act on the directory that was
+  validated, never on whatever the selector's name resolves to later. Sidecar artifact actions are excluded
+  and continue to resolve a sidecar root.
+- Refuse a symlink at every path component, including the leaf, under both a configured root and a
+  selection. Metadata and listing may still describe a symlink without following it.
 - Reject direct calls to hidden internal tools while project mode is active.
 - Advertise `readOnlyHint: false` because the wrapper can route mutation-capable actions.
 

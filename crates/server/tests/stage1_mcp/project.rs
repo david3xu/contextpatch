@@ -859,3 +859,454 @@ fn project_dispatch_verifies_branch_required_files_in_the_selected_repository() 
     assert!(!has_ref(&target, "refs/heads/feature"));
     assert_eq!(commit_at(&target, "HEAD"), target_head_before);
 }
+
+// ---------------------------------------------------------------------------
+// Repository-file surface isolation.
+//
+// Core reaches files through root authority and dispatch now hands the file handlers that authority, so
+// these exercise the whole path: a selector arrives at `read_range` the same way it already arrived at
+// `git_stage_exact`. Every group runs in both directions, because a test that only ever names one
+// repository cannot distinguish "reached the right one" from "reached the first one".
+// ---------------------------------------------------------------------------
+
+/// A selectable repository holding one file and one nested directory.
+///
+/// Initialized as a Git worktree because the workspace selector requires an exact worktree root for *any*
+/// selection, whatever the action does afterwards. The file surface itself is bounded by path confinement
+/// rather than by that requirement, but a selector cannot reach it without satisfying the selector first.
+fn file_repo(workspace: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let repo = workspace.join(name);
+    fs::create_dir_all(repo.join("nested")).unwrap();
+    init_git_repo(&repo);
+    fs::write(repo.join("sample.txt"), format!("{name} line one\n")).unwrap();
+    fs::write(repo.join("nested").join("inner.txt"), format!("{name} inner\n")).unwrap();
+    repo
+}
+
+fn file_action(repository: &str, action: &str, arguments: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"project_execute","arguments":{{"repository":"{repository}","action":"{action}","arguments":{arguments}}}}}}}"#
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_reads_and_lists_only_the_selected_repository() {
+    let workspace = temp_root("project_file_reads");
+    let target = file_repo(&workspace, "target");
+    let decoy = file_repo(&workspace, "decoy");
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // Each read family answers from the repository it names, and the sibling's identically named file is
+    // never the one that answered.
+    for (selected, other) in [("target", "decoy"), ("decoy", "target")] {
+        let read = server.exchange(&file_action(
+            selected,
+            "read_range",
+            r#"{"path":"sample.txt","start_line":1,"end_line":1}"#,
+        ));
+        let text = response_text(&read).to_string();
+        assert!(text.contains(&format!("{selected} line one")), "{text}");
+        assert!(!text.contains(&format!("{other} line one")), "{text}");
+
+        let info = server.exchange(&file_action(
+            selected,
+            "file_info",
+            r#"{"path":"sample.txt"}"#,
+        ));
+        let parsed: Value = serde_json::from_str(response_text(&info)).unwrap();
+        assert_eq!(
+            parsed["sha256"],
+            sha256_hex_for_test(format!("{selected} line one\n").as_bytes()),
+            "file_info answered from the wrong repository"
+        );
+
+        let bytes = server.exchange(&file_action(
+            selected,
+            "read_file_bytes",
+            r#"{"path":"nested/inner.txt","encoding":"base64"}"#,
+        ));
+        let parsed: Value = serde_json::from_str(response_text(&bytes)).unwrap();
+        assert_eq!(
+            parsed["sha256"],
+            sha256_hex_for_test(format!("{selected} inner\n").as_bytes())
+        );
+
+        let listing = server.exchange(&file_action(
+            selected,
+            "list_directory",
+            r#"{"path":".","recursive":true}"#,
+        ));
+        let text = response_text(&listing);
+        assert!(text.contains("sample.txt"), "{text}");
+        assert!(text.contains("inner.txt"), "{text}");
+
+        let diff = server.exchange(&file_action(
+            selected,
+            "diff_preview",
+            &format!(
+                r#"{{"path":"sample.txt","old":"{selected} line one","new":"changed"}}"#
+            ),
+        ));
+        assert_ne!(
+            diff["result"]["isError"],
+            true,
+            "diff_preview must read the selected repository: {}",
+            response_text(&diff)
+        );
+    }
+
+    server.finish();
+
+    // Reads change nothing.
+    assert_eq!(
+        fs::read_to_string(target.join("sample.txt")).unwrap(),
+        "target line one\n"
+    );
+    assert_eq!(
+        fs::read_to_string(decoy.join("sample.txt")).unwrap(),
+        "decoy line one\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_writes_replacements_and_modes_only_in_the_selected_repository() {
+    let workspace = temp_root("project_file_writes");
+    let outside = file_repo(&temp_root("project_file_writes_outside"), "outside");
+    let target = file_repo(&workspace, "target");
+    let decoy = file_repo(&workspace, "decoy");
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    for (selected, other_name) in [("target", "decoy"), ("decoy", "target")] {
+        let other = workspace.join(other_name);
+
+        let created = server.exchange(&file_action(
+            selected,
+            "write_new_file",
+            &format!(r#"{{"path":"created-{selected}.txt","content":"fresh\n"}}"#),
+        ));
+        assert_ne!(
+            created["result"]["isError"],
+            true,
+            "{}",
+            response_text(&created)
+        );
+        assert!(workspace
+            .join(selected)
+            .join(format!("created-{selected}.txt"))
+            .exists());
+        assert!(!other.join(format!("created-{selected}.txt")).exists());
+
+        let replaced = server.exchange(&file_action(
+            selected,
+            "replace_exact",
+            &format!(
+                r#"{{"path":"sample.txt","old":"{selected} line one","new":"{selected} replaced"}}"#
+            ),
+        ));
+        assert_ne!(
+            replaced["result"]["isError"],
+            true,
+            "{}",
+            response_text(&replaced)
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.join(selected).join("sample.txt")).unwrap(),
+            format!("{selected} replaced\n")
+        );
+        // The sibling's identically named file was not touched by this replacement. Compared against the
+        // marker rather than against original content, because the loop's other iteration edits it too.
+        let sibling = fs::read_to_string(other.join("sample.txt")).unwrap();
+        assert!(
+            !sibling.contains(&format!("{selected} replaced")),
+            "the sibling must not carry the selected repository's edit: {sibling}"
+        );
+        assert!(
+            sibling.contains(other_name),
+            "the sibling still holds its own content: {sibling}"
+        );
+
+        // The directory name carries the selector, so each iteration asserts about a name the other
+        // iteration never created.
+        let directory = server.exchange(&file_action(
+            selected,
+            "create_directory",
+            &format!(r#"{{"path":"generated-{selected}/deep","parents":true}}"#),
+        ));
+        assert_ne!(
+            directory["result"]["isError"],
+            true,
+            "{}",
+            response_text(&directory)
+        );
+        assert!(workspace
+            .join(selected)
+            .join(format!("generated-{selected}"))
+            .join("deep")
+            .is_dir());
+        assert!(!other.join(format!("generated-{selected}")).exists());
+    }
+
+    // The exact-hash overwrite is gated on a digest read through the same surface, so a stale digest from
+    // the sibling must not satisfy it.
+    let info = server.exchange(&file_action(
+        "target",
+        "file_info",
+        r#"{"path":"nested/inner.txt"}"#,
+    ));
+    let parsed: Value = serde_json::from_str(response_text(&info)).unwrap();
+    let target_digest = parsed["sha256"].as_str().unwrap().to_string();
+
+    let wrong = server.exchange(&file_action(
+        "decoy",
+        "write_existing_file_exact_hash",
+        &format!(
+            r#"{{"path":"nested/inner.txt","content":"overwritten\n","expected_sha256":"{target_digest}","dry_run":false,"confirm":"write exact hash"}}"#
+        ),
+    ));
+    assert_eq!(wrong["result"]["isError"], true);
+    assert_text(&wrong, "hash mismatch");
+    assert_eq!(
+        fs::read_to_string(decoy.join("nested").join("inner.txt")).unwrap(),
+        "decoy inner\n",
+        "a refused overwrite must leave the file alone"
+    );
+
+    let right = server.exchange(&file_action(
+        "target",
+        "write_existing_file_exact_hash",
+        &format!(
+            r#"{{"path":"nested/inner.txt","content":"overwritten\n","expected_sha256":"{target_digest}","dry_run":false,"confirm":"write exact hash"}}"#
+        ),
+    ));
+    assert_ne!(
+        right["result"]["isError"],
+        true,
+        "{}",
+        response_text(&right)
+    );
+
+    let mode = server.exchange(&file_action(
+        "target",
+        "set_file_executable",
+        r#"{"path":"sample.txt","executable":true,"dry_run":true}"#,
+    ));
+    server.finish();
+    assert_ne!(mode["result"]["isError"], true, "{}", response_text(&mode));
+
+    assert_eq!(
+        fs::read_to_string(target.join("nested").join("inner.txt")).unwrap(),
+        "overwritten\n"
+    );
+    assert_eq!(
+        fs::read_to_string(decoy.join("nested").join("inner.txt")).unwrap(),
+        "decoy inner\n"
+    );
+    // Nothing reached the repository outside the workspace.
+    assert_eq!(
+        fs::read_to_string(outside.join("sample.txt")).unwrap(),
+        "outside line one\n"
+    );
+    assert!(!outside.join("generated-target").exists());
+    assert!(!outside.join("generated-decoy").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_bulk_actions_stay_atomic_within_the_selected_repository() {
+    let workspace = temp_root("project_file_bulk");
+    let target = file_repo(&workspace, "target");
+    let decoy = file_repo(&workspace, "decoy");
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // A bulk write lands entirely in the selected repository. Paths are root-level because this action
+    // does not create parent directories, which is existing behavior rather than something to work around.
+    let written = server.exchange(&file_action(
+        "target",
+        "bulk_write_new_files_base64",
+        r#"{"entries":[{"path":"bulk-one.txt","content_base64":"b25l"},{"path":"bulk-two.txt","content_base64":"dHdv"}]}"#,
+    ));
+    assert_ne!(
+        written["result"]["isError"],
+        true,
+        "{}",
+        response_text(&written)
+    );
+    assert!(target.join("bulk-one.txt").exists());
+    assert!(target.join("bulk-two.txt").exists());
+    assert!(!decoy.join("bulk-one.txt").exists());
+    assert!(!decoy.join("bulk-two.txt").exists());
+
+    // A bulk replacement that fails validation writes nothing. The second hunk names a file that does not
+    // exist, so the first must not land either.
+    let refused = server.exchange(&file_action(
+        "decoy",
+        "bulk_replace_exact",
+        r#"{"entries":[{"path":"sample.txt","old":"decoy line one","new":"changed"},{"path":"absent.txt","old":"x","new":"y"}]}"#,
+    ));
+    assert_eq!(refused["result"]["isError"], true);
+    assert_eq!(
+        fs::read_to_string(decoy.join("sample.txt")).unwrap(),
+        "decoy line one\n",
+        "validation refusals leave every target unchanged"
+    );
+
+    // And the successful direction, against the other repository.
+    let applied = server.exchange(&file_action(
+        "decoy",
+        "bulk_replace_exact",
+        r#"{"entries":[{"path":"sample.txt","old":"decoy line one","new":"decoy changed"},{"path":"nested/inner.txt","old":"decoy inner","new":"decoy inner changed"}]}"#,
+    ));
+    server.finish();
+
+    assert_ne!(
+        applied["result"]["isError"],
+        true,
+        "{}",
+        response_text(&applied)
+    );
+    assert_eq!(
+        fs::read_to_string(decoy.join("sample.txt")).unwrap(),
+        "decoy changed\n"
+    );
+    // The sibling was never a target of either batch.
+    assert_eq!(
+        fs::read_to_string(target.join("sample.txt")).unwrap(),
+        "target line one\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_refuses_symlinked_paths_across_the_file_surface() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = temp_root("project_file_symlinks");
+    let outside = temp_root("project_file_symlinks_outside");
+    fs::write(outside.join("secret.txt"), "outside secret\n").unwrap();
+    let target = file_repo(&workspace, "target");
+    // One link at an intermediate component and one at the leaf.
+    symlink(&outside, target.join("escape")).unwrap();
+    symlink("sample.txt", target.join("alias.txt")).unwrap();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // An intermediate symlink is refused by every family that resolves a path.
+    for (action, arguments) in [
+        ("read_range", r#"{"path":"escape/secret.txt","start_line":1,"end_line":1}"#),
+        ("read_file_bytes", r#"{"path":"escape/secret.txt"}"#),
+        (
+            "replace_exact",
+            r#"{"path":"escape/secret.txt","old":"outside","new":"x"}"#,
+        ),
+        (
+            "write_new_file",
+            r#"{"path":"escape/created.txt","content":"x\n"}"#,
+        ),
+        (
+            "create_directory",
+            r#"{"path":"escape/generated","parents":true}"#,
+        ),
+    ] {
+        let response = server.exchange(&file_action("target", action, arguments));
+        assert_eq!(
+            response["result"]["isError"], true,
+            "{action} must refuse an intermediate symlink: {}",
+            response_text(&response)
+        );
+    }
+
+    // A symlink at the leaf is reported as a symlink by inspection, and refused by reading.
+    let info = server.exchange(&file_action(
+        "target",
+        "file_info",
+        r#"{"path":"alias.txt"}"#,
+    ));
+    let parsed: Value = serde_json::from_str(response_text(&info)).unwrap();
+    assert_eq!(
+        parsed["kind"], "symlink",
+        "inspection describes what is there rather than following it"
+    );
+    assert_eq!(parsed["is_symlink"], true);
+
+    let read = server.exchange(&file_action(
+        "target",
+        "read_range",
+        r#"{"path":"alias.txt","start_line":1,"end_line":1}"#,
+    ));
+    server.finish();
+    assert_eq!(
+        read["result"]["isError"], true,
+        "reading a symlink leaf is refused rather than followed: {}",
+        response_text(&read)
+    );
+
+    // Nothing outside the workspace was read, written, or created.
+    assert_eq!(
+        fs::read_to_string(outside.join("secret.txt")).unwrap(),
+        "outside secret\n"
+    );
+    assert!(!outside.join("created.txt").exists());
+    assert!(!outside.join("generated").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_file_actions_do_not_follow_a_replaced_root() {
+    use std::os::unix::fs::symlink;
+
+    // The case the retained descriptor exists for, now proven through the file surface rather than only
+    // through Git. A selection is validated, then its name is taken over by a different directory.
+    let workspace = temp_root("project_file_replaced_root");
+    let target = file_repo(&workspace, "target");
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // Establish that the selector works before the swap.
+    let before = server.exchange(&file_action(
+        "target",
+        "read_range",
+        r#"{"path":"sample.txt","start_line":1,"end_line":1}"#,
+    ));
+    assert!(response_text(&before).contains("target line one"));
+
+    // Move the selected directory aside and leave a different one under its name.
+    let holder = temp_root("project_file_replaced_root_holder");
+    let moved = holder.join("moved");
+    fs::rename(&target, &moved).unwrap();
+    let replacement = holder.join("replacement");
+    fs::create_dir_all(replacement.join("nested")).unwrap();
+    fs::write(replacement.join("sample.txt"), "replacement line one\n").unwrap();
+    symlink(&replacement, &target).unwrap();
+
+    // Reads and writes refuse rather than answering from, or writing into, the replacement.
+    for (action, arguments) in [
+        ("read_range", r#"{"path":"sample.txt","start_line":1,"end_line":1}"#),
+        ("write_new_file", r#"{"path":"leaked.txt","content":"x\n"}"#),
+        ("list_directory", r#"{"path":"."}"#),
+    ] {
+        let response = server.exchange(&file_action("target", action, arguments));
+        let text = response_text(&response).to_string();
+        assert_eq!(
+            response["result"]["isError"], true,
+            "{action} must refuse a replaced root: {text}"
+        );
+        assert!(
+            !text.contains("replacement line one"),
+            "{action} must not answer from the replacement: {text}"
+        );
+    }
+
+    server.finish();
+
+    // The replacement was never written into, and the directory that was selected is intact.
+    assert!(!replacement.join("leaked.txt").exists());
+    assert_eq!(
+        fs::read_to_string(replacement.join("sample.txt")).unwrap(),
+        "replacement line one\n"
+    );
+    assert_eq!(
+        fs::read_to_string(moved.join("sample.txt")).unwrap(),
+        "target line one\n"
+    );
+}

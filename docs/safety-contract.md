@@ -46,11 +46,12 @@ This document is normative. If implementation behavior conflicts with this file,
     terminates the server promptly even when the client leaves stdin open.
 30. Background task-image, Harbor, and validation-profile work must share a fixed concurrency cap,
     return stable pollable log ids, and report restart-orphaned active work as unknown.
-31. Repository file reads and writes must refuse intermediate symlink components rather than follow
-    them. Content reads, metadata inspection, directory listing, exact-hash replacement,
-    executable-bit changes, and create-only publication currently require Unix and must traverse
-    through no-follow directory descriptors; non-Unix builds must refuse rather than use path-based
-    check-then-open fallbacks.
+31. Repository file reads and writes must refuse symlink components at every position, including the
+    leaf, rather than follow them, under both configured and selected repository roots. Content reads,
+    metadata inspection, directory listing, exact-hash replacement, executable-bit changes, directory
+    creation, and create-only publication currently require Unix and must traverse through no-follow
+    directory descriptors rooted in the repository's own authority; non-Unix builds must refuse rather
+    than use path-based check-then-open fallbacks.
 32. Regular-file metadata and bounded byte reads must derive size, digest, line count, and returned
     bytes from one fixed-extent streamed snapshot. They must use bounded memory, refuse metadata or
     path-identity changes, and never chase a concurrently growing end-of-file.
@@ -93,8 +94,29 @@ On Unix, guarded repository file operations must hold already-open parent-direct
 while inspecting, creating, publishing, or replacing leaf entries. Path-based prechecks alone are
 not sufficient because an intermediate symlink must not redirect the operation outside the root.
 Immediately before publication, replacement, or descriptor-based mode mutation, the expected parent
-path must be reopened from the repository root and its filesystem identity must still match the held
-descriptor.
+must be re-walked from the retained repository-root descriptor and its filesystem identity must still
+match the held descriptor.
+
+The repository root itself is reached through authority rather than by name. A selected repository lends
+the directory descriptor that validated it; a configured repository has one opened once with
+`O_DIRECTORY | O_NOFOLLOW`, and that single open is the only name resolution an operation performs. Every
+component after it is reached with descriptor-relative, no-follow calls. The two cases must behave
+identically: a safety property that held only for selected repositories would not be a safety property.
+
+A consequence is stated explicitly because it is user-visible. No repository file operation follows a
+symlink at any component, including the leaf, and including a symlink whose target resolves back inside the
+repository. A repository root whose own name has become a symlink is refused rather than followed to
+whatever now occupies that name. Inspection is the sole exception and is not an exception to following: a
+final symlink may be *described*, including its target and whether that target resolves inside the
+repository, but it is never opened, hashed, or traversed.
+
+Boundaries that require a stable name rather than authority — repository and file mutation locks, the
+receipt journal, and scratch identity — must derive it from one canonical label helper that resolves a
+configured root once and returns a selected root's recorded path unchanged. A selected repository's path
+must never be re-resolved, and no operation may read that label to gain access to a file.
+
+If the platform cannot provide descriptor-relative operations, guarded repository file access must refuse
+rather than degrade to path resolution.
 
 If the platform cannot provide the expected atomic behavior, the operation must report that limitation.
 
