@@ -209,6 +209,108 @@ fn stage2_bulk_replace_exact_refuses_contradictory_hunks_for_one_file() {
 }
 
 #[test]
+fn stage2_bulk_replace_exact_journals_refused_receipts_for_validation_failures() {
+    // A validation refusal writes nothing, which used to mean it also left no evidence: a refused
+    // batch was indistinguishable from a batch that was never attempted. Every named target now gets a
+    // refused receipt, recorded before any mutation could have happened.
+    let root = git_repo("stage2_bulk_replace_refused_receipts");
+    fs::write(root.join("one.txt"), "alpha beta gamma\n").unwrap();
+    fs::write(root.join("two.txt"), "delta epsilon\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let refused = run_server(
+        &root,
+        &[
+            // The first entry is valid; the second cannot resolve, so the whole batch refuses.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"beta","new":"BETA"},{"path":"two.txt","old":"missing","new":"MISSING"}]}}}"#,
+        ],
+    );
+    let refusal = response_text(&refused[0]);
+    assert_eq!(refused[0]["result"]["isError"], true);
+    assert!(refusal.contains("no file was changed"), "{refusal}");
+
+    // All-or-nothing survives: the valid entry was not applied either.
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha beta gamma\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("two.txt")).unwrap(),
+        "delta epsilon\n"
+    );
+
+    let journal = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_write_receipts","arguments":{"limit":10}}}"#,
+        ],
+    );
+    let receipts: Value = serde_json::from_str(response_text(&journal[0])).unwrap();
+    let listed: Vec<&Value> = receipts["receipts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["tool"] == "bulk_replace_exact")
+        .collect();
+
+    assert_eq!(listed.len(), 2, "one receipt per named target: {receipts}");
+    let mut paths: Vec<&str> = listed
+        .iter()
+        .filter_map(|entry| entry["path"].as_str())
+        .collect();
+    paths.sort_unstable();
+    assert_eq!(paths, ["one.txt", "two.txt"]);
+    for entry in &listed {
+        assert_eq!(entry["outcome"], "refused", "{entry}");
+        assert_eq!(entry["interrupted"], false, "{entry}");
+        // The refusal changed nothing, so both digests describe the same untouched file.
+        assert!(entry["before_sha256"].is_string(), "{entry}");
+        assert_eq!(entry["before_sha256"], entry["after_sha256"], "{entry}");
+    }
+}
+
+#[test]
+fn stage2_bulk_replace_exact_journals_one_refused_receipt_per_file_not_per_hunk() {
+    // Several hunks in one file would have shared a single write, so a refusal shares a single receipt.
+    let root = git_repo("stage2_bulk_replace_refused_receipt_per_file");
+    fs::write(root.join("one.txt"), "alpha beta gamma\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+
+    let refused = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"bulk_replace_exact","arguments":{"entries":[{"path":"one.txt","old":"alpha","new":"ALPHA"},{"path":"one.txt","old":"gamma","new":"GAMMA"},{"path":"one.txt","old":"missing","new":"MISSING"}]}}}"#,
+        ],
+    );
+    assert_eq!(refused[0]["result"]["isError"], true);
+    assert_eq!(
+        fs::read_to_string(root.join("one.txt")).unwrap(),
+        "alpha beta gamma\n"
+    );
+
+    let journal = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_write_receipts","arguments":{"limit":10}}}"#,
+        ],
+    );
+    let receipts: Value = serde_json::from_str(response_text(&journal[0])).unwrap();
+    let listed = receipts["receipts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["tool"] == "bulk_replace_exact")
+        .count();
+
+    assert_eq!(
+        listed, 1,
+        "three hunks in one file share one receipt: {receipts}"
+    );
+}
+
+#[test]
 fn stage2_file_mutations_report_verified_post_write_digests() {
     // Every successful mutation reports the digest of what it wrote, so a caller can chain it as the
     // next expected_sha256 without a separate read. Each reported digest must equal the file on disk.

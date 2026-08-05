@@ -122,7 +122,15 @@ ranges intersect, and entries demanding different digests for one file are all r
 Two different paths that resolve to one file remain refused, because grouping is by path and an alias
 would otherwise yield two snapshots of the same bytes whose second write discards the first.
 
-A validation refusal occurs before the first write and leaves all targets unchanged. Apply compares each
+A validation refusal occurs before the first write and leaves all targets unchanged, and it journals a
+`refused` receipt for every named target so that a refused batch is distinguishable from a batch that was
+never attempted. Those receipts are written per file rather than per hunk, matching the one write a file
+would have received, and each records the digest before and after, reporting `unknown` instead of
+`refused` when they differ because an external writer during validation defeats any claim that the file
+is untouched. A journal failure is appended to the refusal rather than replacing it, so it never masks the
+validation error.
+
+Apply compares each
 target's exact captured bytes while holding its mutation lock, verifies that the plan is being applied
 under the same canonical repository root where it was created, then uses the normal atomic replacement
 path, so every hunk for a file lands in one write and no file is observed partially edited. Permission

@@ -985,13 +985,32 @@ pub(crate) fn call_bulk_replace_exact(
             },
         )
         .collect();
-    let planned = contextpatch_core::replace::exact::plan_bulk_replace_exact_in_root(
+    let planned = match contextpatch_core::replace::exact::plan_bulk_replace_exact_in_root(
         repo_root,
         &core_entries,
-    )
-    .map_err(|error| {
-        format!("{tool_name} refused during validation: {error}; no file was changed")
-    })?;
+    ) {
+        Ok(planned) => planned,
+        Err(error) => {
+            // Validation completes before the first write, so a refusal here leaves every target
+            // alone. Journal that fact: without it, a refused batch is indistinguishable from a batch
+            // that was never attempted. Targets are sorted and deduplicated so the receipts appear in
+            // the same order the planner would have used, and a file named by several hunks is
+            // journalled once, because one file would have received one write.
+            let mut targets: Vec<String> = parsed.iter().map(|entry| entry.path.clone()).collect();
+            targets.sort();
+            targets.dedup();
+
+            let mut refusal =
+                format!("{tool_name} refused during validation: {error}; no file was changed");
+            for auxiliary in
+                crate::tools::journal::record_refused_batch(repo_root, tool_name, &targets)
+            {
+                refusal.push_str("; ");
+                refusal.push_str(&auxiliary);
+            }
+            return Err(refusal);
+        }
+    };
 
     // One receipt per file, matching the one atomic write per file that follows. Entries that share a
     // file share its receipt, because they share its write.

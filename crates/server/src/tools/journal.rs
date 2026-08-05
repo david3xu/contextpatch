@@ -125,6 +125,93 @@ pub(crate) fn recorded_in_batch<T>(
     combine_result(result, auxiliary_errors)
 }
 
+/// Journal a `refused` receipt for every target of a batch whose validation failed.
+///
+/// Batch validation runs to completion before the first write, so a refusal there is the one case
+/// where a caller learns nothing from the journal: the tool was invoked, it touched nothing, and it
+/// left no evidence of either fact. Recording the attempt makes a refusal indistinguishable from a
+/// successful no-op only in outcome, never in whether it happened.
+///
+/// Semantics match the single-file path exactly. Each receipt captures the digest before and after and
+/// reports `unknown` rather than `refused` when those differ, because an external writer during
+/// validation means this tool cannot claim the file is untouched. Receipts follow the order of
+/// `relative_paths`, so a caller that sorts its targets gets a deterministic journal.
+///
+/// Paths must already be repository-relative and normalized. Auxiliary problems are returned rather
+/// than raised, so a journal failure never masks the validation refusal that caused it.
+pub(crate) fn record_refused_batch(
+    repo_root: &Path,
+    tool: &str,
+    relative_paths: &[String],
+) -> Vec<String> {
+    let mut auxiliary_errors = Vec::new();
+    if relative_paths.is_empty() {
+        return auxiliary_errors;
+    }
+
+    let root = match repo_root.canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            auxiliary_errors.push(format!(
+                "{tool} could not journal refused receipts: failed to resolve repo root: {error}"
+            ));
+            return auxiliary_errors;
+        }
+    };
+    let mut batch = match receipt::begin_file_batch(repo_root, tool, relative_paths) {
+        Ok(batch) => batch,
+        Err(error) => {
+            auxiliary_errors.push(format!(
+                "{tool} could not reserve refused receipt capacity: {error}"
+            ));
+            return auxiliary_errors;
+        }
+    };
+
+    for normalized in relative_paths {
+        let target = root.join(normalized);
+        let before = match digest_of(&target) {
+            Ok(before) => before,
+            Err(error) => {
+                auxiliary_errors.push(format!(
+                    "{tool} could not collect before-state receipt evidence for `{normalized}`: {error}"
+                ));
+                continue;
+            }
+        };
+        let id = match batch.begin_file(normalized, before.as_deref()) {
+            Ok(id) => id,
+            Err(error) => {
+                auxiliary_errors.push(format!(
+                    "{tool} could not journal a refused receipt for `{normalized}`: {error}"
+                ));
+                continue;
+            }
+        };
+
+        let after = digest_of(&target);
+        let outcome = match &after {
+            Ok(after) if *after == before => Outcome::Refused,
+            Ok(_) | Err(_) => Outcome::Unknown,
+        };
+        let settlement = match &after {
+            Ok(after) => batch.settle_file(&id, outcome, after.as_deref()),
+            Err(_) => batch.settle_file(&id, outcome, None),
+        };
+
+        if let Err(error) = after {
+            auxiliary_errors.push(format!(
+                "{tool} could not collect after-state receipt evidence for `{normalized}`: {error}"
+            ));
+        }
+        if let Err(error) = settlement {
+            auxiliary_errors.push(settlement_error(tool, error));
+        }
+    }
+
+    auxiliary_errors
+}
+
 pub(crate) fn recorded_deletions<T>(
     repo_root: &Path,
     tool: &str,
@@ -290,5 +377,45 @@ mod tests {
         assert!(result.is_err());
         let receipt = receipt::all(&root).unwrap().remove(0);
         assert_eq!(receipt.outcome.as_deref(), Some("unknown"));
+    }
+
+    #[test]
+    fn a_refused_batch_journals_one_unchanged_receipt_per_target() {
+        let root = temp_repo("refused_batch");
+        fs::write(root.join("one.txt"), "first").unwrap();
+        fs::write(root.join("two.txt"), "second").unwrap();
+        // Sorted and deduplicated by the caller, which is what makes the journal deterministic.
+        let targets = vec!["one.txt".to_string(), "two.txt".to_string()];
+
+        let auxiliary = record_refused_batch(&root, "bulk_replace_exact", &targets);
+
+        assert!(auxiliary.is_empty(), "{auxiliary:?}");
+        let receipts = receipt::all(&root).unwrap();
+        assert_eq!(receipts.len(), 2);
+        for entry in &receipts {
+            assert_eq!(entry.outcome.as_deref(), Some("refused"));
+            assert!(!entry.interrupted());
+            // Nothing was written, so the digests must bracket an unchanged file.
+            assert!(entry.before_sha256.is_some());
+            assert_eq!(entry.before_sha256, entry.after_sha256);
+        }
+        let mut paths: Vec<&str> = receipts
+            .iter()
+            .filter_map(|entry| entry.path.as_deref())
+            .collect();
+        paths.sort_unstable();
+        assert_eq!(paths, ["one.txt", "two.txt"]);
+        assert_eq!(fs::read_to_string(root.join("one.txt")).unwrap(), "first");
+        assert_eq!(fs::read_to_string(root.join("two.txt")).unwrap(), "second");
+    }
+
+    #[test]
+    fn a_refused_batch_with_no_targets_journals_nothing() {
+        let root = temp_repo("refused_batch_empty");
+
+        let auxiliary = record_refused_batch(&root, "bulk_replace_exact", &[]);
+
+        assert!(auxiliary.is_empty(), "{auxiliary:?}");
+        assert!(receipt::all(&root).unwrap().is_empty());
     }
 }

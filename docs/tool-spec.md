@@ -342,6 +342,13 @@ Rules:
 - If any entry fails validation, refuse before the first write and leave every target unchanged. The
   refusal names the offending entry by its position in the caller's list, not its position after
   grouping.
+- Journal a `refused` receipt for every named target when validation fails, before any mutation could
+  have occurred. Without it a refused batch is indistinguishable from a batch that was never attempted,
+  which is the one gap the journal is supposed to close. One receipt per file, not per hunk, because one
+  file would have received one write. Each receipt records the digest before and after and reports
+  `unknown` rather than `refused` when they differ, since an external writer during validation means the
+  tool cannot claim the file is untouched. A journal problem is appended to the refusal rather than
+  replacing it, so it never masks the validation error that caused it.
 - Order plans by normalized path, so grouping, lock acquisition, and refusal reporting stay
   deterministic regardless of the order entries were submitted in.
 - Apply every hunk for one file in that file's single atomic write, so no file is observed partially
