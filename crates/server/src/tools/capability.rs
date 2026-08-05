@@ -97,7 +97,7 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
         "tool_surface": {
             "mode": surface.as_str(),
             "public_tool_names": crate::tools::schema::public_tool_names(surface),
-            "action_names": crate::tools::schema::internal_action_names(),
+            "action_names": crate::tools::schema::wrapper_action_names(surface),
             "action_definitions": crate::tools::schema::internal_action_definitions(),
             "note": "Full mode advertises each action as a direct MCP tool. Project mode advertises \
                      only project_execute while preserving the same internal actions and safety \
@@ -615,7 +615,7 @@ pub(crate) fn call_capability_manifest(
                 "build": build,
                 "tool_surface": surface.as_str(),
                 "tool_names": crate::tools::schema::public_tool_names(surface),
-                "action_names": crate::tools::schema::internal_action_names()
+                "action_names": crate::tools::schema::wrapper_action_names(surface)
             })
         }
         (false, Some(section)) => {

@@ -66,7 +66,10 @@ is an intentional one-time metadata change and can require one renewed Claude ap
 
 Reserve `action: "describe"` for discovery:
 
-- With no `arguments.name`, return the build stamp and compact sorted action list.
+- With no `arguments.name`, return the build stamp and compact sorted action list. The list includes
+  `describe` itself, because a client that enumerates actions must be able to discover the one action it
+  needs in order to enumerate anything else. The wrapper description advertises the narrowed form, so
+  the full schema dump is a deliberate choice rather than the default a caller stumbles into.
 - With `arguments.name`, return that action's description, input schema, annotations, and confirmation
   requirements.
 - Reject unknown names and `project_execute` recursion.

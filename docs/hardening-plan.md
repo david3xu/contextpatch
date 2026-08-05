@@ -103,11 +103,12 @@ previously told the reader that a matching sha was sufficient.
 Open, and tracked as C05. Until this lands, `capability_manifest` describes a binary older than the
 source tree.
 
-## Phase 2 — Daily edit ergonomics
+## Phase 2 — Daily edit ergonomics (complete)
 
 The highest-frequency friction points for routine use, all independent of the structural work that
-follows. **Execute one concern per commit**, each with focused tests and documentation synchronized
-in the same commit.
+follows. All four concerns landed one per commit, each with focused tests and documentation
+synchronized in the same commit. The subsections below are retained as the record of what was
+delivered and why.
 
 ### 2.1 Allow multiple hunks per file (C06)
 
@@ -415,10 +416,10 @@ Phase-specific checks:
 | C03 | Critical modules and the server test tree were untracked | 1.1 | Complete |
 | C04 | Build stamp could not be pinned to a dirty tree | 1.2 | Complete |
 | C05 | Installed binary predates the landed fixes | 1.3 | Unverified |
-| C06 | Multiple hunks in one file are refused by the batch tool | 2.1 | Open |
-| C07 | Mutating responses omit the resulting digest | 2.2 | Open |
-| C08 | Batch validation refusals leave no receipt | 2.3 | Open |
-| C09 | Cheap discovery projections are undocumented; meta action unlisted | 2.4 | Open |
+| C06 | Multiple hunks in one file are refused by the batch tool | 2.1 | Complete |
+| C07 | Mutating responses omit the resulting digest | 2.2 | Complete |
+| C08 | Batch validation refusals leave no receipt | 2.3 | Complete |
+| C09 | Cheap discovery projections are undocumented; meta action unlisted | 2.4 | Complete |
 | C10 | Git policy lives in the server crate against the stated boundary | 3.2 | Open |
 | C11 | Three helpers share one name with two semantics | 3.3 | Open |
 | C12 | Worktree-root requirement is inconsistent across tools | 3.1 | Open |

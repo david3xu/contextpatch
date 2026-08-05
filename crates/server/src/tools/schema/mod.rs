@@ -39,6 +39,22 @@ pub(crate) fn internal_action_names() -> Vec<String> {
     sorted_definition_names(&internal_tool_definitions())
 }
 
+/// Action names a wrapper caller may pass, including the meta action where it is dispatchable.
+///
+/// [`internal_action_names`] reports the tool registry, which the documentation-contract tests compare
+/// against the specification. `describe` is dispatched by the wrapper rather than registered as a tool,
+/// so it belongs in what a project-surface caller is told it can call, and nowhere in full mode where
+/// the wrapper is not advertised at all. Without it, a client that enumerates actions cannot discover
+/// the one action it needs in order to enumerate anything else.
+pub(crate) fn wrapper_action_names(surface: ToolSurface) -> Vec<String> {
+    let mut names = internal_action_names();
+    if surface == ToolSurface::Project {
+        names.push(crate::tools::project_execute::DESCRIBE_ACTION.to_string());
+        names.sort();
+    }
+    names
+}
+
 pub(crate) fn internal_action_definitions() -> Vec<Value> {
     internal_tool_definitions()
 }
@@ -168,6 +184,58 @@ mod tests {
 
     fn registered_names() -> Vec<String> {
         documented_tool_names()
+    }
+
+    #[test]
+    fn the_wrapper_description_advertises_the_cheap_discovery_projections() {
+        // The wrapper schema is the only thing a project-surface client reads before its first call. If
+        // the narrowed forms are absent from it, the natural first call returns every action schema and
+        // pays that cost in every session, which is exactly what happened before this test existed.
+        let definition = project_tool_definition();
+        let description = definition["description"].as_str().unwrap();
+
+        for advertised in [
+            "arguments.name",
+            "names_only",
+            "response_mode",
+            "minimal",
+            crate::tools::project_execute::DESCRIBE_ACTION,
+            "capability_manifest",
+            "preflight_health",
+        ] {
+            assert!(
+                description.contains(advertised),
+                "the wrapper description must advertise `{advertised}`: {description}"
+            );
+        }
+
+        let arguments = definition["inputSchema"]["properties"]["arguments"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            arguments.contains("name"),
+            "the arguments property must point at the narrowed describe form: {arguments}"
+        );
+    }
+
+    #[test]
+    fn the_meta_action_is_reported_only_where_it_is_dispatchable() {
+        let project = wrapper_action_names(ToolSurface::Project);
+        let full = wrapper_action_names(ToolSurface::Full);
+        let describe = crate::tools::project_execute::DESCRIBE_ACTION.to_string();
+
+        // Project mode dispatches the meta action through the wrapper, so a client enumerating actions
+        // must see it. Full mode does not advertise the wrapper at all, so reporting it there would name
+        // something uncallable.
+        assert!(project.contains(&describe), "{project:?}");
+        assert!(!full.contains(&describe), "{full:?}");
+        assert_eq!(project.len(), full.len() + 1);
+        assert_eq!(full, internal_action_names());
+
+        // Still sorted, so the reported list stays deterministic.
+        let mut sorted = project.clone();
+        sorted.sort();
+        assert_eq!(project, sorted);
     }
 
     #[test]

@@ -4,6 +4,13 @@ use crate::tools;
 
 pub mod project_execute {
     pub const NAME: &str = "project_execute";
+
+    /// Meta action dispatched by the wrapper rather than registered as a tool.
+    ///
+    /// Named because it is referenced from the wrapper schema, the reported action-name lists, and the
+    /// refusal that points a caller at it. A bare literal in four places is one rename away from a
+    /// surface that lies about what it accepts.
+    pub const DESCRIBE_ACTION: &str = "describe";
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,7 +73,7 @@ pub(crate) fn resolve(arguments: &Map<String, Value>) -> Result<ProjectCall, Str
         })
         .transpose()?;
 
-    if action == "describe" {
+    if action == project_execute::DESCRIBE_ACTION {
         reject_unknown_keys(&nested, &["name", "action"])?;
         let name =
             match (nested.get("name"), nested.get("action")) {
@@ -89,8 +96,9 @@ pub(crate) fn resolve(arguments: &Map<String, Value>) -> Result<ProjectCall, Str
     }
     if tools::schema::internal_action_definition(action).is_none() {
         return Err(format!(
-            "project_execute refused: unknown action `{action}`; use action `describe` to list \
-             available actions"
+            "project_execute refused: unknown action `{action}`; use action `{}` to list \
+             available actions",
+            project_execute::DESCRIBE_ACTION
         ));
     }
 
@@ -107,8 +115,8 @@ fn describe(name: &str) -> Result<String, String> {
             "server": "contextpatch",
             "build": tools::capability::build_metadata(),
             "tool_surface": ToolSurface::Project.as_str(),
-            "action_count": tools::schema::internal_action_names().len(),
-            "action_names": tools::schema::internal_action_names(),
+            "action_count": tools::schema::wrapper_action_names(ToolSurface::Project).len(),
+            "action_names": tools::schema::wrapper_action_names(ToolSurface::Project),
             "action_definitions": tools::schema::internal_action_definitions(),
             "repository_selection": {
                 "argument": "repository",

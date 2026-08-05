@@ -134,7 +134,9 @@ Required inputs: none.
 
 Optional inputs:
 
-- `names_only`: return the active public tool names and sorted internal action names
+- `names_only`: return the active public tool names and sorted internal action names. In project mode the
+  action names include `describe`, matching what the wrapper will actually dispatch; in full mode they do
+  not, because the wrapper is not advertised there and naming it would name something uncallable.
 - `section`: return one of `build`, `tool_surface`, `scratch`, `deadlines_seconds`, `mutation_coordination`,
   `write_receipts`, `file_tools`, `git_workflows`, `github_workflows`, `process_execution`,
   `setup_profiles`, `native_build`, or `native_device`

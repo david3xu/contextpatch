@@ -46,10 +46,21 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
     let tools = responses[1]["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["name"], "project_execute");
-    assert_eq!(
-        tools[0]["description"],
-        "Describe or execute one guarded ContextPatch action for this configured project."
+    let description = tools[0]["description"].as_str().unwrap();
+    assert!(
+        description.starts_with(
+            "Describe or execute one guarded ContextPatch action for this configured project."
+        ),
+        "{description}"
     );
+    // The wrapper schema is all a project-surface client sees before its first call, so the cheap
+    // projections have to be advertised there. Exact wording is pinned by the schema unit test.
+    for advertised in ["arguments.name", "names_only", "response_mode"] {
+        assert!(
+            description.contains(advertised),
+            "the wrapper description must advertise `{advertised}`: {description}"
+        );
+    }
     assert_eq!(
         tools[0]["inputSchema"]["properties"]["repository"]["type"],
         "string"
@@ -70,16 +81,24 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
 
     let discovery: Value = serde_json::from_str(response_text(&responses[2])).unwrap();
     assert_eq!(discovery["tool_surface"], "project");
-    assert_eq!(discovery["action_count"], 52);
+    // One more than the registered tool count, because the meta action is dispatchable too and a client
+    // that enumerates actions must be able to find it.
+    assert_eq!(discovery["action_count"], 53);
     assert_eq!(
         discovery["action_definitions"].as_array().unwrap().len(),
         52
     );
-    assert!(discovery["action_names"]
+    let discovered: Vec<&str> = discovery["action_names"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|name| name == "replace_exact"));
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(discovered.contains(&"replace_exact"));
+    assert!(
+        discovered.contains(&"describe"),
+        "reported action names must include the meta action: {discovered:?}"
+    );
 
     let read_definition: Value = serde_json::from_str(response_text(&responses[3])).unwrap();
     assert_eq!(read_definition["definition"]["name"], "read_range");
@@ -95,7 +114,15 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
         capabilities["tool_names"],
         serde_json::json!(["project_execute"])
     );
-    assert_eq!(capabilities["action_names"].as_array().unwrap().len(), 52);
+    assert_eq!(capabilities["action_names"].as_array().unwrap().len(), 53);
+    assert!(
+        capabilities["action_names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "describe"),
+        "the cheap names_only projection must also advertise the meta action: {capabilities}"
+    );
     assert!(
         capabilities.get("action_definitions").is_none(),
         "names_only must omit full action schemas"
