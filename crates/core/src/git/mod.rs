@@ -1,6 +1,7 @@
 pub mod commit;
 pub mod delete_guarded;
 mod guarded_path;
+pub mod repository;
 pub mod restore;
 pub mod state;
 pub mod status;
@@ -15,3 +16,4 @@ pub use workspace::{select_workspace_repository, SelectedRepository};
 /// check. The rest of `guarded_path` stays private on purpose; only the two resolvers are public, and
 /// they differ solely in what they demand beyond resolution.
 pub use guarded_path::{exact_worktree_root, exact_worktree_root_in, resolve_repo_root};
+pub use repository::GitRepository;

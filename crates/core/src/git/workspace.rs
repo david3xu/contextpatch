@@ -33,16 +33,13 @@ impl SelectedRepository {
         &self.relative
     }
 
-    /// A working directory anchored to the retained descriptor.
+    /// This selection as a repository target that policy functions accept.
     ///
-    /// Handing this to the guarded runner makes the child change into the directory that was validated,
-    /// rather than resolving a name that may since have been replaced.
+    /// The descriptor travels with it, so every operation reached through this target runs against the
+    /// directory that was validated rather than re-resolving a name.
     #[cfg(unix)]
-    pub fn command_cwd(&self) -> CommandCwd<'_> {
-        CommandCwd::Anchored {
-            directory: &self.directory,
-            logical_path: &self.path,
-        }
+    pub fn repository(&self) -> crate::git::GitRepository<'_> {
+        crate::git::GitRepository::anchored(&self.path, &self.directory)
     }
 
     /// Prove the resolved path still names the directory the descriptor is anchored to.
@@ -351,7 +348,7 @@ mod tests {
         commit_marker(&decoy, "replacement\n");
 
         let selected = select_workspace_repository(&workspace, "target").unwrap();
-        let original_head = state::stdout(selected.command_cwd(), &["rev-parse", "HEAD"])
+        let original_head = state::stdout(selected.repository(), &["rev-parse", "HEAD"])
             .unwrap()
             .trim()
             .to_string();
@@ -370,13 +367,13 @@ mod tests {
         fs::rename(&decoy, &target).unwrap();
 
         // A query still reads the original repository, not the one now sitting at that name.
-        let head_after_swap = state::stdout(selected.command_cwd(), &["rev-parse", "HEAD"])
+        let head_after_swap = state::stdout(selected.repository(), &["rev-parse", "HEAD"])
             .unwrap()
             .trim()
             .to_string();
         assert_eq!(head_after_swap, original_head);
         assert_eq!(
-            state::stdout(selected.command_cwd(), &["show", "-s", "--format=%s", "HEAD"])
+            state::stdout(selected.repository(), &["show", "-s", "--format=%s", "HEAD"])
                 .unwrap()
                 .trim(),
             "original"
@@ -384,7 +381,7 @@ mod tests {
 
         // And a mutation lands in the original repository too.
         state::success(
-            selected.command_cwd(),
+            selected.repository(),
             &[
                 "commit".to_string(),
                 "--allow-empty".to_string(),

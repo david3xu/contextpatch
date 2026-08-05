@@ -16,7 +16,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
-use crate::process::runner::{run_bounded_command, BoundedProcessOutput, CommandCwd};
+use crate::git::repository::GitRepository;
+use crate::process::runner::{run_bounded_command, BoundedProcessOutput};
 use crate::process::GIT_SUBPROCESS_TIMEOUT;
 
 /// Reported as the head of a repository that has no commits yet.
@@ -36,10 +37,10 @@ pub const CACHED_DIFF_LABEL: &str = "git diff --cached";
 /// Does not inspect the exit code; a caller that needs a non-zero code to be meaningful uses
 /// [`exit_code`], and a caller that needs success uses [`output`].
 pub fn run<'a>(
-    cwd: impl Into<CommandCwd<'a>>,
+    repository: impl Into<GitRepository<'a>>,
     args: &[&str],
 ) -> Result<BoundedProcessOutput, ContextPatchError> {
-    let cwd = cwd.into();
+    let cwd = repository.into().command_cwd();
     let owned_args = args
         .iter()
         .map(|arg| (*arg).to_string())
@@ -65,10 +66,10 @@ pub fn run<'a>(
 
 /// Run `git` and require success.
 pub fn output<'a>(
-    cwd: impl Into<CommandCwd<'a>>,
+    repository: impl Into<GitRepository<'a>>,
     args: &[&str],
 ) -> Result<BoundedProcessOutput, ContextPatchError> {
-    let output = run(cwd, args)?;
+    let output = run(repository, args)?;
     if !output.success() {
         return Err(ContextPatchError::new(format!(
             "git {} failed: {}",
@@ -81,21 +82,21 @@ pub fn output<'a>(
 
 /// Run `git`, require success, and return stdout as UTF-8.
 pub fn stdout<'a>(
-    cwd: impl Into<CommandCwd<'a>>,
+    repository: impl Into<GitRepository<'a>>,
     args: &[&str],
 ) -> Result<String, ContextPatchError> {
-    let output = output(cwd, args)?;
+    let output = output(repository, args)?;
     String::from_utf8(output.stdout)
         .map_err(|error| ContextPatchError::new(format!("git output was not UTF-8: {error}")))
 }
 
 /// Run `git` and require success, discarding output.
 pub fn success<'a>(
-    cwd: impl Into<CommandCwd<'a>>,
+    repository: impl Into<GitRepository<'a>>,
     args: &[String],
 ) -> Result<(), ContextPatchError> {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let _ = output(cwd, &arg_refs)?;
+    let _ = output(repository, &arg_refs)?;
     Ok(())
 }
 
@@ -103,10 +104,10 @@ pub fn success<'a>(
 ///
 /// Timeout and truncation are still refused, because those mean the code is not trustworthy.
 pub fn exit_code<'a>(
-    cwd: impl Into<CommandCwd<'a>>,
+    repository: impl Into<GitRepository<'a>>,
     args: &[&str],
 ) -> Result<i32, ContextPatchError> {
-    Ok(run(cwd, args)?.exit_code)
+    Ok(run(repository, args)?.exit_code)
 }
 
 /// Refuse a bounded capture that filled up.
