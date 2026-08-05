@@ -1,5 +1,6 @@
 pub mod delete_guarded;
 mod guarded_path;
+pub mod state;
 pub mod status;
 pub mod tracked_move;
 pub mod validate;

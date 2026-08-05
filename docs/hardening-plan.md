@@ -190,10 +190,23 @@ Slices, each its own behavior-neutral commit:
    normalization, prefix boundary matching, and commit subject/body limits. The server functions are thin
    adapters. This slice covers the guard that bounds every path-taking action, which is the same reason
    those actions do not need an exact worktree root under 3.1.
-2. **Git-executing state guards — open.** Status, cached, untracked, and ignored path queries; remote and
-   branch existence; ref resolution; rev counts; required-file checks in a ref. These wrap the Git
-   subprocess, so the typed API must carry the timeout and bounded-output contract rather than leaving it
-   in the adapter.
+2. **Git-executing state guards — done.** `core::git::state` owns Git invocation and everything derived
+   from what Git reports: the no-shell argv, working directory, shared subprocess timeout, timeout and
+   truncation refusals, exit-code handling, porcelain and NUL path parsing, status/untracked/ignored/
+   cached path queries, head with its unborn-repository case, current branch, local branch existence,
+   revision counts, remote existence, and ref resolution. The bounded-output refusal is the reason this
+   is policy rather than plumbing: a truncated `git status` reads as a shorter list of dirty paths, and a
+   tool acting on it would act on a set it never saw.
+
+   Fifteen core tests exercise these against real temporary repositories, covering the unborn head, a
+   detached head, modified versus untracked versus ignored classification, staged-only reporting, branch
+   presence and absence, and the rename entry that is refused rather than half-interpreted. The
+   truncation test moved with its subject. A server regression pins the assembled prefixes, including the
+   two that were never tool names, `git operation` and `git workflow`, which are the easiest to lose in a
+   move.
+
+   Removing the inlined implementations left several server pass-throughs with no callers; they were
+   deleted rather than kept alive behind an allow attribute.
 3. **`restore` planning — open.** Untracked collection, empty-directory collection, and the tracked-path
    guard behind the three restore and delete actions.
 4. **`commit` planning — open.** Dirty-set matching, staged-scope policy, and prefix expansion behind the

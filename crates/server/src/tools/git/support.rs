@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::tools;
-use contextpatch_core::process::runner::{run_bounded_command, BoundedProcessOutput};
-use contextpatch_core::process::GIT_SUBPROCESS_TIMEOUT;
+use contextpatch_core::git::state as git_state;
+use contextpatch_core::process::runner::BoundedProcessOutput;
 pub(crate) fn validate_commit_subject(subject: &str) -> Result<String, String> {
     contextpatch_core::git::validate::commit_subject(subject)
         .map_err(|error| format!("{} refused: {error}", tools::git_commit_exact::NAME))
@@ -48,6 +48,14 @@ pub(crate) fn normalize_git_path(
         .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
+/// Prefix a moved-policy refusal so it is addressed to the calling tool.
+///
+/// `core` returns the detail only. This is the seam that keeps every public refusal string identical
+/// while the policy behind it lives elsewhere.
+fn refused(tool_name: &str, error: contextpatch_core::error::ContextPatchError) -> String {
+    format!("{tool_name} refused: {error}")
+}
+
 pub(crate) fn git_status_paths(root: &Path) -> Result<BTreeSet<String>, String> {
     git_status_paths_for_tool(tools::git_commit_exact::NAME, root)
 }
@@ -56,42 +64,21 @@ pub(crate) fn git_status_paths_for_tool(
     tool_name: &str,
     root: &Path,
 ) -> Result<BTreeSet<String>, String> {
-    let output = git_output_for_tool(
-        tool_name,
-        root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    )?;
-    parse_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
+    git_state::status_paths(root).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn git_untracked_paths_for_tool(
     tool_name: &str,
     root: &Path,
 ) -> Result<BTreeSet<String>, String> {
-    let output = git_output_for_tool(
-        tool_name,
-        root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    )?;
-    parse_untracked_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
+    git_state::untracked_paths(root).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn git_untracked_and_ignored_paths_for_tool(
     tool_name: &str,
     root: &Path,
 ) -> Result<BTreeSet<String>, String> {
-    let output = git_output_for_tool(
-        tool_name,
-        root,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-        ],
-    )?;
-    parse_untracked_and_ignored_porcelain_paths_for_tool(tool_name, &output.stdout, "git status")
+    git_state::untracked_and_ignored_paths(root).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn git_cached_paths(root: &Path) -> Result<BTreeSet<String>, String> {
@@ -102,79 +89,7 @@ pub(crate) fn git_cached_paths_for_tool(
     tool_name: &str,
     root: &Path,
 ) -> Result<BTreeSet<String>, String> {
-    let output = git_output_for_tool(tool_name, root, &["diff", "--cached", "--name-only", "-z"])?;
-    parse_nul_paths_for_tool(tool_name, &output.stdout, "git diff --cached")
-}
-
-pub(crate) fn parse_porcelain_paths_for_tool(
-    tool_name: &str,
-    bytes: &[u8],
-    label: &str,
-) -> Result<BTreeSet<String>, String> {
-    let mut paths = BTreeSet::new();
-    let entries = bytes
-        .split(|byte| *byte == 0)
-        .filter(|entry| !entry.is_empty());
-    for entry in entries {
-        if entry.len() < 4 || entry[2] != b' ' {
-            return Err(format!("{tool_name} refused: unexpected {label} entry"));
-        }
-        if matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C') {
-            return Err(format!(
-                "{tool_name} refused: rename/copy entries require a future dedicated tool"
-            ));
-        }
-        let path = std::str::from_utf8(&entry[3..])
-            .map_err(|error| format!("{tool_name} refused: {label} path is not UTF-8: {error}"))?;
-        paths.insert(path.to_string());
-    }
-    Ok(paths)
-}
-
-pub(crate) fn parse_untracked_porcelain_paths_for_tool(
-    tool_name: &str,
-    bytes: &[u8],
-    label: &str,
-) -> Result<BTreeSet<String>, String> {
-    let mut paths = BTreeSet::new();
-    let entries = bytes
-        .split(|byte| *byte == 0)
-        .filter(|entry| !entry.is_empty());
-    for entry in entries {
-        if entry.len() < 4 || entry[2] != b' ' {
-            return Err(format!("{tool_name} refused: unexpected {label} entry"));
-        }
-        if entry[0] == b'?' && entry[1] == b'?' {
-            let path = std::str::from_utf8(&entry[3..]).map_err(|error| {
-                format!("{tool_name} refused: {label} path is not UTF-8: {error}")
-            })?;
-            paths.insert(path.to_string());
-        }
-    }
-    Ok(paths)
-}
-
-pub(crate) fn parse_untracked_and_ignored_porcelain_paths_for_tool(
-    tool_name: &str,
-    bytes: &[u8],
-    label: &str,
-) -> Result<BTreeSet<String>, String> {
-    let mut paths = BTreeSet::new();
-    let entries = bytes
-        .split(|byte| *byte == 0)
-        .filter(|entry| !entry.is_empty());
-    for entry in entries {
-        if entry.len() < 4 || entry[2] != b' ' {
-            return Err(format!("{tool_name} refused: unexpected {label} entry"));
-        }
-        if (entry[0] == b'?' && entry[1] == b'?') || (entry[0] == b'!' && entry[1] == b'!') {
-            let path = std::str::from_utf8(&entry[3..]).map_err(|error| {
-                format!("{tool_name} refused: {label} path is not UTF-8: {error}")
-            })?;
-            paths.insert(path.trim_end_matches('/').to_string());
-        }
-    }
-    Ok(paths)
+    git_state::cached_paths(root).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn parse_nul_paths_for_tool(
@@ -182,15 +97,7 @@ pub(crate) fn parse_nul_paths_for_tool(
     bytes: &[u8],
     label: &str,
 ) -> Result<BTreeSet<String>, String> {
-    bytes
-        .split(|byte| *byte == 0)
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| {
-            std::str::from_utf8(entry)
-                .map(|path| path.to_string())
-                .map_err(|error| format!("{tool_name} refused: {label} path is not UTF-8: {error}"))
-        })
-        .collect()
+    git_state::parse_nul_paths(bytes, label).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn git_args(subcommand: &str, paths: &[String]) -> Vec<String> {
@@ -233,19 +140,11 @@ pub(crate) fn ensure_restore_paths_are_tracked(
 }
 
 pub(crate) fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = git_output(root, args)?;
-    String::from_utf8(output.stdout)
-        .map_err(|error| format!("git_commit_exact refused: git output was not UTF-8: {error}"))
+    git_stdout_for_tool(tools::git_commit_exact::NAME, root, args)
 }
 
 pub(crate) fn git_success(root: &Path, args: Vec<String>) -> Result<(), String> {
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let _ = git_output(root, &arg_refs)?;
-    Ok(())
-}
-
-pub(crate) fn git_output(root: &Path, args: &[&str]) -> Result<BoundedProcessOutput, String> {
-    git_output_for_tool(tools::git_commit_exact::NAME, root, args)
+    git_success_for_tool(tools::git_commit_exact::NAME, root, args)
 }
 
 /// How strictly an action must verify its configured repository root.
@@ -294,11 +193,7 @@ pub(crate) fn canonical_repo_root(repo_root: &Path, tool_name: &str) -> Result<P
 }
 
 pub(crate) fn git_status_short(root: &Path) -> Result<String, String> {
-    git_stdout_for_tool(
-        "git_status_short",
-        root,
-        &["status", "--short", "--untracked-files=all"],
-    )
+    git_state::status_short(root).map_err(|error| refused("git_status_short", error))
 }
 
 pub(crate) fn git_stdout_for_tool(
@@ -306,30 +201,11 @@ pub(crate) fn git_stdout_for_tool(
     root: &Path,
     args: &[&str],
 ) -> Result<String, String> {
-    let output = git_output_for_tool(tool_name, root, args)?;
-    String::from_utf8(output.stdout)
-        .map_err(|error| format!("{tool_name} refused: git output was not UTF-8: {error}"))
+    git_state::stdout(root, args).map_err(|error| refused(tool_name, error))
 }
 
-pub(crate) const UNBORN_GIT_HEAD: &str = "unborn";
-
 pub(crate) fn git_head_for_tool(tool_name: &str, root: &Path) -> Result<String, String> {
-    let output = run_git_for_tool(tool_name, root, &["rev-parse", "--verify", "HEAD"])?;
-    if output.success() {
-        return String::from_utf8(output.stdout)
-            .map(|head| head.trim().to_string())
-            .map_err(|error| format!("{tool_name} refused: git output was not UTF-8: {error}"));
-    }
-
-    let revision_count = git_stdout_for_tool(tool_name, root, &["rev-list", "--all", "--count"])?;
-    if revision_count.trim() == "0" {
-        Ok(UNBORN_GIT_HEAD.to_string())
-    } else {
-        Err(format!(
-            "{tool_name} refused: git rev-parse --verify HEAD failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
+    git_state::head(root).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn git_success_for_tool(
@@ -337,9 +213,7 @@ pub(crate) fn git_success_for_tool(
     root: &Path,
     args: Vec<String>,
 ) -> Result<(), String> {
-    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let _ = git_output_for_tool(tool_name, root, &arg_refs)?;
-    Ok(())
+    git_state::success(root, &args).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn git_output_for_tool(
@@ -347,30 +221,15 @@ pub(crate) fn git_output_for_tool(
     root: &Path,
     args: &[&str],
 ) -> Result<BoundedProcessOutput, String> {
-    let output = run_git_for_tool(tool_name, root, args)?;
-    if !output.success() {
-        return Err(format!(
-            "{tool_name} refused: git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(output)
+    git_state::output(root, args).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn git_status_code(root: &Path, args: &[&str]) -> Result<i32, String> {
-    let output = run_git_for_tool("git operation", root, args)?;
-    Ok(output.exit_code)
+    git_state::exit_code(root, args).map_err(|error| refused("git operation", error))
 }
 
 pub(crate) fn rev_count_for_tool(tool_name: &str, root: &Path, range: &str) -> Result<u64, String> {
-    let output = git_stdout_for_tool(tool_name, root, &["rev-list", "--count", range])?;
-    output.trim().parse::<u64>().map_err(|error| {
-        format!(
-            "{tool_name} refused: failed to parse revision count `{}`: {error}",
-            output.trim()
-        )
-    })
+    git_state::rev_count(root, range).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn ensure_remote_exists(
@@ -378,14 +237,7 @@ pub(crate) fn ensure_remote_exists(
     root: &Path,
     remote: &str,
 ) -> Result<(), String> {
-    let remotes = git_stdout_for_tool(tool_name, root, &["remote"])?;
-    if remotes.lines().any(|line| line == remote) {
-        Ok(())
-    } else {
-        Err(format!(
-            "{tool_name} refused: remote `{remote}` is not configured"
-        ))
-    }
+    git_state::ensure_remote_exists(root, remote).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn validate_git_remote(remote: &str) -> Result<String, String> {
@@ -394,27 +246,11 @@ pub(crate) fn validate_git_remote(remote: &str) -> Result<String, String> {
 }
 
 pub(crate) fn current_branch(tool_name: &str, root: &Path) -> Result<String, String> {
-    let branch = git_stdout_for_tool(tool_name, root, &["branch", "--show-current"])?;
-    let branch = branch.trim();
-    if branch.is_empty() {
-        Err(format!(
-            "{tool_name} refused: repository is in detached HEAD state"
-        ))
-    } else {
-        Ok(branch.to_string())
-    }
+    git_state::current_branch(root).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn local_branch_exists(root: &Path, branch: &str) -> Result<bool, String> {
-    let branch_ref = format!("refs/heads/{branch}");
-    let status = git_status_code(root, &["show-ref", "--verify", "--quiet", &branch_ref])?;
-    match status {
-        0 => Ok(true),
-        1 => Ok(false),
-        code => Err(format!(
-            "git workflow refused: failed to check local branch `{branch}` (exit code {code})"
-        )),
-    }
+    git_state::local_branch_exists(root, branch).map_err(|error| refused("git workflow", error))
 }
 
 pub(crate) fn validate_git_branch(branch: &str) -> Result<String, String> {
@@ -428,11 +264,11 @@ pub(crate) fn validate_git_branch(branch: &str) -> Result<String, String> {
     {
         return Err(format!("git workflow refused: invalid branch `{branch}`"));
     }
-    let status = run_git_for_tool(
-        "git workflow",
+    let status = git_state::run(
         Path::new("."),
         &["check-ref-format", "--branch", branch],
-    )?;
+    )
+    .map_err(|error| refused("git workflow", error))?;
     if !status.success() {
         return Err(format!("git workflow refused: invalid branch `{branch}`"));
     }
@@ -457,11 +293,11 @@ pub(crate) fn validate_git_ref_expression(value: &str) -> Result<String, String>
         return Err(format!("git workflow refused: invalid ref `{value}`"));
     }
 
-    let status = run_git_for_tool(
-        "git workflow",
+    let status = git_state::run(
         Path::new("."),
         &["check-ref-format", "--allow-onelevel", value],
-    )?;
+    )
+    .map_err(|error| refused("git workflow", error))?;
     if !status.success() {
         return Err(format!("git workflow refused: invalid ref `{value}`"));
     }
@@ -523,51 +359,7 @@ pub(crate) fn resolve_commit(
     root: &Path,
     ref_name: &str,
 ) -> Result<String, String> {
-    let commit_ref = format!("{ref_name}^{{commit}}");
-    let commit = git_stdout_for_tool(tool_name, root, &["rev-parse", "--verify", &commit_ref])?;
-    Ok(commit.trim().to_string())
-}
-
-fn run_git_for_tool(
-    tool_name: &str,
-    root: &Path,
-    args: &[&str],
-) -> Result<BoundedProcessOutput, String> {
-    let owned_args = args
-        .iter()
-        .map(|arg| (*arg).to_string())
-        .collect::<Vec<_>>();
-    let output = run_bounded_command(
-        root,
-        "git",
-        &owned_args,
-        GIT_SUBPROCESS_TIMEOUT,
-        "Git subprocess",
-    )
-    .map_err(|error| format!("{tool_name} refused: failed to run git: {error}"))?;
-    if output.timed_out {
-        return Err(format!(
-            "{tool_name} refused: git {} timed out after {} seconds; the Git process was terminated",
-            args.join(" "),
-            GIT_SUBPROCESS_TIMEOUT.as_secs()
-        ));
-    }
-    ensure_git_output_complete(tool_name, args, &output)?;
-    Ok(output)
-}
-
-fn ensure_git_output_complete(
-    tool_name: &str,
-    args: &[&str],
-    output: &BoundedProcessOutput,
-) -> Result<(), String> {
-    if output.stdout_truncated || output.stderr_truncated {
-        return Err(format!(
-            "{tool_name} refused: git {} output exceeded the bounded capture; the result is incomplete and was not used",
-            args.join(" ")
-        ));
-    }
-    Ok(())
+    git_state::resolve_commit(root, ref_name).map_err(|error| refused(tool_name, error))
 }
 
 pub(crate) fn changed_files_between(
@@ -742,23 +534,30 @@ mod tests {
     }
 
     #[test]
-    fn refuses_truncated_git_output_before_parsing() {
-        let output = BoundedProcessOutput {
-            cwd: PathBuf::from("/repository"),
-            exit_code: 0,
-            timed_out: false,
-            duration_ms: 1,
-            stdout: b"partial".to_vec(),
-            stderr: Vec::new(),
-            stdout_truncated: true,
-            stderr_truncated: false,
-        };
+    fn moved_state_guards_keep_their_refusal_prefixes() {
+        // The state and query guards now live in core, which returns the detail only. These assertions
+        // pin the prefixes the adapters assemble, including the two that were never tool names and are
+        // therefore the easiest to lose in a move.
+        let outside_any_repository = std::env::temp_dir();
 
-        let error =
-            ensure_git_output_complete("git_stage_exact", &["status", "--porcelain"], &output)
-                .unwrap_err();
+        let error = git_status_short(&outside_any_repository).unwrap_err();
+        assert!(
+            error.starts_with("git_status_short refused: git status --short --untracked-files=all failed:"),
+            "{error}"
+        );
 
-        assert!(error.contains("result is incomplete"));
-        assert!(error.contains("was not used"));
+        let error = git_status_paths(&outside_any_repository).unwrap_err();
+        assert!(error.starts_with("git_commit_exact refused: git status"), "{error}");
+
+        let error = current_branch("git_push_exact", &outside_any_repository).unwrap_err();
+        assert!(error.starts_with("git_push_exact refused: git branch"), "{error}");
+
+        // This one is addressed to `git workflow`, not to any tool, which is the string callers have
+        // always received.
+        let error = local_branch_exists(&outside_any_repository, "main").unwrap_err();
+        assert!(
+            error.starts_with("git workflow refused: failed to check local branch `main` (exit code "),
+            "{error}"
+        );
     }
 }
