@@ -18,7 +18,7 @@ use crate::tools;
 use crate::tools::common::{
     nonempty_tool_string, optional_bool, optional_string, optional_u64, required_string,
 };
-use crate::tools::git::support::{canonical_repo_root, git_stdout_for_tool};
+use crate::tools::git::support::{git_stdout_for_tool, resolved_repo_root};
 
 pub(crate) fn call_github_pr_run(
     repo_root: &Path,
@@ -28,7 +28,7 @@ pub(crate) fn call_github_pr_run(
     const RERUN_CONFIRMATION: &str = "rerun failed workflow jobs";
 
     let action = required_string(arguments, "action")?;
-    let root = canonical_repo_root(repo_root, tools::github_pr_run::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::github_pr_run::NAME)?;
     let repository = optional_github_repository(arguments)?;
     let job_log_view = if action == "workflow_job_log" {
         Some(workflow_job_log_view(arguments)?)
@@ -430,7 +430,7 @@ pub(crate) fn call_github_fork_prepare(
 ) -> Result<String, String> {
     const CONFIRMATION: &str = "prepare github fork";
 
-    let root = canonical_repo_root(repo_root, tools::github_fork_prepare::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::github_fork_prepare::NAME)?;
     let remote = optional_bool(arguments, "remote")?.unwrap_or(true);
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
 

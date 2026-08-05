@@ -278,18 +278,30 @@ rule; the commit, restore, and sync handlers carry real policy. Move that policy
 leave request shaping and response formatting in `server`. This is a module move and must carry no
 behavior change.
 
-### 3.3 Consolidate the repository-root helpers (C11)
+### 3.3 Consolidate the repository-root helpers (C11) — complete
 
-| Location | Behavior | Call sites |
-| --- | --- | --- |
-| `core::git::guarded_path` | canonicalize, verify directory, require the resolved top level to equal the root | 3 |
-| `core::git::status` | canonicalize only | 3 |
-| `server::tools::git::support` | canonicalize only | ~20 |
+Three functions previously shared one name and two semantics: a strong version backing three call sites,
+and canonicalize-only copies in `core::git::status` and in the server layer backing roughly twenty,
+including every commit, stage, restore, remote, branch, and push workflow.
 
-Three functions share one name and two semantics. The strong version backs three call sites; the
-canonicalize-only versions back roughly twenty, including every commit, stage, restore, remote,
-branch, and push workflow. Because startup now resolves the root once (C02), both weak versions are
-pass-throughs, so removal is mechanical. Keep one definition, in `core`.
+There is now one canonicalization, `core::git::resolve_repo_root`. Both duplicates are gone.
+`exact_worktree_root` is deliberately kept separate and now *builds on* the shared resolver, so the two
+cannot drift on **how** a root is resolved while differing only in what each additionally demands. That is
+the property the duplication was hiding: the weak copies were not merely redundant, they were free to
+diverge from the strong one on resolution itself.
+
+The consolidation is behavior-neutral because the shared resolver returns the raw I/O error rather than a
+worded refusal. The two surfaces above it word failure differently and always have: `core` names the path,
+the MCP adapter reports a shorter phrase and its tool prefix. Sharing resolution without sharing wording is
+what let this land without changing a single refusal string. `core::git::status` keeps its phrasing in a
+two-line wrapper; the server keeps its own in `resolved_repo_root`, which adds only the prefix.
+
+Core tests cover the resolver directly, including that a symlinked root resolves to its target, that a
+subdirectory of a worktree resolves successfully but is refused by the strict resolver, and that the strict
+resolver reports the shared resolution failure. A server regression pins the MCP wording and asserts it is
+*not* core's, which is precisely the drift a shared resolver could otherwise introduce.
+
+C13 remains separate and untouched.
 
 ### 3.4 Rebuild the workspace selector on descriptors (C13)
 
@@ -523,7 +535,7 @@ Phase-specific checks:
 | C08 | Batch validation refusals leave no receipt | 2.3 | Complete |
 | C09 | Cheap discovery projections are undocumented; meta action unlisted | 2.4 | Complete |
 | C10 | Git policy lives in the server crate against the stated boundary | 3.2 | Complete |
-| C11 | Three helpers share one name with two semantics | 3.3 | Open |
+| C11 | Three helpers share one name with two semantics | 3.3 | Complete |
 | C12 | Worktree-root requirement is inconsistent across tools | 3.1 | Complete |
 | C13 | Workspace selector validates by path, not by descriptor | 3.4 | Open |
 | C14 | Confirmation phrases duplicated between handler and schema | 4.1 | Open |

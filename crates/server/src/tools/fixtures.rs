@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use crate::tools;
 use crate::tools::common::*;
 use crate::tools::git::support::{
-    canonical_repo_root, format_set, git_status_paths_for_tool, normalize_git_path,
+    format_set, git_status_paths_for_tool, normalize_git_path, resolved_repo_root,
     normalize_git_paths,
 };
 
@@ -48,7 +48,7 @@ pub(crate) fn call_fixture_generator_run(
     let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
     let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
     let cwd = optional_string(arguments, "cwd")?;
-    let root = canonical_repo_root(repo_root, tools::fixture_generator_run::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::fixture_generator_run::NAME)?;
     let script = normalize_git_path(tools::fixture_generator_run::NAME, &root, script_path)?;
     if !root.join(&script).is_file() {
         return Err(format!(
@@ -178,7 +178,7 @@ pub(crate) fn call_base_image_check_run(
     let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(120);
     let project_path = optional_string(arguments, "project_path")?;
     let command_args = base_image_check_args(project_path)?;
-    let root = canonical_repo_root(repo_root, tools::base_image_check_run::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::base_image_check_run::NAME)?;
     if !root.join(SCRIPT).is_file() {
         return Err(format!(
             "base_image_check_run refused: required script `{SCRIPT}` is not present"
@@ -411,7 +411,7 @@ pub(crate) fn call_fixture_manifest_verify(
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let manifest_path = required_string(arguments, "manifest_path")?;
-    let root = canonical_repo_root(repo_root, tools::fixture_manifest_verify::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::fixture_manifest_verify::NAME)?;
     let manifest_normalized =
         normalize_repo_relative_path(tools::fixture_manifest_verify::NAME, manifest_path)?;
     let manifest_target = root.join(&manifest_normalized);
@@ -488,7 +488,7 @@ pub(crate) fn call_fixture_manifest_refresh(
             "fixture_manifest_refresh refused: dry_run=false requires confirm: {CONFIRMATION:?}"
         ));
     }
-    let root = canonical_repo_root(repo_root, tools::fixture_manifest_refresh::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::fixture_manifest_refresh::NAME)?;
     let manifest_normalized =
         normalize_repo_relative_path(tools::fixture_manifest_refresh::NAME, manifest_path)?;
     let manifest_target = root.join(&manifest_normalized);

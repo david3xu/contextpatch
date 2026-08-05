@@ -12,5 +12,6 @@ mod workspace;
 pub use workspace::resolve_workspace_git_root;
 
 /// Exposed so the MCP layer can enforce a per-action worktree-root policy without duplicating the
-/// check. The rest of `guarded_path` stays private on purpose; only the strict resolution is public.
-pub use guarded_path::exact_worktree_root;
+/// check. The rest of `guarded_path` stays private on purpose; only the two resolvers are public, and
+/// they differ solely in what they demand beyond resolution.
+pub use guarded_path::{exact_worktree_root, resolve_repo_root};

@@ -81,7 +81,7 @@ pub(crate) fn repo_root_for_policy(
     policy: WorktreeRootPolicy,
 ) -> Result<PathBuf, String> {
     match policy {
-        WorktreeRootPolicy::ResolvedPath => canonical_repo_root(repo_root, tool_name),
+        WorktreeRootPolicy::ResolvedPath => resolved_repo_root(repo_root, tool_name),
         WorktreeRootPolicy::ExactWorktreeRoot => {
             contextpatch_core::git::exact_worktree_root(repo_root).map_err(|error| {
                 format!(
@@ -94,9 +94,14 @@ pub(crate) fn repo_root_for_policy(
     }
 }
 
-pub(crate) fn canonical_repo_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
-    repo_root
-        .canonicalize()
+/// Resolve the configured repository root, asserting nothing about worktrees.
+///
+/// The resolution itself lives in `core`; this adds only the prefix that addresses a failure to a tool,
+/// which is why the MCP surface keeps its own shorter wording. Callers whose blast radius is bounded by
+/// something other than the root use this; the Git actions that are bounded only by the root go through
+/// [`repo_root_for_policy`] with [`WorktreeRootPolicy::ExactWorktreeRoot`].
+pub(crate) fn resolved_repo_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
+    contextpatch_core::git::resolve_repo_root(repo_root)
         .map_err(|error| format!("{tool_name} refused: failed to resolve repo root: {error}"))
 }
 
@@ -317,6 +322,29 @@ mod tests {
         assert!(
             error.starts_with("git workflow refused: failed to check local branch `main` (exit code "),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn the_consolidated_resolver_keeps_the_server_wording() {
+        // Resolution now happens once in core, which returns the raw I/O error. The MCP surface has always
+        // reported a shorter phrase than core does, including the underlying error, so this pins it.
+        let absent = std::env::temp_dir().join("contextpatch-absent-root-for-resolver-regression");
+
+        let error = resolved_repo_root(&absent, "file_info").unwrap_err();
+        assert!(
+            error.starts_with("file_info refused: failed to resolve repo root: "),
+            "{error}"
+        );
+        // Not core's wording, which names the path instead.
+        assert!(!error.contains("failed to resolve repository root"), "{error}");
+
+        // The policy wrapper routes through the same resolver and keeps the same wording.
+        let policy_error = repo_root_for_policy(&absent, "list_directory", WorktreeRootPolicy::ResolvedPath)
+            .unwrap_err();
+        assert!(
+            policy_error.starts_with("list_directory refused: failed to resolve repo root: "),
+            "{policy_error}"
         );
     }
 }

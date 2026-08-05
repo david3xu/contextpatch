@@ -65,7 +65,7 @@ pub fn status_snapshot(
 }
 
 pub fn status_short(repo_root: &Path) -> Result<String, ContextPatchError> {
-    let root = canonical_repo_root(repo_root)?;
+    let root = reported_root(repo_root)?;
     let output = git_output(
         &root,
         &["status", "--short", "--untracked-files=all"],
@@ -77,7 +77,7 @@ pub fn status_short(repo_root: &Path) -> Result<String, ContextPatchError> {
 }
 
 pub fn dirty_paths(repo_root: &Path) -> Result<BTreeSet<String>, ContextPatchError> {
-    let root = canonical_repo_root(repo_root)?;
+    let root = reported_root(repo_root)?;
     let output = git_output(
         &root,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -113,7 +113,7 @@ fn status_changes_for_path(
     repo_root: &Path,
     path: Option<&Path>,
 ) -> Result<(Option<PathBuf>, Vec<String>), ContextPatchError> {
-    let root = canonical_repo_root(repo_root)?;
+    let root = reported_root(repo_root)?;
     let scope = path
         .map(|path| guarded_relative_path(&root, path))
         .transpose()?;
@@ -134,8 +134,12 @@ fn status_changes_for_path(
     Ok((scope, changes))
 }
 
-fn canonical_repo_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
-    repo_root.canonicalize().map_err(|error| {
+/// Resolve the repository root with this crate's long-standing wording.
+///
+/// The resolution itself is shared; only the phrasing is local, which is why this is a two-line wrapper
+/// rather than a second implementation.
+fn reported_root(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+    crate::git::resolve_repo_root(repo_root).map_err(|error| {
         ContextPatchError::new(format!(
             "failed to resolve repository root {}: {error}",
             repo_root.display()

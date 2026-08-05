@@ -93,7 +93,7 @@ use serde_json::{json, Value};
 
 use crate::tools;
 use crate::tools::common::*;
-use crate::tools::git::support::canonical_repo_root;
+use crate::tools::git::support::resolved_repo_root;
 
 pub(crate) fn call_read_range(
     repo_root: &Path,
@@ -200,7 +200,7 @@ pub(crate) fn call_file_info(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    let root = canonical_repo_root(repo_root, tools::file_info::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::file_info::NAME)?;
     let path = optional_string(arguments, "path")?;
     let has_paths = arguments.contains_key("paths");
     let paths = if has_paths {
@@ -377,7 +377,7 @@ pub(crate) fn call_list_directory(
             "list_directory refused: max_entries must be between 1 and {MAX_ALLOWED_ENTRIES}"
         ));
     }
-    let root = canonical_repo_root(repo_root, tools::list_directory::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::list_directory::NAME)?;
     let listing = list_directory_in_root(
         &root,
         Path::new(path),
@@ -441,7 +441,7 @@ pub(crate) fn call_read_file_bytes(
     if encoding != "hex" && encoding != "base64" {
         return Err("read_file_bytes refused: encoding must be `hex` or `base64`".to_string());
     }
-    let root = canonical_repo_root(repo_root, tools::read_file_bytes::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::read_file_bytes::NAME)?;
     let normalized = normalize_repo_relative_path(tools::read_file_bytes::NAME, path)?;
     let file = open_regular_file_in_root(&root, Path::new(&normalized))
         .map_err(|error| format!("read_file_bytes refused: {error}"))?;
@@ -547,7 +547,7 @@ pub(crate) fn call_write_existing_file_exact_hash(
         ));
     }
 
-    let root = canonical_repo_root(repo_root, tools::write_existing_file_exact_hash::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::write_existing_file_exact_hash::NAME)?;
     let normalized =
         normalize_repo_relative_path(tools::write_existing_file_exact_hash::NAME, path)?;
     let file = open_regular_file_in_root(&root, Path::new(&normalized))
@@ -699,7 +699,7 @@ pub(crate) fn call_bulk_write_new_files_base64(
         ));
     }
     let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
-    let root = canonical_repo_root(repo_root, tools::bulk_write_new_files_base64::NAME)?;
+    let root = resolved_repo_root(repo_root, tools::bulk_write_new_files_base64::NAME)?;
 
     let mut decoded_entries = Vec::with_capacity(entries.len());
     let mut seen_paths = BTreeSet::new();
@@ -1108,7 +1108,7 @@ fn write_artifact(
 }
 
 pub(crate) fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
-    let root = canonical_repo_root(repo_root, tool_name)?;
+    let root = resolved_repo_root(repo_root, tool_name)?;
     let mut hasher = DefaultHasher::new();
     root.display().to_string().hash(&mut hasher);
     let repo_name = root
