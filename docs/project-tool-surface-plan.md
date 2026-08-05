@@ -1,7 +1,7 @@
 # Project Tool Surface Plan
 
 Claude Desktop authorizes local MCP tools by server and tool identity. A ContextPatch server currently
-advertises 49 tools, so each configured project can require many separate approval decisions even though
+advertises 52 tools, so each configured project can require many separate approval decisions even though
 all tools share the same safety implementation and configured trust boundary.
 
 Add an optional project tool surface that advertises one stable `project_execute` tool. The tool routes one
@@ -19,7 +19,7 @@ still force per-call approval, and the user must select **Always allow** once wh
 - Keep `full` as the server default for backward compatibility and direct MCP users.
 - Make Claude Desktop configuration use `project` mode for ContextPatch entries.
 - In `project` mode, advertise only `project_execute`.
-- Keep the existing 49 tool names as internal action names.
+- Keep the existing 52 tool names as internal action names.
 - Execute exactly one action per wrapper call. Do not add batching.
 - Let project mode optionally select exact descendant Git worktree roots beneath that boundary.
 - Do not create one global server that can select arbitrary filesystem project roots.
@@ -112,6 +112,11 @@ This keeps behavior identical to a direct call against the effective root. A wra
 `git_commit_exact` remains a Git-deadline, serialized, journaled commit operation; a wrapped
 `read_range` remains a read-deadline, non-mutating operation.
 
+Wrapped calls retain the transport's bounded concurrent dispatch and JSON-RPC id correlation.
+Wrapped task-image, Harbor, and validation-profile starts return the same pollable log ids as direct
+calls; polling must use wrapped `read_command_log` with the same repository selector and server
+instance.
+
 Do not duplicate handlers or move safety policy into the wrapper. `project_execute` is routing only.
 
 ## Code changes
@@ -129,9 +134,9 @@ In `crates/server/src/server.rs`:
 
 In `crates/server/src/tools/schema/`:
 
-- Keep one canonical collection of the 49 internal action definitions.
+- Keep one canonical collection of the 52 internal action definitions.
 - Add the fixed `project_execute` definition.
-- Return the 49 definitions for the full public surface.
+- Return the 52 definitions for the full public surface.
 - Return only `project_execute` for the project public surface.
 - Add helpers to look up one internal action definition for `describe`.
 - Separate `public_tool_names(surface)` from `internal_action_names()` so capability reporting cannot
@@ -210,9 +215,9 @@ wrapper approval per server. It must not claim to preauthorize tools or override
 
 Add focused server tests for:
 
-1. Omitted surface defaults to the existing 49-tool full surface.
+1. Omitted surface defaults to the existing 52-tool full surface.
 2. Project surface advertises exactly one stable `project_execute` schema.
-3. `describe` lists all 49 internal actions and returns an exact schema for one action.
+3. `describe` lists all 52 internal actions and returns an exact schema for one action.
 4. A wrapped read produces the same result as its direct call.
 5. A wrapped guarded write produces the same result and refusal shape as its direct call.
 6. A wrapped Git dry run keeps the existing confirmation and repository-state gates.
@@ -271,7 +276,7 @@ git diff --check
 ## Success criteria
 
 - Project mode exposes one MCP tool per configured project or workspace entry.
-- All 49 current actions remain reachable through that tool.
+- All 52 current actions remain reachable through that tool.
 - Adding an internal action does not change the wrapper schema or invalidate its persistent approval.
 - Full mode remains backward-compatible.
 - Wrapped actions preserve direct-call deadlines, locks, receipts, guards, outputs, and refusals.

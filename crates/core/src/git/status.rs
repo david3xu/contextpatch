@@ -160,6 +160,11 @@ fn git_output(
             GIT_SUBPROCESS_TIMEOUT.as_secs()
         )));
     }
+    if output.stdout_truncated || output.stderr_truncated {
+        return Err(ContextPatchError::new(format!(
+            "{label} refused: Git output exceeded the bounded capture limit"
+        )));
+    }
     if !output.success() {
         return Err(ContextPatchError::new(format!(
             "{label} failed for {}: {}",

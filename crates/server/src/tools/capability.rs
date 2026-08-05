@@ -94,6 +94,7 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
             "mode": surface.as_str(),
             "public_tool_names": crate::tools::schema::public_tool_names(surface),
             "action_names": crate::tools::schema::internal_action_names(),
+            "action_definitions": crate::tools::schema::internal_action_definitions(),
             "note": "Full mode advertises each action as a direct MCP tool. Project mode advertises \
                      only project_execute while preserving the same internal actions and safety \
                      policy."
@@ -121,6 +122,23 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
                      reply deadline; Unix process groups also terminate descendants. Once the \
                      worker cap is reached, new bounded calls are refused before they start."
         },
+        "transport": {
+            "concurrent_tool_calls": true,
+            "max_active_tool_calls": crate::server::MAX_ACTIVE_TOOL_CALLS,
+            "responses_may_arrive_out_of_order": true,
+            "correlate_by": "JSON-RPC id",
+            "background_jobs": {
+                "tools": [
+                    tools::task_image_python_run::NAME,
+                    tools::harbor_run_start::NAME,
+                    tools::validation_profile_run::NAME
+                ],
+                "max_active": crate::tools::process::MAX_ACTIVE_BACKGROUND_JOBS,
+                "poll_with": tools::read_command_log::NAME,
+                "same_server_required": true,
+                "restart_active_status": "unknown"
+            }
+        },
         "mutation_coordination": {
             "mode": "cooperative_contextpatch_locking",
             "repository_serialized": true,
@@ -146,6 +164,7 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
             "write_new_file_base64": true,
             "write_existing_file_exact_hash": true,
             "file_info": true,
+            "set_file_executable": true,
             "list_directory": true,
             "read_file_bytes": true,
             "artifact_write_text": true,
@@ -155,6 +174,8 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
             "status_guard": true,
             "read_command_log": true,
             "artifact_python_run": true,
+            "task_image_python_run": true,
+            "harbor_run_start": true,
             "image_cleanliness_check_run": true,
             "docker_image_inspect": true,
             "setup_profile_run": true,
@@ -268,20 +289,22 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
                 "python": ["repo-relative .py script"],
                 "python3": ["repo-relative .py script"],
                 "pytest": ["validation invocation"],
-                "harbor": ["run"],
                 "bash": ["references/check-base-image.sh", "references/check-base-image.sh task"],
                 "rg": ["search"]
             },
             "typed_workflows": {
                 "read_command_log": "Reads command logs with max_chars and offset paging.",
-                "validation_profile_run": "Runs named validation sequences and adds structured Dynamo/Harbor oracle/nop reward summaries for the task profile.",
+                "harbor_run_start": "Starts one typed Harbor run asynchronously, returns a stable log_id, and reports running/completed/failed/timed_out/unknown status through read_command_log.",
+                "validation_profile_run": "Starts a named validation sequence asynchronously and adds structured Dynamo/Harbor oracle/nop reward summaries for the task profile.",
                 "artifact_python_run": "Runs artifact-root Python scratch scripts without placing temporary analysis code in the repository.",
+                "task_image_python_run": "Plans or asynchronously builds task/environment/Dockerfile and runs one repository-relative Python script in the image with no network, a read-only repository mount, dropped capabilities, bounded temporary storage, and explicit confirmation.",
                 "fixture_generator_run": "Runs repo-relative Python generators after planning, confirmation, and declared-output verification.",
                 "base_image_check_run": "Runs only references/check-base-image.sh, optionally with the exact task project argument; arbitrary shell scripts remain unsupported.",
                 "bulk_write_new_files_base64": "Imports many create-only binary/text fixture files with per-file and total size bounds.",
                 "write_existing_file_exact_hash": "Overwrites an existing file only when the current SHA-256 matches.",
-                "file_info": "Reports metadata, symlink status, file size, SHA-256, and UTF-8 line counts.",
-                "list_directory": "Lists one repository directory with type and size metadata.",
+                "file_info": "Reports metadata, mode, symlink status, file size, SHA-256, and UTF-8 line counts for one path or up to 64 paths.",
+                "set_file_executable": "Changes only executable bits on one regular non-symlink file after a hash/mode dry run and exact confirmation.",
+                "list_directory": "Lists one repository directory with optional depth- and entry-bounded recursion without following symlink directories.",
                 "read_file_bytes": "Reads bounded binary file ranges as hex or base64 with SHA-256.",
                 "fixture_manifest_verify": "Verifies exact fixture file sets and SHA-256 digests.",
                 "fixture_manifest_refresh": "Regenerates fixture manifests with dry-run, confirmation, and existing-manifest hash guard.",
@@ -297,6 +320,9 @@ fn full_manifest(root: &Path, surface: ToolSurface) -> Value {
                 "secret-like output redaction",
                 "stdout/stderr truncation",
                 "command/cwd/exit-code/duration metadata"
+                ,"task image repository mount is read-only and network is disabled"
+                ,"Harbor, task-image, and validation-profile background jobs share a two-job cap and become unknown after server restart"
+                ,"direct harbor run is refused by run_guarded_command; use harbor_run_start"
             ],
             "not_supported": [
                 "arbitrary shell",

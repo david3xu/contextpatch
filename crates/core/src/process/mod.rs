@@ -2,6 +2,7 @@ pub mod deadline;
 pub mod guarded_command;
 pub mod guidance;
 pub mod runner;
+pub mod task_image;
 
 /// Child-process ceiling used beneath the 120-second Git reply deadline.
 ///

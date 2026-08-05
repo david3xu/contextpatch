@@ -1,9 +1,7 @@
-use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::ContextPatchError;
-use crate::fs::path::resolve_new_file;
+use crate::fs::guarded_file::create_new_file_in_root;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct WriteNewFileSummary {
@@ -35,99 +33,20 @@ pub fn write_new_file_bytes_in_root(
     path: &Path,
     content: &[u8],
 ) -> Result<WriteNewFileSummary, ContextPatchError> {
-    let target_path = resolve_new_file(repo_root, path)?;
-    write_new_file_atomic(&target_path, content)?;
+    write_new_file_bytes_with_parents_in_root(repo_root, path, content, false)
+}
 
+pub fn write_new_file_bytes_with_parents_in_root(
+    repo_root: &Path,
+    path: &Path,
+    content: &[u8],
+    parents: bool,
+) -> Result<WriteNewFileSummary, ContextPatchError> {
+    let target_path = create_new_file_in_root(repo_root, path, content, parents)?;
     Ok(WriteNewFileSummary {
         path: target_path,
         bytes_written: content.len(),
     })
-}
-
-fn write_new_file_atomic(path: &Path, contents: &[u8]) -> Result<(), ContextPatchError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| ContextPatchError::new("target path has no parent directory"))?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| ContextPatchError::new("target path has no valid file name"))?;
-
-    let (temp_path, mut temp_file) = create_temp_file(parent, file_name)?;
-    let write_result = (|| {
-        temp_file.write_all(contents).map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to write temporary file {}: {error}",
-                temp_path.display()
-            ))
-        })?;
-        temp_file.sync_all().map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to flush temporary file {}: {error}",
-                temp_path.display()
-            ))
-        })?;
-        drop(temp_file);
-
-        fs::hard_link(&temp_path, path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                ContextPatchError::new(format!("target file {} already exists", path.display()))
-            } else {
-                ContextPatchError::new(format!(
-                    "failed to publish temporary file {} to {}: {error}",
-                    temp_path.display(),
-                    path.display()
-                ))
-            }
-        })?;
-
-        fs::remove_file(&temp_path).map_err(|error| {
-            ContextPatchError::new(format!(
-                "failed to remove temporary file {}: {error}",
-                temp_path.display()
-            ))
-        })
-    })();
-
-    if write_result.is_err() && temp_path.exists() {
-        let _ = fs::remove_file(&temp_path);
-    }
-
-    write_result
-}
-
-fn create_temp_file(
-    parent: &Path,
-    file_name: &str,
-) -> Result<(std::path::PathBuf, fs::File), ContextPatchError> {
-    for attempt in 0..100 {
-        let temp_path = parent.join(format!(
-            ".{file_name}.contextpatch.{}.{}.tmp",
-            std::process::id(),
-            attempt
-        ));
-
-        let temp_file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map(|file| (temp_path.clone(), file));
-
-        match temp_file {
-            Ok(created) => return Ok(created),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(ContextPatchError::new(format!(
-                    "failed to create temporary file {}: {error}",
-                    temp_path.display()
-                )))
-            }
-        }
-    }
-
-    Err(ContextPatchError::new(
-        "failed to create a unique temporary file after 100 attempts",
-    ))
 }
 
 #[cfg(test)]
@@ -172,7 +91,9 @@ mod tests {
 
         let error = write_new_file_in_root(&root, &outside, "outside").unwrap_err();
 
-        assert!(error.to_string().contains("outside repository root"));
+        assert!(error
+            .to_string()
+            .contains("normalized repository-relative path"));
         assert!(!outside.exists());
     }
 

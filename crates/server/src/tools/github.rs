@@ -9,7 +9,9 @@ pub mod github_pr_run {
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use contextpatch_core::process::guarded_command::redact_and_truncate_output;
+use contextpatch_core::process::guarded_command::{
+    redact_and_truncate_output, redact_and_truncate_output_tail,
+};
 use serde_json::{json, Value};
 
 use crate::tools;
@@ -28,6 +30,16 @@ pub(crate) fn call_github_pr_run(
     let action = required_string(arguments, "action")?;
     let root = canonical_repo_root(repo_root, tools::github_pr_run::NAME)?;
     let repository = optional_github_repository(arguments)?;
+    let job_log_view = if action == "workflow_job_log" {
+        Some(workflow_job_log_view(arguments)?)
+    } else {
+        if arguments.contains_key("log_view") {
+            return Err(
+                "github_pr_run refused: log_view is accepted only for workflow_job_log".to_string(),
+            );
+        }
+        None
+    };
     let args: Vec<String> = match action {
         "auth_status" => {
             if repository.is_some() {
@@ -233,10 +245,14 @@ pub(crate) fn call_github_pr_run(
     } else {
         raw_stdout.into_owned()
     };
-    let (stdout, stdout_truncated) = redact_and_truncate_output(&stdout_source, 120_000);
+    let (stdout, stdout_truncated) = if job_log_view.as_deref() == Some("tail") {
+        redact_and_truncate_output_tail(&stdout_source, 120_000)
+    } else {
+        redact_and_truncate_output(&stdout_source, 120_000)
+    };
     let (stderr, stderr_truncated) = bounded_output(&output.stderr, 20_000);
     let exit_code = output.status.code();
-    serde_json::to_string_pretty(&json!({
+    let mut response = json!({
         "tool": tools::github_pr_run::NAME,
         "action": action,
         "program": "gh",
@@ -248,8 +264,21 @@ pub(crate) fn call_github_pr_run(
         "stderr": stderr,
         "stdout_truncated": stdout_truncated,
         "stderr_truncated": stderr_truncated
-    }))
-    .map_err(|error| format!("github_pr_run refused: {error}"))
+    });
+    if let Some(log_view) = job_log_view {
+        response["log_view"] = json!(log_view);
+    }
+    serde_json::to_string_pretty(&response)
+        .map_err(|error| format!("github_pr_run refused: {error}"))
+}
+
+fn workflow_job_log_view(arguments: &serde_json::Map<String, Value>) -> Result<String, String> {
+    let value = optional_string(arguments, "log_view")?.unwrap_or("tail");
+    if matches!(value, "head" | "tail") {
+        Ok(value.to_string())
+    } else {
+        Err("github_pr_run refused: log_view must be one of head, tail".to_string())
+    }
 }
 
 fn required_github_head_sha(arguments: &serde_json::Map<String, Value>) -> Result<String, String> {

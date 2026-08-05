@@ -51,6 +51,10 @@ pub mod replace_exact {
     pub const NAME: &str = "replace_exact";
 }
 
+pub mod set_file_executable {
+    pub const NAME: &str = "set_file_executable";
+}
+
 pub mod status_guard {
     pub const NAME: &str = "status_guard";
 }
@@ -68,13 +72,20 @@ pub mod write_new_file_base64 {
 }
 
 use std::collections::{hash_map::DefaultHasher, BTreeSet};
-use std::fs::{self, FileType};
+use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use contextpatch_core::fs::create_directory::create_directory_in_root;
+use contextpatch_core::fs::directory::list_directory_in_root;
+use contextpatch_core::fs::guarded_file::{
+    inspect_path_in_root, open_regular_file_in_root, validate_new_file_path_in_root,
+    GuardedPathKind,
+};
 use contextpatch_core::fs::read_range::read_range_in_root;
-use contextpatch_core::fs::write_new_file::{write_new_file_bytes_in_root, write_new_file_in_root};
+use contextpatch_core::fs::write_new_file::{
+    write_new_file_bytes_in_root, write_new_file_bytes_with_parents_in_root, write_new_file_in_root,
+};
 use contextpatch_core::git::status::{status_summary, status_summary_for_path};
 use contextpatch_core::patch::diff::preview_exact_replacement_in_root;
 use contextpatch_core::replace::exact::replace_exact_in_root_with_sha256;
@@ -188,139 +199,209 @@ pub(crate) fn call_file_info(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    let path = required_string(arguments, "path")?;
     let root = canonical_repo_root(repo_root, tools::file_info::NAME)?;
-    let normalized = normalize_repo_relative_path(tools::file_info::NAME, path)?;
-    let target = root.join(&normalized);
-    let symlink_metadata = match fs::symlink_metadata(&target) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return serde_json::to_string_pretty(&json!({
-                "tool": tools::file_info::NAME,
-                "path": normalized,
-                "exists": false
-            }))
-            .map_err(|error| format!("file_info refused: {error}"));
-        }
-        Err(error) => {
-            return Err(format!(
-                "file_info refused: failed to inspect `{normalized}`: {error}"
-            ));
-        }
-    };
-    let file_type = symlink_metadata.file_type();
-    let is_symlink = file_type.is_symlink();
-    let resolved_inside_repo = if is_symlink {
-        match target.canonicalize() {
-            Ok(resolved) => resolved.starts_with(&root),
-            Err(_) => false,
-        }
+    let path = optional_string(arguments, "path")?;
+    let has_paths = arguments.contains_key("paths");
+    let paths = if has_paths {
+        required_string_array(arguments, "paths")?
     } else {
-        true
+        Vec::new()
     };
-    let target_metadata = if is_symlink && resolved_inside_repo {
-        fs::metadata(&target).ok()
-    } else if is_symlink {
-        None
-    } else {
-        Some(symlink_metadata)
-    };
-    let is_file = target_metadata
-        .as_ref()
-        .map(fs::Metadata::is_file)
-        .unwrap_or(false);
-    let is_dir = target_metadata
-        .as_ref()
-        .map(fs::Metadata::is_dir)
-        .unwrap_or(false);
-    let bytes = if is_file {
-        Some(fs::read(&target).map_err(|error| {
-            format!("file_info refused: failed to read `{normalized}` for digest: {error}")
-        })?)
-    } else {
-        None
-    };
-    let line_count = bytes.as_ref().and_then(|bytes| {
-        std::str::from_utf8(bytes)
-            .ok()
-            .map(|text| text.lines().count())
-    });
-    let sha256 = bytes.as_ref().map(|bytes| sha256_hex(bytes));
+    match (path, has_paths) {
+        (Some(_), true) => {
+            return Err("file_info refused: provide either `path` or `paths`, not both".to_string())
+        }
+        (None, false) => {
+            return Err(
+                "file_info refused: provide `path` or a non-empty `paths` array".to_string(),
+            )
+        }
+        _ => {}
+    }
 
+    if let Some(path) = path {
+        let mut value = file_info_value(&root, path)?;
+        value
+            .as_object_mut()
+            .expect("file_info values are objects")
+            .insert(
+                "tool".to_string(),
+                Value::String(tools::file_info::NAME.to_string()),
+            );
+        return serde_json::to_string_pretty(&value)
+            .map_err(|error| format!("file_info refused: {error}"));
+    }
+
+    const MAX_PATHS: usize = 64;
+    if paths.is_empty() {
+        return Err("file_info refused: paths must not be empty".to_string());
+    }
+    if paths.len() > MAX_PATHS {
+        return Err(format!(
+            "file_info refused: paths may contain at most {MAX_PATHS} entries"
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut entries = Vec::with_capacity(paths.len());
+    for path in &paths {
+        if !seen.insert(path) {
+            return Err(format!("file_info refused: duplicate path `{path}`"));
+        }
+        entries.push(file_info_value(&root, path)?);
+    }
     serde_json::to_string_pretty(&json!({
         "tool": tools::file_info::NAME,
+        "path_count": entries.len(),
+        "entries": entries
+    }))
+    .map_err(|error| format!("file_info refused: {error}"))
+}
+
+fn file_info_value(root: &Path, path: &str) -> Result<Value, String> {
+    let normalized = normalize_repo_relative_path(tools::file_info::NAME, path)?;
+    let inspection = match inspect_path_in_root(root, Path::new(&normalized))
+        .map_err(|error| format!("file_info refused: failed to inspect `{normalized}`: {error}"))?
+    {
+        Some(inspection) => inspection,
+        None => {
+            return Ok(json!({
+                "path": normalized,
+                "exists": false
+            }));
+        }
+    };
+    let is_file = inspection.kind == GuardedPathKind::RegularFile;
+    let is_dir = inspection.kind == GuardedPathKind::Directory;
+    let is_symlink = inspection.kind == GuardedPathKind::Symlink;
+    let analysis = inspection
+        .regular_file
+        .as_ref()
+        .map(|file| {
+            file.read_range_with_digest(0, 0).map_err(|error| {
+                format!("file_info refused: failed to inspect `{normalized}`: {error}")
+            })
+        })
+        .transpose()?;
+    let line_count = analysis.as_ref().and_then(|read| read.line_count);
+    let sha256 = analysis.as_ref().map(|read| read.sha256.as_str());
+    let size_bytes = analysis
+        .as_ref()
+        .map_or(inspection.size_bytes, |read| read.total_bytes);
+    let kind = match inspection.kind {
+        GuardedPathKind::RegularFile => "file",
+        GuardedPathKind::Directory => "directory",
+        GuardedPathKind::Symlink => "symlink",
+        GuardedPathKind::Other => "other",
+    };
+
+    Ok(json!({
         "path": normalized,
         "exists": true,
-        "kind": file_kind(file_type, is_file, is_dir),
+        "kind": kind,
         "is_file": is_file,
         "is_directory": is_dir,
         "is_symlink": is_symlink,
-        "symlink_target": if is_symlink { fs::read_link(&target).ok().map(|path| path.display().to_string()) } else { None },
-        "symlink_resolves_inside_repo": resolved_inside_repo,
-        "size_bytes": target_metadata.as_ref().map(fs::Metadata::len),
+        "symlink_target": inspection.symlink_target.map(|path| path.display().to_string()),
+        "symlink_resolves_inside_repo": inspection.symlink_resolves_inside_root,
+        "size_bytes": if is_symlink { None } else { Some(size_bytes) },
         "sha256": sha256,
-        "line_count": line_count
+        "line_count": line_count,
+        "mode": inspection.mode.map(|mode| format!("{mode:04o}")),
+        "executable": inspection.mode.map(|mode| mode & 0o111 != 0)
     }))
-    .map_err(|error| format!("file_info refused: {error}"))
+}
+
+pub(crate) fn call_set_file_executable(
+    repo_root: &Path,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let path = required_string(arguments, "path")?;
+    let executable = arguments
+        .get("executable")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "missing or invalid boolean argument: executable".to_string())?;
+    let expected_sha256 = optional_string(arguments, "expected_sha256")?;
+    let expected_mode = optional_string(arguments, "expected_mode")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+    let change = contextpatch_core::fs::executable::set_file_executable_in_root(
+        repo_root,
+        Path::new(path),
+        executable,
+        expected_sha256,
+        expected_mode,
+        dry_run,
+        confirm,
+    )
+    .map_err(|error| format!("set_file_executable refused: {error}"))?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": tools::set_file_executable::NAME,
+        "path": change.path,
+        "sha256": change.sha256,
+        "before_mode": change.before_mode,
+        "after_mode": change.after_mode,
+        "before_executable": change.before_executable,
+        "after_executable": change.after_executable,
+        "changed": change.changed,
+        "dry_run": change.dry_run,
+        "confirm_required": contextpatch_core::fs::executable::CONFIRMATION
+    }))
+    .map_err(|error| format!("set_file_executable refused: {error}"))
 }
 
 pub(crate) fn call_list_directory(
     repo_root: &Path,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    const MAX_ENTRIES: usize = 2000;
+    const MAX_ALLOWED_ENTRIES: usize = 2000;
+    const MAX_ALLOWED_DEPTH: usize = 16;
 
     let path = optional_string(arguments, "path")?.unwrap_or(".");
     let include_hidden = optional_bool(arguments, "include_hidden")?.unwrap_or(false);
-    let root = canonical_repo_root(repo_root, tools::list_directory::NAME)?;
-    let normalized = if path == "." {
-        ".".to_string()
-    } else {
-        normalize_repo_relative_path(tools::list_directory::NAME, path)?
-    };
-    let target = root.join(&normalized);
-    if !target.is_dir() {
+    let recursive = optional_bool(arguments, "recursive")?.unwrap_or(false);
+    let max_depth = optional_u64(arguments, "max_depth")?.unwrap_or(4);
+    let max_entries = optional_u64(arguments, "max_entries")?.unwrap_or(2000);
+    let max_depth = usize::try_from(max_depth)
+        .map_err(|_| "list_directory refused: max_depth is too large".to_string())?;
+    let max_entries = usize::try_from(max_entries)
+        .map_err(|_| "list_directory refused: max_entries is too large".to_string())?;
+    if max_depth == 0 || max_depth > MAX_ALLOWED_DEPTH {
         return Err(format!(
-            "list_directory refused: `{normalized}` is not an existing directory"
+            "list_directory refused: max_depth must be between 1 and {MAX_ALLOWED_DEPTH}"
         ));
     }
-
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(&target).map_err(|error| {
-        format!("list_directory refused: failed to read `{normalized}`: {error}")
-    })? {
-        let entry = entry
-            .map_err(|error| format!("list_directory refused: failed to read entry: {error}"))?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !include_hidden && name.starts_with('.') {
-            continue;
-        }
-        if entries.len() >= MAX_ENTRIES {
-            return Err(format!(
-                "list_directory refused: directory has more than {MAX_ENTRIES} entries; use a narrower path"
-            ));
-        }
-        let relative = if normalized == "." {
-            name.clone()
-        } else {
-            format!("{normalized}/{name}")
-        };
-        let file_type = entry.file_type().map_err(|error| {
-            format!("list_directory refused: failed to inspect `{relative}`: {error}")
-        })?;
-        let metadata = if file_type.is_symlink() {
-            None
-        } else {
-            entry.metadata().ok()
-        };
-        entries.push(json!({
-            "name": name,
-            "path": relative,
-            "kind": file_kind(file_type, metadata.as_ref().map(fs::Metadata::is_file).unwrap_or(false), metadata.as_ref().map(fs::Metadata::is_dir).unwrap_or(false)),
-            "is_symlink": file_type.is_symlink(),
-            "size_bytes": metadata.as_ref().filter(|metadata| metadata.is_file()).map(fs::Metadata::len)
-        }));
+    if max_entries == 0 || max_entries > MAX_ALLOWED_ENTRIES {
+        return Err(format!(
+            "list_directory refused: max_entries must be between 1 and {MAX_ALLOWED_ENTRIES}"
+        ));
     }
+    let root = canonical_repo_root(repo_root, tools::list_directory::NAME)?;
+    let listing = list_directory_in_root(
+        &root,
+        Path::new(path),
+        include_hidden,
+        recursive,
+        max_depth,
+        max_entries,
+    )
+    .map_err(|error| format!("list_directory refused: {error}"))?;
+    let normalized = listing.path;
+    let truncated = listing.truncated;
+    let mut entries = listing
+        .entries
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "name": entry.name,
+                "path": entry.path,
+                "depth": entry.depth,
+                "kind": entry.kind,
+                "is_symlink": entry.kind == "symlink",
+                "size_bytes": entry.size_bytes
+            })
+        })
+        .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         left["path"]
             .as_str()
@@ -331,7 +412,11 @@ pub(crate) fn call_list_directory(
     serde_json::to_string_pretty(&json!({
         "tool": tools::list_directory::NAME,
         "path": normalized,
+        "recursive": recursive,
+        "max_depth": if recursive { max_depth } else { 1 },
+        "max_entries": max_entries,
         "entry_count": entries.len(),
+        "truncated": truncated,
         "entries": entries
     }))
     .map_err(|error| format!("list_directory refused: {error}"))
@@ -357,60 +442,27 @@ pub(crate) fn call_read_file_bytes(
     }
     let root = canonical_repo_root(repo_root, tools::read_file_bytes::NAME)?;
     let normalized = normalize_repo_relative_path(tools::read_file_bytes::NAME, path)?;
-    let target = root.join(&normalized);
-    let metadata = fs::symlink_metadata(&target).map_err(|error| {
-        format!("read_file_bytes refused: failed to inspect `{normalized}`: {error}")
-    })?;
-    if metadata.file_type().is_symlink() {
-        let resolved = target.canonicalize().map_err(|error| {
-            format!("read_file_bytes refused: failed to resolve `{normalized}`: {error}")
-        })?;
-        if !resolved.starts_with(&root) {
-            return Err(format!(
-                "read_file_bytes refused: `{normalized}` is a symlink that resolves outside the repository"
-            ));
-        }
-        let target_metadata = fs::metadata(&target).map_err(|error| {
-            format!("read_file_bytes refused: failed to inspect `{normalized}` target: {error}")
-        })?;
-        if !target_metadata.is_file() {
-            return Err(format!(
-                "read_file_bytes refused: `{normalized}` is not an existing regular file"
-            ));
-        }
-    } else if !metadata.is_file() {
-        return Err(format!(
-            "read_file_bytes refused: `{normalized}` is not an existing regular file"
-        ));
-    }
-    let bytes = fs::read(&target).map_err(|error| {
-        format!("read_file_bytes refused: failed to read `{normalized}`: {error}")
-    })?;
-    let start = usize::try_from(offset)
-        .map_err(|_| "read_file_bytes refused: offset is too large".to_string())?;
-    if start > bytes.len() {
-        return Err(format!(
-            "read_file_bytes refused: offset {offset} is past end of `{normalized}` ({} bytes)",
-            bytes.len()
-        ));
-    }
-    let end = start.saturating_add(max_bytes as usize).min(bytes.len());
-    let slice = &bytes[start..end];
+    let file = open_regular_file_in_root(&root, Path::new(&normalized))
+        .map_err(|error| format!("read_file_bytes refused: {error}"))?;
+    let read = file
+        .read_range_with_digest(offset, max_bytes)
+        .map_err(|error| format!("read_file_bytes refused: {error}"))?;
     let data = if encoding == "hex" {
-        hex_encode(slice)
+        hex_encode(&read.bytes)
     } else {
-        base64_encode(slice)
+        base64_encode(&read.bytes)
     };
+    let returned_end = offset.saturating_add(read.bytes.len() as u64);
 
     serde_json::to_string_pretty(&json!({
         "tool": tools::read_file_bytes::NAME,
         "path": normalized,
         "encoding": encoding,
         "offset": offset,
-        "bytes_returned": slice.len(),
-        "total_bytes": bytes.len(),
-        "truncated": end < bytes.len(),
-        "sha256": sha256_hex(&bytes),
+        "bytes_returned": read.bytes.len(),
+        "total_bytes": read.total_bytes,
+        "truncated": returned_end < read.total_bytes,
+        "sha256": read.sha256,
         "data": data
     }))
     .map_err(|error| format!("read_file_bytes refused: {error}"))
@@ -495,15 +547,11 @@ pub(crate) fn call_write_existing_file_exact_hash(
     let root = canonical_repo_root(repo_root, tools::write_existing_file_exact_hash::NAME)?;
     let normalized =
         normalize_repo_relative_path(tools::write_existing_file_exact_hash::NAME, path)?;
-    let target = root.join(&normalized);
-    if !target.is_file() {
-        return Err(format!(
-            "write_existing_file_exact_hash refused: `{normalized}` is not an existing regular file"
-        ));
-    }
-    let current = fs::read(&target).map_err(|error| {
-        format!("write_existing_file_exact_hash refused: failed to read `{normalized}`: {error}")
-    })?;
+    let file = open_regular_file_in_root(&root, Path::new(&normalized))
+        .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
+    let current = file
+        .read_all()
+        .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
     let current_sha256 = sha256_hex(&current);
     if current_sha256 != expected_sha256 {
         return Err(format!(
@@ -531,15 +579,19 @@ pub(crate) fn call_write_existing_file_exact_hash(
         tools::write_existing_file_exact_hash::NAME,
         &normalized,
         || {
+            let file = open_regular_file_in_root(&root, Path::new(&normalized))
+                .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
+            let target = file.target_path();
             let _mutation_lock =
-                contextpatch_core::fs::mutation_lock::try_file_mutation_lock(&root, &target)
-                    .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
-            let current = fs::read(&target).map_err(|error| {
-                format!(
-                    "write_existing_file_exact_hash refused: failed to re-read `{normalized}` \
-                     under the mutation lock: {error}"
+                contextpatch_core::fs::mutation_lock::try_file_mutation_lock_for_open_file(
+                    &root,
+                    &target,
+                    file.file(),
                 )
-            })?;
+                .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
+            let current = file
+                .read_all()
+                .map_err(|error| format!("write_existing_file_exact_hash refused: {error}"))?;
             let current_sha256 = sha256_hex(&current);
             if current_sha256 != expected_sha256 {
                 return Err(format!(
@@ -547,14 +599,12 @@ pub(crate) fn call_write_existing_file_exact_hash(
                      mutation; current_sha256={current_sha256}, expected_sha256={expected_sha256}"
                 ));
             }
-            contextpatch_core::fs::atomic_write::write_atomic(&target, new_bytes).map_err(
-                |error| {
-                    format!(
-                        "write_existing_file_exact_hash refused: failed to replace \
-                         `{normalized}`: {error}"
-                    )
-                },
-            )?;
+            file.replace_atomic(new_bytes).map_err(|error| {
+                format!(
+                    "write_existing_file_exact_hash refused: failed to replace \
+                     `{normalized}`: {error}"
+                )
+            })?;
 
             serde_json::to_string_pretty(&json!({
                 "tool": tools::write_existing_file_exact_hash::NAME,
@@ -686,41 +736,16 @@ pub(crate) fn call_bulk_write_new_files_base64(
                 "bulk_write_new_files_base64 refused: decoded content is {total_bytes} bytes, maximum is {MAX_TOTAL_DECODED_BYTES}"
             ));
         }
-        let target = root.join(&normalized);
-        if target.exists() {
-            return Err(format!(
-                "bulk_write_new_files_base64 refused: target already exists: {normalized}"
-            ));
-        }
-        if !parents {
-            let parent = target.parent().ok_or_else(|| {
-                format!("bulk_write_new_files_base64 refused: path `{normalized}` has no parent")
-            })?;
-            if !parent.is_dir() {
-                return Err(format!(
-                    "bulk_write_new_files_base64 refused: parent does not exist for `{normalized}`"
-                ));
-            }
-        }
+        validate_new_file_path_in_root(&root, Path::new(&normalized), parents)
+            .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))?;
         decoded_entries.push((normalized, bytes));
-    }
-
-    for (path, _) in &decoded_entries {
-        if parents {
-            let target = root.join(path);
-            let parent = target.parent().ok_or_else(|| {
-                format!("bulk_write_new_files_base64 refused: path `{path}` has no parent")
-            })?;
-            fs::create_dir_all(parent).map_err(|error| {
-                format!("bulk_write_new_files_base64 refused: failed to create parents: {error}")
-            })?;
-        }
     }
 
     let mut created = Vec::with_capacity(decoded_entries.len());
     for (path, bytes) in decoded_entries {
-        let summary = write_new_file_bytes_in_root(&root, Path::new(&path), &bytes)
-            .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))?;
+        let summary =
+            write_new_file_bytes_with_parents_in_root(&root, Path::new(&path), &bytes, parents)
+                .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))?;
         created.push(json!({
             "path": summary.path.display().to_string(),
             "bytes_written": summary.bytes_written
@@ -1071,18 +1096,6 @@ pub(crate) fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf
     artifact_root
         .canonicalize()
         .map_err(|error| format!("{tool_name} refused: failed to resolve artifact root: {error}"))
-}
-
-fn file_kind(file_type: FileType, is_file: bool, is_dir: bool) -> &'static str {
-    if file_type.is_symlink() {
-        "symlink"
-    } else if is_file {
-        "file"
-    } else if is_dir {
-        "directory"
-    } else {
-        "other"
-    }
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

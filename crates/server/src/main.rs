@@ -7,7 +7,9 @@ mod tools;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let options = match server::parse_server_options(std::env::args().skip(1).collect()) {
+    let options = match server::parse_server_options(std::env::args().skip(1).collect())
+        .and_then(server::resolve_server_options)
+    {
         Ok(options) => options,
         Err(message) => {
             eprintln!("{message}");

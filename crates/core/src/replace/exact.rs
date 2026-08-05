@@ -1,13 +1,14 @@
 use std::collections::HashSet;
+use std::env;
+#[cfg(test)]
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::{env, fs};
 
 use crate::error::ContextPatchError;
-use crate::fs::atomic_write::write_atomic;
 use crate::fs::file_identity::FileIdentity;
+use crate::fs::guarded_file::{open_regular_file_in_root, GuardedRegularFile};
 use crate::fs::hash::{sha256_bytes, validate_sha256};
-use crate::fs::mutation_lock::try_file_mutation_lock;
-use crate::fs::path::resolve_existing_file;
+use crate::fs::mutation_lock::try_file_mutation_lock_for_open_file;
 
 pub const MAX_BULK_REPLACE_ENTRIES: usize = 64;
 
@@ -55,11 +56,13 @@ pub fn replace_exact_in_root_with_sha256(
     expected_sha256: Option<&str>,
 ) -> Result<ReplaceExactSummary, ContextPatchError> {
     validate_replace_request(old, expected_sha256)?;
-    let target_path = resolve_existing_file(repo_root, path)?;
-    let _mutation_lock = try_file_mutation_lock(repo_root, &target_path)?;
-    let current_bytes = read_target(&target_path)?;
-    let planned = plan_resolved_replacement(target_path, current_bytes, old, new, expected_sha256)?;
-    write_atomic(&planned.path, planned.updated.as_bytes())?;
+    let target = open_regular_file_in_root(repo_root, path)?;
+    let target_path = target.target_path();
+    let _mutation_lock =
+        try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())?;
+    let current_bytes = target.read_all()?;
+    let planned = plan_guarded_replacement(&target, current_bytes, old, new, expected_sha256)?;
+    target.replace_atomic(planned.updated.as_bytes())?;
     Ok(planned.summary())
 }
 
@@ -76,14 +79,8 @@ fn validate_replace_request(
     Ok(())
 }
 
-fn read_target(target_path: &Path) -> Result<Vec<u8>, ContextPatchError> {
-    fs::read(target_path).map_err(|error| {
-        ContextPatchError::new(format!("failed to read {}: {error}", target_path.display()))
-    })
-}
-
-fn plan_resolved_replacement(
-    target_path: PathBuf,
+fn plan_guarded_replacement(
+    target: &GuardedRegularFile,
     current_bytes: Vec<u8>,
     old: &str,
     new: &str,
@@ -98,6 +95,7 @@ fn plan_resolved_replacement(
             )));
         }
     }
+    let target_path = target.target_path();
     let current = String::from_utf8(current_bytes.clone()).map_err(|error| {
         ContextPatchError::new(format!(
             "failed to read {} as UTF-8 text: {error}",
@@ -128,7 +126,10 @@ fn plan_resolved_replacement(
     updated.push_str(&current[end_byte..]);
 
     Ok(PlannedReplacement {
+        repo_root: target.repository_root().to_path_buf(),
         path: target_path,
+        relative_path: target.relative_path().to_path_buf(),
+        identity: FileIdentity::from_file(target.file())?,
         start_byte,
         end_byte,
         original: current_bytes,
@@ -143,7 +144,10 @@ fn plan_resolved_replacement(
 /// locks can still race the final comparison and rename.
 #[derive(Debug)]
 pub struct PlannedReplacement {
+    repo_root: PathBuf,
     pub path: PathBuf,
+    relative_path: PathBuf,
+    identity: FileIdentity,
     pub start_byte: usize,
     pub end_byte: usize,
     original: Vec<u8>,
@@ -174,10 +178,12 @@ pub fn plan_replace_exact_in_root(
     expected_sha256: Option<&str>,
 ) -> Result<PlannedReplacement, ContextPatchError> {
     validate_replace_request(old, expected_sha256)?;
-    let target_path = resolve_existing_file(repo_root, path)?;
-    let _mutation_lock = try_file_mutation_lock(repo_root, &target_path)?;
-    let current_bytes = read_target(&target_path)?;
-    plan_resolved_replacement(target_path, current_bytes, old, new, expected_sha256)
+    let target = open_regular_file_in_root(repo_root, path)?;
+    let target_path = target.target_path();
+    let _mutation_lock =
+        try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())?;
+    let current_bytes = target.read_all()?;
+    plan_guarded_replacement(&target, current_bytes, old, new, expected_sha256)
 }
 
 /// Validate a bounded batch before its caller starts applying entries.
@@ -202,7 +208,7 @@ pub fn plan_bulk_replace_exact_in_root(
     }
 
     let mut targets = HashSet::with_capacity(entries.len());
-    let mut resolved = Vec::with_capacity(entries.len());
+    let mut opened = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         validate_replace_request(entry.old, entry.expected_sha256).map_err(|error| {
             ContextPatchError::new(format!(
@@ -210,13 +216,13 @@ pub fn plan_bulk_replace_exact_in_root(
                 entry.path.display()
             ))
         })?;
-        let target = resolve_existing_file(repo_root, entry.path).map_err(|error| {
+        let target = open_regular_file_in_root(repo_root, entry.path).map_err(|error| {
             ContextPatchError::new(format!(
                 "entry {index} (`{}`): {error}",
                 entry.path.display()
             ))
         })?;
-        let identity = FileIdentity::from_path(&target).map_err(|error| {
+        let identity = FileIdentity::from_file(target.file()).map_err(|error| {
             ContextPatchError::new(format!(
                 "entry {index} (`{}`): {error}",
                 entry.path.display()
@@ -228,28 +234,31 @@ pub fn plan_bulk_replace_exact_in_root(
                 entry.path.display()
             )));
         }
-        resolved.push(target);
+        opened.push(target);
     }
 
     entries
         .iter()
-        .zip(resolved)
+        .zip(opened)
         .enumerate()
         .map(|(index, (entry, target))| {
-            let _mutation_lock = try_file_mutation_lock(repo_root, &target).map_err(|error| {
+            let target_path = target.target_path();
+            let _mutation_lock =
+                try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())
+                    .map_err(|error| {
+                        ContextPatchError::new(format!(
+                            "entry {index} (`{}`): {error}",
+                            entry.path.display()
+                        ))
+                    })?;
+            let current_bytes = target.read_all().map_err(|error| {
                 ContextPatchError::new(format!(
                     "entry {index} (`{}`): {error}",
                     entry.path.display()
                 ))
             })?;
-            let current_bytes = read_target(&target).map_err(|error| {
-                ContextPatchError::new(format!(
-                    "entry {index} (`{}`): {error}",
-                    entry.path.display()
-                ))
-            })?;
-            plan_resolved_replacement(
-                target,
+            plan_guarded_replacement(
+                &target,
                 current_bytes,
                 entry.old,
                 entry.new,
@@ -273,16 +282,32 @@ pub fn apply_planned_replacement(
     repo_root: &Path,
     planned: &PlannedReplacement,
 ) -> Result<ReplaceExactSummary, ContextPatchError> {
-    let _mutation_lock = try_file_mutation_lock(repo_root, &planned.path)?;
-    let resolved = resolve_existing_file(repo_root, &planned.path)?;
-    if resolved != planned.path {
+    let current_root = repo_root.canonicalize().map_err(|error| {
+        ContextPatchError::new(format!(
+            "failed to resolve repository root {} while applying replacement plan: {error}",
+            repo_root.display()
+        ))
+    })?;
+    if current_root != planned.repo_root {
         return Err(ContextPatchError::new(format!(
-            "target file changed after replacement was planned; expected {}, resolved {}",
-            planned.path.display(),
-            resolved.display()
+            "replacement plan belongs to repository root {}; refusing apply under {}",
+            planned.repo_root.display(),
+            current_root.display()
         )));
     }
-    let current = read_target(&resolved)?;
+    let target = open_regular_file_in_root(&current_root, &planned.relative_path)?;
+    let target_path = target.target_path();
+    let _mutation_lock =
+        try_file_mutation_lock_for_open_file(repo_root, &target_path, target.file())?;
+    let current_identity = FileIdentity::from_file(target.file())?;
+    if current_identity != planned.identity {
+        return Err(ContextPatchError::new(format!(
+            "target file changed after replacement was planned; expected filesystem identity for {}, found a different target at {}",
+            planned.path.display(),
+            target_path.display()
+        )));
+    }
+    let current = target.read_all()?;
     if current != planned.original {
         return Err(ContextPatchError::new(format!(
             "target file changed after replacement was planned; current_sha256={}, \
@@ -291,7 +316,7 @@ pub fn apply_planned_replacement(
             sha256_bytes(&planned.original)
         )));
     }
-    write_atomic(&planned.path, planned.updated.as_bytes())?;
+    target.replace_atomic(planned.updated.as_bytes())?;
     Ok(planned.summary())
 }
 
@@ -364,8 +389,29 @@ mod tests {
 
         let error = replace_exact_in_root(&root, &outside_file, "alpha", "delta").unwrap_err();
 
-        assert!(error.to_string().contains("is outside repository root"));
+        assert!(error
+            .to_string()
+            .contains("normalized repository-relative path"));
         assert_eq!(fs::read_to_string(&outside_file).unwrap(), "alpha");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_intermediate_symlinks_without_mutating_outside_files() {
+        let root = test_root("refuses_intermediate_symlinks");
+        let outside = test_root("refuses_intermediate_symlinks_outside");
+        let outside_file = outside.join("sample.txt");
+        fs::write(&outside_file, "alpha beta gamma").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+
+        let error = replace_exact_in_root(&root, Path::new("linked/sample.txt"), "beta", "delta")
+            .unwrap_err();
+
+        assert!(error.to_string().contains("symlink"));
+        assert_eq!(
+            fs::read_to_string(outside_file).unwrap(),
+            "alpha beta gamma"
+        );
     }
 
     #[test]
@@ -564,7 +610,7 @@ mod tests {
                 expected_sha256: None,
             },
             ReplaceExactEntry {
-                path: Path::new("./sample.txt"),
+                path: Path::new("sample.txt"),
                 old: "gamma",
                 new: "GAMMA",
                 expected_sha256: None,
@@ -653,6 +699,35 @@ mod tests {
             .to_string()
             .contains("changed after replacement was planned"));
         assert_eq!(fs::read_to_string(file).unwrap(), "external change");
+    }
+
+    #[test]
+    fn planned_replacement_refuses_a_different_repository_root() {
+        let planning_root = test_root("planned_replacement_planning_root");
+        let other_root = test_root("planned_replacement_other_root");
+        let planning_file = planning_root.join("sample.txt");
+        let other_file = other_root.join("sample.txt");
+        fs::write(&planning_file, "alpha beta gamma").unwrap();
+        fs::hard_link(&planning_file, &other_file).unwrap();
+        let planned = plan_replace_exact_in_root(
+            &planning_root,
+            Path::new("sample.txt"),
+            "beta",
+            "BETA",
+            None,
+        )
+        .unwrap();
+
+        let error = apply_planned_replacement(&other_root, &planned).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("replacement plan belongs to repository root"));
+        assert_eq!(
+            fs::read_to_string(planning_file).unwrap(),
+            "alpha beta gamma"
+        );
+        assert_eq!(fs::read_to_string(other_file).unwrap(), "alpha beta gamma");
     }
 
     #[test]

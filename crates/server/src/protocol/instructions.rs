@@ -3,20 +3,22 @@
 use crate::tools::ToolSurface;
 
 const FULL_CLIENT_INSTRUCTIONS: &str = "\
-Call capability_manifest first, preferably with names_only=true or one section. Before declaring a \
-tool unavailable, compare build.git_sha with the checked-out commit; a stale installed binary may \
-predate the capability. Follow each tool's exact anchors, hashes, dry-run, and confirmation gates; raw \
-shell access is not available. Use artifact_write_text for non-repository scratch files. Read refusal \
-messages for the safe alternative. After an interrupted or timed-out mutation, call \
-read_write_receipts before retrying.";
+Call capability_manifest first. Before declaring a tool unavailable, compare build.git_sha with the \
+checkout; a stale install may predate it. Follow exact anchors, hashes, dry-run, and confirmation; raw \
+shell access is unavailable. Tool replies can arrive out of order: correlate by JSON-RPC id. \
+task_image_python_run, harbor_run_start, and validation_profile_run return status=\"running\" plus a \
+log_id; poll on the same server with read_command_log. Polling never restarts work; a restart makes \
+active logs unknown. Use artifact_write_text for non-repo scratch. After interrupted or timed-out \
+mutations, call read_write_receipts before retrying.";
 
 const PROJECT_CLIENT_INSTRUCTIONS: &str = "\
 Call project_execute first with action=\"describe\". Omit arguments.name to list actions, or provide \
-one action name to retrieve its exact schema and annotations. Execute exactly one action per call by \
-passing its original arguments unchanged. For a workspace root, repository may select a normalized \
-workspace-relative exact child Git worktree; omit it to use the configured root. The wrapper preserves \
-confinement, hashes, confirmations, dry runs, deadlines, locks, receipts, and command allowlists. After \
-an interrupted or timed-out mutation, inspect receipts and current state before retrying.";
+one action name for its exact schema. Execute one action per call with its original arguments. \
+repository may select a normalized exact child Git worktree. All guards remain. Tool replies can \
+arrive out of order: correlate by JSON-RPC id. task_image_python_run, harbor_run_start, and \
+validation_profile_run return status=\"running\" plus a log_id; poll on the same server through \
+read_command_log. Polling never restarts work; a restart makes active logs unknown. After interrupted \
+or timed-out mutations, inspect receipts and current state before retrying.";
 
 pub(crate) const fn client_instructions(surface: ToolSurface) -> &'static str {
     match surface {
@@ -47,6 +49,9 @@ mod tests {
             "dry-run",
             "read_write_receipts",
             "artifact_write_text",
+            "JSON-RPC id",
+            "harbor_run_start",
+            "read_command_log",
         ] {
             assert!(
                 client_instructions(ToolSurface::Full).contains(expected),
@@ -54,7 +59,9 @@ mod tests {
             );
         }
         assert!(client_instructions(ToolSurface::Project).contains("action=\"describe\""));
-        assert!(client_instructions(ToolSurface::Project).contains("exactly one action"));
+        assert!(client_instructions(ToolSurface::Project).contains("one action per call"));
+        assert!(client_instructions(ToolSurface::Project).contains("JSON-RPC id"));
+        assert!(client_instructions(ToolSurface::Project).contains("read_command_log"));
     }
 
     #[test]

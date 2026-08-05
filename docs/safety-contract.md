@@ -32,13 +32,28 @@ This document is normative. If implementation behavior conflicts with this file,
 22. Exact replacement should accept an optional complete-file SHA-256 so shared-worktree callers can reject stale reads in addition to validating the text anchor.
 23. Direct MCP reads, writes, and Git operations must have bounded reply deadlines. Expiry must report an unknown outcome and recovery steps, not claim failure or roll back a worker that may still be running.
 24. Receipt-enabled mutations must persist a begin record before mutation and a settle record with resulting state afterward so an interrupted transport can be reconciled.
-25. ContextPatch mutations for one repository must be cooperatively serialized across server processes; file compare-and-write operations must hold a target lock across verification and atomic replacement.
+25. ContextPatch mutations for one repository must be cooperatively serialized across server processes; file compare-and-write operations must hold a filesystem-identity target lock shared across configured-root and descendant-repository views during verification and atomic replacement.
 26. Detached deadline workers must have a fixed ceiling. Saturation must refuse a new operation before it starts.
 27. If sidecar artifact cleanup is exposed, it must delete one exact regular file under the fixed artifact root only after a digest-reporting dry run, matching SHA-256, and explicit confirmation.
 28. If bulk exact replacement is exposed, every entry must validate before the first write and each
     target must be revalidated under its mutation lock before apply. Only each file write is atomic:
     interruption or apply failure may leave a prefix applied and must direct callers to per-file
     receipts and current-state inspection.
+29. ID-bearing MCP tool calls must run through a bounded worker pool so no tool call blocks stdin
+    processing or an independent request. Concurrent replies must retain their JSON-RPC ids and be
+    serialized as complete response lines so clients can safely correlate out-of-order completion.
+    Stdin ingestion must use a bounded queue so a failed stdout write wakes the dispatcher and
+    terminates the server promptly even when the client leaves stdin open.
+30. Background task-image, Harbor, and validation-profile work must share a fixed concurrency cap,
+    return stable pollable log ids, and report restart-orphaned active work as unknown.
+31. Repository file reads and writes must refuse intermediate symlink components rather than follow
+    them. Content reads, metadata inspection, directory listing, exact-hash replacement,
+    executable-bit changes, and create-only publication currently require Unix and must traverse
+    through no-follow directory descriptors; non-Unix builds must refuse rather than use path-based
+    check-then-open fallbacks.
+32. Regular-file metadata and bounded byte reads must derive size, digest, line count, and returned
+    bytes from one fixed-extent streamed snapshot. They must use bounded memory, refuse metadata or
+    path-identity changes, and never chase a concurrently growing end-of-file.
 
 ## Required refusal cases
 
@@ -58,6 +73,9 @@ Write tools must refuse the operation when:
 12. A sidecar artifact deletion targets a missing, non-normalized, symlinked, non-regular, hash-mismatched, or outside-root path.
 13. A bulk exact-replacement request repeats the same filesystem file, including through case or
     hard-link aliases, or any entry fails the normal exact-replacement checks.
+14. A repository file operation encounters an intermediate symlink or non-directory component, or
+    a symlink target where an existing regular file is required.
+15. An executable-bit change targets a file with more than one hard link.
 
 Refusals must return a clear reason. They must not pretend success.
 
@@ -71,17 +89,34 @@ Persistent file writes should use this pattern:
 4. Write to a temporary file in the same directory.
 5. Flush and rename the temporary file over an existing target, or publish a create-only target with an atomic no-overwrite operation.
 
+On Unix, guarded repository file operations must hold already-open parent-directory descriptors
+while inspecting, creating, publishing, or replacing leaf entries. Path-based prechecks alone are
+not sufficient because an intermediate symlink must not redirect the operation outside the root.
+Immediately before publication, replacement, or descriptor-based mode mutation, the expected parent
+path must be reopened from the repository root and its filesystem identity must still match the held
+descriptor.
+
 If the platform cannot provide the expected atomic behavior, the operation must report that limitation.
+
+Repository locks and final parent-identity checks coordinate ContextPatch and reject namespace changes
+observed before mutation. No portable POSIX primitive can atomically prove ancestry while publishing
+through a directory descriptor, so a privileged external process that renames that directory after
+the final identity check remains outside the cooperative-writer guarantee. Callers must use current
+hash/state checks when unrelated external programs may mutate the same tree.
 
 For `bulk_replace_exact`, validation is batch-wide but application is deliberately per-file. A
 validation refusal occurs before the first write and leaves all targets unchanged. Apply compares each
-target's exact captured bytes while holding its mutation lock, then uses the normal atomic replacement
-path. There is no cross-file transaction or rollback: an apply failure, process interruption, or reply
-timeout can leave an applied prefix, and recovery must use per-file receipts plus current file state.
+target's exact captured bytes while holding its mutation lock, verifies that the plan is being applied
+under the same canonical repository root where it was created, then uses the normal atomic replacement
+path. A hard link in another repository therefore cannot reuse a validated plan. There is no cross-file
+transaction or rollback: an apply failure, process interruption, or reply timeout can leave an applied
+prefix, and recovery must use per-file receipts plus current file state.
 
 ## Reply deadlines and mutation receipts
 
-Direct MCP operations have bounded reply waits: 30 seconds for reads, 60 seconds for direct writes, and 120 seconds for Git and GitHub operations. Process, profile, setup, and native tools retain their operation-specific execution timeouts. Production Git subprocesses also have a 90-second hard timeout below the outer reply deadline; a timeout terminates the child and, on Unix, its process group so hooks or credential helpers cannot keep inherited pipes open. A reply deadline still does not cancel other workers because interrupting a filesystem or non-child operation mid-flight could make the result less safe. That refusal must therefore say that the outcome is unknown and name a state-recovery tool. No more than 16 deadline workers may be active; saturation refuses the next call before its operation starts.
+Direct MCP operations have bounded reply waits: 30 seconds for reads, 60 seconds for direct writes, and 120 seconds for Git and GitHub operations. Process, profile, setup, and native tools retain their operation-specific execution timeouts. Production Git subprocesses also have a 90-second hard timeout below the outer reply deadline; a timeout terminates the child and, on Unix, its process group. The bounded runner also terminates members left in the original process group after the direct child exits, and a wait or output-setup failure must terminate and reap the child before returning. A descendant can escape process-group cleanup by creating a new session, so the runner is not a process sandbox; nonblocking cancellable output readers perform a short final drain and then close their pipe ends so an escaped writer cannot retain server reader threads. A reply deadline still does not cancel other workers because interrupting a filesystem or non-child operation mid-flight could make the result less safe. That refusal must therefore say that the outcome is unknown and name a state-recovery tool. No more than 16 deadline workers may be active; saturation refuses the next call before its operation starts.
+
+The stdio transport runs every ID-bearing `tools/call` through a bounded 16-worker pool and may serialize completed responses in a different order than requests arrived. JSON-RPC `id`, not line position, is the correlation key. A bounded stdin queue lets the dispatcher detect worker stdout failure and terminate promptly without waiting for the client to close stdin. Initialization, listing, notifications, malformed requests, and unknown methods remain inline. Confirmed task-image execution, typed Harbor runs, and validation profiles use a separate shared two-job background limit and return immediately with `status: "running"` plus a `log_id`; callers poll that id on the same server without restarting work.
 
 `read_write_receipts` provides durable recovery evidence outside the repository under the stable scratch root. Receipt-enabled mutations append a begin record before mutation and a settle record after collecting the resulting file digest or Git HEAD. Reads, appends, and journal rotation must be cross-process locked, and rotation must preserve entries that never settled. A bounded multi-file mutation must reserve journal capacity before its first write and suppress rotation between its per-file records, so an interrupted batch retains its settled prefix alongside the interrupted entry.
 
@@ -105,11 +140,13 @@ The server should not expose generic `write_file`, unrestricted `delete`, recurs
 
 Binary file creation, if exposed, must be create-only for one explicit path, refuse existing targets, decode bounded base64 content, optionally enforce an expected decoded byte count, and use the same repository-root and atomic publish guards as text create-only writes.
 
-Bulk fixture import, if exposed, must remain a bounded create-only variant of binary file creation. It may create missing parents only when explicitly requested, but it must reject overwrites, traversal, duplicate paths, excessive file counts, and excessive total decoded bytes.
+Bulk fixture import, if exposed, must remain a bounded create-only variant of binary file creation. It may create missing parents only when explicitly requested, but it must reject overwrites, traversal, symlinked parents, duplicate paths, excessive file counts, and excessive total decoded bytes. Parent creation must not follow a pre-existing symlink or create directories through one.
 
 Sidecar artifact creation, if exposed, must use a fixed artifact root outside the repository. It must reject absolute paths and traversal, refuse overwrites, optionally create parents only under that artifact root, and never claim repository mutation semantics.
 
-Read-only file inspection may report metadata, SHA-256 digests, line counts, one-directory entries, symlink status, and bounded byte ranges, but it must stay repository-root-confined and must not become recursive unrestricted filesystem traversal.
+Read-only file inspection may report metadata for one path or a bounded batch, SHA-256 digests, line counts, bounded depth-limited directory trees, symlink status, and bounded byte ranges. A final symlink may be reported but must not be opened or hashed, and intermediate symlinks must be refused. Recursive listings must cap both depth and entry count, bound retained directory candidates and metadata reads before truncation, remain deterministic, and never follow symlink directories; inspection must stay repository-root-confined and must not become unrestricted filesystem traversal.
+
+Executable-bit mutation, if exposed, must operate on one existing non-symlinked regular file, default to dry-run, require the current content SHA-256 and current octal mode plus exact confirmation, hold the target mutation lock while revalidating, change only mode `0111`, and verify that file content remains byte-identical.
 
 All `tools/call` responses must fit within the server's 900 KiB serialized-response envelope.
 Successful operations whose output would exceed that limit return a compact success marker rather
@@ -131,18 +168,26 @@ Default-deny is a trust feature. Adding a broad write primitive would change the
 1. Accept a program name plus argument array, never a shell command string.
 2. Resolve the working directory inside the configured repository root.
 3. Allow only documented validation-oriented programs and subcommands.
-4. Time out rather than running indefinitely. The default is 120 seconds and the general maximum is 600 seconds; only exact `harbor run` commands may use the narrow 3600-second ceiling.
+4. Time out rather than running indefinitely. Generic guarded commands default to 120 seconds and remain capped at 600 seconds. Only the typed Harbor adapter may use the narrow 3600-second ceiling.
 5. Return command, cwd, allowlist rule, exit code, timeout state, duration, stdout, and stderr.
 6. Drain stdout and stderr concurrently so child processes cannot deadlock on full pipes.
-7. Redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large output.
+   Child wait, pipe-capture, or nonblocking-setup failures must terminate and reap the child before
+   returning the error.
+7. Redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large output and report truncation caused by either process capture or response formatting.
 8. Refuse destructive Git operations and ungated commits.
 9. Prefer predefined validation profiles for repeated workflows, but require every profile command to pass the same no-shell allowlist and timeout rules.
-10. Store only redacted command logs, address them by opaque ids, and read them back through `read_command_log` rather than exposing arbitrary paths.
+10. Store only redacted command logs, address them by opaque ids, and read them back through `read_command_log` rather than exposing arbitrary paths. Asynchronous logs must expose explicit lifecycle status and report restart-orphaned active work as unknown rather than completed or failed.
 11. Resolve executable names from the host `PATH` plus server-configured validation path entries such as `CONTEXTPATCH_VALIDATION_PATHS`, while still refusing caller-supplied executable paths or per-request environment overrides.
 12. Add latency instrumentation with monotonic durations and response sizes so performance work is evidence-based, while never recording secrets, environment values, or unredacted command output in timing metadata.
 13. Permit the exact `{scratch}` token inside arguments as the only general outside-repository byproduct path. Expand it to the stable repository-specific scratch root and refuse lexical traversal outside that root.
 
 `artifact_python_run` is an artifact-root scratch runner, not a shell. It may run only a Python script that already exists under the fixed artifact root, with bounded argv and repo-root-confined cwd, so analysis scripts do not have to be created inside the repository. It must not accept caller-supplied executable paths, shell snippets, or per-request environment overrides.
+
+`task_image_python_run` is a typed asynchronous task-environment runner, not general Docker authority. It may build only `task/environment/Dockerfile` from `task/environment`, then invoke only `python3` or `python` on one existing non-symlinked repository-relative `.py` file. It must default to a plan, require exact confirmation, separate build and run timeouts, mount the repository read-only, disable runtime networking, drop capabilities, enforce no-new-privileges/PID/read-only-root/tmpfs limits, and return a stable log id before execution completes. Concurrent jobs must use distinct execution-image tags and container names. A runtime timeout, indeterminate run-wrapper failure, or Docker exit code 125 must force-remove its named container after the Docker client is terminated, and the per-job execution tag must be removed after every build attempt that may have created it. Callers must not choose Docker arguments, mounts, image names, entrypoints, environment overrides, or shell strings.
+
+`harbor_run_start` is a typed asynchronous validation adapter. It may start only `harbor run -p <normalized repository project> --agent <validated agent>`, share the background cap with task-image and validation-profile jobs, return a stable opaque log id before completion, and use `read_command_log` for polling without restarting the command. Terminal logs may report completed, failed, or timed out; an active log owned by an earlier server instance must report unknown. Structured evidence must remain repository-confined, require Harbor's exact job/trial layout, enumerate the union of rewarded and exception-only trials with exception-bearing trials first, cap trial count and total serialized evidence, reject symlink or traversal paths, read bounded artifacts from guarded already-open file descriptors rather than canonicalize-then-reopen paths, redact verifier output, and surface malformed or missing evidence explicitly.
+
+`validation_profile_run` is a typed asynchronous profile adapter. It must validate the named profile before starting, return one stable profile log id immediately, and run only server-owned commands through the same allowlist, timeout, redaction, and logging rules. Its terminal log may reference bounded per-command log ids. Profile-owned semantic gates, including Dynamo Harbor reward requirements, must produce a failed terminal state even when every child process exits zero. It shares the same two-job cap and unknown-after-restart semantics as task-image and Harbor work.
 
 `image_cleanliness_check_run` and `docker_image_inspect` are separate narrow Docker gates, not general Docker authority. They may plan or run only `docker run --rm --network none --entrypoint find <image> / -name <filename>` and `docker image inspect <image>` respectively, default to dry-run, require exact confirmation for execution, and must not expose mounts, caller-selected entrypoints, network access, shell snippets, or arbitrary Docker arguments.
 
@@ -174,7 +219,7 @@ Rules:
 1. Use `gh` with explicit argv and no shell.
 2. Keep read-only PR actions separate from mutating PR creation and fork preparation.
 3. Permit fork/upstream reads only through a validated `OWNER/REPO` selector passed as a separate `--repo` argument.
-4. Redact and bound workflow log output and require an explicit run or job database id; do not expose arbitrary Actions API access.
+4. Redact and bound workflow log output and require an explicit run or job database id; bounded job logs must default to retaining the terminal tail and expose the head only as an explicit projection. Do not expose arbitrary Actions API access.
 5. Require a full commit SHA and bounded limit for run discovery; do not infer history from a branch name.
 6. Permit comment filtering only as bounded local body matching; do not accept caller-provided `jq`, GraphQL, REST paths, or query expressions.
 7. Limit workflow reruns to `gh run rerun <run_id> --failed`, default to dry-run, and require exact confirmation.

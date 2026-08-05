@@ -12,7 +12,7 @@ pub(crate) fn definitions() -> Vec<Value> {
                         "properties": {
                             "program": {
                                 "type": "string",
-                                "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, harbor, bash for the exact base-image script, or rg."
+                                "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for the exact base-image script, or rg. Use harbor_run_start for Harbor."
                             },
                             "args": {
                                 "type": "array",
@@ -28,8 +28,8 @@ pub(crate) fn definitions() -> Vec<Value> {
                             "timeout_secs": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 3600,
-                                "description": "Optional timeout in seconds. Defaults to 120. Exact harbor run commands may use up to 3600; all other commands remain capped at 600."
+                                "maximum": 600,
+                                "description": "Optional timeout in seconds. Defaults to 120 and remains capped at 600. Harbor uses its typed asynchronous action."
                             }
                         },
                         "required": ["program", "args"],
@@ -45,7 +45,7 @@ pub(crate) fn definitions() -> Vec<Value> {
                         "properties": {
                             "log_id": {
                                 "type": "string",
-                                "description": "Opaque log id returned by run_guarded_command or validation_profile_run."
+                                "description": "Opaque log id returned by guarded commands or asynchronous Harbor, task-image, and validation-profile actions."
                             },
                             "max_chars": {
                                 "type": "integer",
@@ -94,6 +94,82 @@ pub(crate) fn definitions() -> Vec<Value> {
                             }
                         },
                         "required": ["script"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::task_image_python_run::NAME,
+                    "description": "Plan a hardened task-image Python run. With dry_run=false, start the build and execution in the background, return a log_id immediately, and poll with read_command_log.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "script": {
+                                "type": "string",
+                                "description": "Existing normalized repository-relative .py file; symlinks are refused."
+                            },
+                            "program": {
+                                "type": "string",
+                                "enum": ["python3", "python"],
+                                "description": "Python executable inside the image. Defaults to python3."
+                            },
+                            "args": {
+                                "type": "array",
+                                "items": {"type": "string", "maxLength": 4096},
+                                "maxItems": 32,
+                                "description": "Arguments passed to the script without a shell."
+                            },
+                            "timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 600,
+                                "description": "Script timeout in seconds. Defaults to 120."
+                            },
+                            "build_timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 1800,
+                                "description": "Image build timeout in seconds. Defaults to 600."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Return the exact build and run plan without invoking Docker. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Execution requires the exact phrase: run task image python"
+                            }
+                        },
+                        "required": ["script"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::harbor_run_start::NAME,
+                    "description": "Start one typed Harbor run in the background and return a log_id immediately. Poll with read_command_log; completed logs include structured Harbor evidence. Harbor, task-image, and validation-profile jobs share a two-job cap.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": {
+                                "type": "string",
+                                "description": "Normalized repository-relative Harbor project directory. Defaults to task."
+                            },
+                            "agent": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9._][A-Za-z0-9._-]*$",
+                                "description": "Harbor agent identifier. A leading hyphen is refused."
+                            },
+                            "timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3600,
+                                "description": "Run timeout in seconds. Defaults to 3600."
+                            }
+                        },
+                        "required": ["agent"],
                         "additionalProperties": false
                     }
                 }
@@ -164,7 +240,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::validation_profile_run::NAME,
-                    "description": "Run a predefined sequence of allowlisted validation commands and return compact results with log ids.",
+                    "description": "Start a predefined validation profile in the background and return a log_id immediately. Poll with read_command_log; polling never restarts work.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

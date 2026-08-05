@@ -19,13 +19,15 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `write_new_file` | Yes | Destination must not exist |
 | `write_new_file_base64` | Yes | Destination must not exist; base64 decoded bytes with optional expected size |
 | `write_existing_file_exact_hash` | Yes | Existing regular file, exact current SHA-256, dry-run default, explicit confirmation |
-| `file_info` | No | Repo-root-confined metadata, symlink status, SHA-256 for files, line count for UTF-8 files |
-| `list_directory` | No | One-directory repo-root-confined listing with type, symlink, and size metadata |
+| `file_info` | No | Repo-root-confined metadata for one path or up to 64 unique paths, including mode, symlink status, SHA-256 for files, and UTF-8 line count |
+| `set_file_executable` | Executable bits only | Existing regular file, exact current SHA-256 and mode, dry-run default, explicit confirmation |
+| `list_directory` | No | Bounded deterministic directory listing with optional depth-limited recursion that never follows symlink directories |
 | `read_file_bytes` | No | Bounded byte range from a regular file as hex or base64 |
 | `artifact_write_text` | Sidecar artifact only | Writes outside repo under fixed artifact root; create-only, no repo mutation |
 | `artifact_write_base64` | Sidecar artifact only | Binary sidecar artifact under fixed artifact root; create-only, size/byte-count guards |
 | `artifact_delete_exact` | Sidecar artifact only | Exact regular sidecar file, digest-reporting dry run, matching SHA-256, explicit confirmation |
 | `artifact_python_run` | No source edits | Runs a Python script under the fixed artifact root with no shell and bounded logs |
+| `task_image_python_run` | Docker image/cache only | Plans a task-image Python run; confirmed execution starts asynchronously and returns a pollable log id |
 | `bulk_write_new_files_base64` | Yes | Bounded multi-file create-only import from base64 entries |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
 | `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
@@ -35,8 +37,9 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `docker_image_inspect` | No source edits | Narrow `docker image inspect <image>` workflow; dry-run default and exact confirmation |
 | `fixture_manifest_verify` | No | Exact fixture file set and SHA-256 digest verification; mismatches are refusals |
 | `fixture_manifest_refresh` | Manifest file only | Regenerates fixture manifest from declared files/prefixes with dry-run, confirmation, and existing-manifest hash guard |
-| `read_command_log` | No | Reads captured guarded-command logs by opaque id |
-| `validation_profile_run` | No source edits | Runs predefined allowlisted validation command sequences |
+| `read_command_log` | No | Reads captured command logs and asynchronous lifecycle state by opaque id |
+| `harbor_run_start` | Harbor job artifacts | Starts one typed Harbor run asynchronously and exposes pollable structured evidence through an opaque log id |
+| `validation_profile_run` | No source edits | Starts predefined allowlisted validation command sequences asynchronously |
 | `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
 | `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
 | `native_device_run` | External device command | Dry-run default, typed action params, device-state confirmation gate, no raw `xcrun` or `adb` commands |
@@ -64,6 +67,14 @@ The public tool names use snake_case because they are protocol-facing. The CLI u
 ## Tool annotations
 
 Every server-advertised MCP tool must include an `annotations` object in `tools/list` so clients can interpret tool intent. The server sets `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: false` for all tools, with `readOnlyHint: true` on read-only tools.
+
+## Transport and concurrent calls
+
+Every ID-bearing `tools/call` request executes through a bounded 16-worker pool so one slow validator, Git operation, or filesystem call does not block stdin processing or later independent calls. Responses can arrive out of request order; clients must correlate every response with its request by JSON-RPC `id`. Response writes remain serialized so each stdio line is one complete JSON-RPC document. Stdin is read through a bounded queue so a worker that detects broken stdout can wake the dispatcher and terminate the server even if the client leaves stdin open. Initialization, tool listing, notifications, malformed requests, and unknown methods remain inline.
+
+Guarded repository file inspection, directory listing, creation, replacement, and mode changes currently require Unix descriptor-relative path support. Other platforms must refuse these operations rather than reopen path strings after validation.
+
+Confirmed `task_image_python_run`, `harbor_run_start`, and `validation_profile_run` calls start background work and immediately return `status: "running"` plus a stable `log_id`. The three workflows share a two-job cap. Poll with `read_command_log` on the same running server; polling never starts work again. A log that was still active when its owning server stopped must report `unknown`.
 
 These annotations are a client-permission hint only. They must not remove internal contextpatch safety gates: mutation-capable tools still default to dry-run where designed, still require exact confirmation strings for execution where designed, and still enforce repository-root, hash, path, clean-index/worktree, timeout, and refusal policies.
 
@@ -312,6 +323,8 @@ Rules:
 - Before applying each plan, re-read the target under its mutation lock and compare the exact bytes
   captured during validation. Refuse that entry if the file changed, even when no caller-supplied
   `expected_sha256` was provided.
+- Bind every plan to the canonical repository root used during validation. Refuse applying it under a
+  different root even when that root contains a hard link to the same target inode.
 - Each file replacement is atomic, but the batch is not a cross-file transaction and is not rolled
   back. An interruption or apply-phase failure can leave an applied prefix, and the current entry's
   outcome can be unknown if receipt settlement or transport fails.
@@ -319,9 +332,10 @@ Rules:
   `read_write_receipts` and current file state before retrying.
 - Reserve receipt-journal capacity for the bounded batch before the first write and suppress rotation
   between entries, so a later interrupted receipt cannot evict the settled prefix.
-- File locks use filesystem identity, so hard-link and case aliases cannot acquire divergent
-  ContextPatch locks. Advisory locks coordinate ContextPatch writers only; external programs that
-  ignore them can still race the final comparison and rename.
+- File locks use filesystem identity in one user-wide ContextPatch lock namespace, so hard-link,
+  case, configured-workspace, and descendant-repository views cannot acquire divergent locks for the
+  same target. Advisory locks coordinate ContextPatch writers only; external programs that ignore
+  them can still race the final comparison and rename.
 
 ### `move_tracked`
 
@@ -391,6 +405,7 @@ Rules:
 
 - Refuse if the file already exists.
 - Refuse parent traversal outside the repository root.
+- Refuse symlinked or non-directory parent components instead of following them.
 - Refuse missing parent directories.
 - Write atomically.
 
@@ -418,37 +433,78 @@ Rules:
 
 ### `file_info`
 
-Reports bounded metadata for a repository path.
+Reports bounded metadata for one repository path or a batch of paths.
+
+Exactly one input form is required:
+
+- `path`: one repository-relative path
+- `paths`: 1 to 64 unique repository-relative paths
+
+Rules:
+
+- Every intermediate component must be a non-symlinked directory inside the repository root.
+- A single-path response retains the original object shape; a batch response returns `path_count` and an ordered `entries` array.
+- Each entry must identify whether the path exists, whether it is a symlink, its normalized repository-relative path, its type, and its Unix mode/executable state when available.
+- Existing regular files must include byte length and lowercase SHA-256 digest.
+- File size, digest, and UTF-8 line count must come from one fixed-extent streamed snapshot of the
+  already-open file. The tool must retain only a fixed read buffer, refuse if content metadata or
+  path identity changes during inspection, and must not allocate the complete file.
+- A final symlink may be described, including its link target and whether that target resolves inside the repository, but it must not be followed or hashed.
+- Existing UTF-8 regular files should include `line_count`; binary or invalid UTF-8 files must not be treated as text.
+- Existing directories must be reported as directories without recursively listing contents.
+- Duplicate paths, an empty batch, more than 64 paths, or supplying both input forms must be refused.
+- The tool must not mutate repository state.
+
+### `set_file_executable`
+
+Plans or changes only the executable permission bits of one existing repository file.
 
 Required inputs:
 
 - `path`
+- `executable`: enable or clear owner, group, and other executable bits
+
+Optional inputs:
+
+- `expected_sha256`: current lowercase SHA-256; required for execution
+- `expected_mode`: current three- or four-digit octal mode; required for execution and normalized to four digits before comparison
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `set file executable` when `dry_run` is `false`
 
 Rules:
 
-- The path must resolve inside the repository root.
-- The response must identify whether the path exists, whether it is a symlink, and the normalized repository-relative path.
-- Existing regular files must include byte length and lowercase SHA-256 digest.
-- Existing UTF-8 regular files should include `line_count`; binary or invalid UTF-8 files must not be treated as text.
-- Existing directories must be reported as directories without recursively listing contents.
-- The tool must not mutate repository state.
+- The target and every path component must be non-symlinked, repository-confined, and an existing regular file with exactly one hard link.
+- The operation is supported only on Unix.
+- A dry run must report the current SHA-256, current mode, proposed mode, and whether a change is needed.
+- Execution must hold the target mutation lock and revalidate both the SHA-256 and mode after acquiring it.
+- Enabling executable status must OR mode `0111`; disabling it must clear only mode `0111`, preserving all other permission bits.
+- The file content must remain byte-identical, and the resulting mode must be verified after mutation.
+- An already-satisfied request may succeed as a no-op only after the same execution guards are met.
 
 ### `list_directory`
 
-Lists one repository directory with compact entry metadata.
+Lists a repository directory with compact entry metadata and optional bounded recursion.
 
 Optional inputs:
 
 - `path`: defaults to the configured repository root
 - `include_hidden`: defaults to `false`
+- `recursive`: defaults to `false`
+- `max_depth`: from 1 to 16; defaults to 4 and is reported as 1 when recursion is disabled
+- `max_entries`: from 1 to 2000; defaults to 2000
 
 Rules:
 
 - The path must resolve inside the repository root and must be an existing directory.
-- The tool lists only direct children, not a recursive tree.
-- Entries must include name, normalized path, type, symlink flag, and byte size when available.
+- By default the tool lists only direct children. Recursive mode traverses ordinary directories breadth-first only while their depth is below `max_depth`.
+- Entries must include name, normalized path, depth, type, symlink flag, and byte size when available.
+- The starting directory and traversed directories must not be symlinks; symlink entries are reported but never followed.
 - Hidden entries are omitted unless `include_hidden` is true.
 - Entries should be sorted by path for deterministic output.
+- The response must report `entry_count`, the effective bounds, and `truncated: true` when `max_entries` stops traversal.
+- Enumeration must retain at most the lexically smallest remaining entries plus one truncation
+  sentinel per visited directory before reading entry metadata, so large directories do not turn a
+  small `max_entries` request into unbounded metadata work.
 - The tool must not mutate repository state.
 
 ### `read_file_bytes`
@@ -467,9 +523,15 @@ Optional inputs:
 
 Rules:
 
-- The path must resolve inside the repository root and must be an existing regular file.
+- The target and every intermediate component must be non-symlinked, repository-confined, and an existing regular file or directory as appropriate.
 - The response must include total file size, returned byte count, offset, encoding, returned data, and full-file SHA-256.
 - The tool must refuse offsets past end-of-file and excessive byte counts.
+- Range bytes, total size, and full-file SHA-256 must come from one fixed-extent streamed snapshot of
+  the already-open file. Range reads must use positional I/O and retain memory proportional to
+  `max_bytes`; digesting must use a fixed-size buffer rather than buffering the complete file.
+  Computing the digest still reads the complete initial extent.
+- The tool must refuse if content metadata or path identity changes during inspection. Appends after
+  the initial snapshot must not extend the scan indefinitely.
 - The tool must not decode bytes as text and must not mutate repository state.
 
 ### `artifact_write_text`
@@ -559,6 +621,34 @@ Rules:
 - Output must be redacted, truncated, logged by opaque id, and readable through `read_command_log`.
 - The tool must not mutate repository state by itself and must not accept caller-supplied executable paths or environment overrides.
 
+### `task_image_python_run`
+
+Builds `task/environment/Dockerfile`, then runs one existing repository-relative Python script inside the resulting task image.
+
+Required inputs:
+
+- `script`: normalized repository-relative `.py` file
+
+Optional inputs:
+
+- `program`: `python3` or `python`, defaults to `python3`
+- `args`: up to 32 strings of at most 4096 bytes each
+- `timeout_secs`: script timeout from 1 to 600; defaults to 120
+- `build_timeout_secs`: image-build timeout from 1 to 1800; defaults to 600
+- `dry_run`: defaults to `true`
+- `confirm`: required literal `run task image python` when `dry_run` is `false`
+
+Rules:
+
+- The repository must contain non-symlinked `task/environment/`, `task/environment/Dockerfile`, and script paths.
+- The image build must use `task/environment` as its context and the fixed task Dockerfile; callers cannot supply Docker arguments, image names, mounts, entrypoints, or environment variables. The core-owned execution plan must expose read-only inspection only, so callers cannot alter its repository root, Docker arguments, names, or timeouts after validation. Each job must receive a unique execution-image tag and container name so concurrent jobs cannot run an image published by another build; a separate repository-specific cache tag may be shared.
+- A dry run must return the exact Docker build and run plans without invoking Docker.
+- Runtime must mount the repository read-only at `/workspace`, disable networking, drop all capabilities, set `no-new-privileges`, cap PIDs, use a read-only container root, provide a bounded `/tmp` tmpfs, and invoke Python directly without a shell.
+- Build and runtime have separate timeouts. A failed or timed-out build must prevent the script run. A runtime timeout, indeterminate run-wrapper failure, or Docker exit code 125 must force-remove the uniquely named container after terminating the Docker client. The unique execution tag must be removed after every build attempt that may have created it, and terminal evidence must report container and execution-tag cleanup separately.
+- Confirmed execution must return `status: "running"` and an opaque `log_id` immediately instead of holding the MCP response open for the build and run.
+- Build and script output must be redacted and truncated to bounded fields. Terminal results must be saved under the returned `log_id` and read through `read_command_log`.
+- The tool grants typed task-image execution only; it must not expose generic Docker or package installation.
+
 ### `bulk_write_new_files_base64`
 
 Creates many new repository files from base64 entries in one bounded fixture import.
@@ -575,6 +665,7 @@ Rules:
 
 - Refuse an empty entry list or more than 500 files.
 - Refuse duplicate paths, absolute paths, traversal, NUL bytes, and existing destinations.
+- Refuse symlinked or non-directory parent components. The operation is supported only on Unix, where parent traversal and optional parent creation must remain descriptor-relative and no-follow.
 - Refuse missing parent directories unless `parents` is true.
 - Refuse invalid base64, per-entry byte-count mismatches, or total decoded content larger than 20 MiB.
 - Write each file through the same create-only root guard as `write_new_file_base64`.
@@ -613,13 +704,13 @@ Runs a bounded validation-oriented command without invoking a shell.
 
 Required inputs:
 
-- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python`, `python3`, `pytest`, `harbor`, `bash`, or `rg`
+- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python`, `python3`, `pytest`, `bash`, or `rg`
 - `args`: command arguments; the first argument must be an allowlisted subcommand
 
 Optional inputs:
 
 - `cwd`: working directory relative to the configured repository root
-- `timeout_secs`: timeout in seconds, from 1 to 3600 for exact `harbor run`; all other commands remain limited to 600
+- `timeout_secs`: timeout in seconds from 1 to 600
 
 Rules:
 
@@ -634,17 +725,16 @@ Rules:
   - `pnpm`: `run`, `test`
   - `python`/`python3`: a repo-relative `.py` script path as the first argument
   - `pytest`: validation invocation
-  - `harbor`: `run`
   - `bash`: exactly `references/check-base-image.sh` or `references/check-base-image.sh task`
   - `rg`: search invocation
-- The default timeout is 120 seconds. Exact `harbor run` commands may use up to 3600 seconds; every other allowlisted command remains capped at 600 seconds.
+- The default timeout is 120 seconds and the maximum is 600 seconds.
 - Arguments that directly reference paths outside the repository root must be refused, except for the server-owned `{scratch}` token.
 - `{scratch}` may appear inside data/output arguments and expands to the stable repository-specific scratch root; traversal outside that root must be refused.
 - `{scratch}` must not select a `python`/`python3` script. Repository scripts stay repository-relative, and scratch-hosted Python code uses `artifact_python_run`.
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
 - Program resolution may include server-host configuration through `CONTEXTPATCH_VALIDATION_PATHS` in addition to the process `PATH`; callers still supply only executable names, never paths or environment variables.
-- The tool must refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh` with its optional exact `task` argument, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
+- The tool must refuse direct `harbor run` and direct callers to `harbor_run_start`. It must also refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh` with its optional exact `task` argument, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
 
 ### `fixture_generator_run`
 
@@ -757,10 +847,10 @@ Optional inputs:
 
 Rules:
 
-- The path must resolve inside the repository root and must already be a regular file.
+- The target and every intermediate component must be non-symlinked and repository-confined, and the target must already be a regular file.
 - The expected digest must be lowercase SHA-256 hex and must match the file bytes currently on disk.
 - Dry-run must report the current digest, new digest, byte count, and required confirmation without writing.
-- Execution requires exact confirmation and writes through a temporary file plus rename.
+- Execution requires exact confirmation, reopens and locks the guarded target, rechecks its hash, and replaces it through a same-directory temporary file plus descriptor-relative rename on Unix.
 - The tool must refuse hash mismatches, missing files, directories, non-lowercase digests, and unconfirmed mutation.
 
 ### `fixture_manifest_verify`
@@ -815,7 +905,7 @@ Rules:
 
 ### `read_command_log`
 
-Reads a captured guarded-command log produced by `run_guarded_command` or `validation_profile_run`.
+Reads a captured command log produced by guarded validation or an asynchronous task-image, Harbor, or validation-profile run.
 
 Required inputs:
 
@@ -833,10 +923,37 @@ Rules:
 - Logs contain the same redacted command output shape as guarded command responses.
 - The tool must page from the requested character offset and truncate large responses rather than returning unbounded JSON-RPC payloads.
 - Offsets are character offsets in the redacted UTF-8 log text, not byte offsets.
+- The response must report lifecycle status. Ordinary completed logs report `completed`; asynchronous logs may report `running`, `completed`, `failed`, or `timed_out`.
+- An asynchronous log still marked `running` but owned by an earlier server instance must report `unknown`. The caller must inspect current repository and external state before retrying because the earlier process outcome is not known.
+
+### `harbor_run_start`
+
+Starts one typed Harbor invocation in a background worker and returns immediately with an opaque log id.
+
+Required inputs:
+
+- `agent`: Harbor agent identifier containing only ASCII letters, digits, `.`, `_`, or `-`, and not beginning with `-`
+
+Optional inputs:
+
+- `project`: normalized repository-relative project directory; defaults to `task`
+- `timeout_secs`: from 1 to 3600; defaults to 3600
+
+Rules:
+
+- The exact command is `harbor run -p <project> --agent <agent>` with explicit argv and no shell.
+- The project must use `/` separators, contain no backslashes, and identify an existing repository directory with no symlink or leading-hyphen path components. The exact normalized string validated against the repository must be the argv value passed to Harbor.
+- Harbor, task-image, and validation-profile runs share a limit of two active background jobs per server process.
+- The start response must return `status: "running"`, the stable `log_id`, an exact `read_command_log` polling request, and restart semantics.
+- Polling must not restart the run. While active it reports `running`; terminal status is `completed`, `failed`, or `timed_out`.
+- Completed logs must include the bounded command output and structured Harbor evidence when available: authoritative rewards, result/job paths, the union of rewarded and exception-only trials, aggregate exception types, trial metadata, verifier reward, and redacted/truncated verifier stdout.
+- Structured evidence must prioritize exception-bearing trials, return at most 100 trials and 1000 rewards, remain within 700000 serialized bytes, and report total, returned, omitted, and truncation counts explicitly.
+- Evidence reads must accept only the exact `jobs/<job>/result.json` layout and trial directories named by that result. Traversal, symlink components, malformed JSON, oversized artifacts, missing artifacts, and unsafe trial names must be surfaced explicitly rather than guessed.
+- After a server restart, an in-progress log owned by the previous instance reports `unknown`; callers must inspect existing Harbor job state before deciding whether to start another run.
 
 ### `validation_profile_run`
 
-Runs a predefined sequence of allowlisted validation commands as one MCP call.
+Starts a predefined sequence of allowlisted validation commands as one asynchronous MCP workflow.
 
 Required inputs:
 
@@ -852,10 +969,13 @@ Rules:
 - Profiles must be explicit server-owned command lists, not user-supplied shell snippets.
 - Each command must pass the same `run_guarded_command` allowlist, cwd, timeout, and redaction rules.
 - The `dynamo-harbor-task` profile assigns 3600-second defaults to its exact `harbor run` steps while retaining lower defaults for Git and base-image checks. A caller-supplied profile-wide override remains limited to 600 seconds.
-- The first response should be compact: per-command status, duration, timeout state, and log id.
-- Full command output should be retrieved with `read_command_log` only when needed.
+- The first response must return `status: "running"`, one stable profile `log_id`, an exact `read_command_log` polling request, and restart semantics.
+- The terminal profile log must contain compact per-command status, duration, timeout state, and command log ids. Full per-command output should be retrieved through those ids only when needed.
+- Harbor, task-image, and validation-profile runs share a limit of two active background jobs per server process.
 - Profiles may use executable resolution from `CONTEXTPATCH_VALIDATION_PATHS` through the guarded runner; callers cannot pass environment overrides per request.
 - The `dynamo-harbor-task` profile must append a structured `harbor_summary` object with oracle rewards, nop rewards, deterministic repeat checks, expected oracle/nop pass checks, missing-reward diagnostics, and an aggregate `passed` boolean.
+- A false `harbor_summary.passed` value is a terminal profile failure even when every Harbor process
+  exits successfully.
 - Harbor rewards must come from the repository-confined `result.json` path printed by Harbor when that file is readable and valid. Rendered reward tables, labeled rewards, and progress means are compatibility fallbacks only.
 - Profiles must not commit, push, reset, checkout, clean, stash, or mutate product files.
 
@@ -1305,6 +1425,7 @@ Optional inputs:
 - `repository`: validated `OWNER/REPO` target for PR and Actions actions; use it when the local checkout is a fork but the PR or run belongs to upstream
 - `comment_contains`: optional case-insensitive 1-256 character local filter for `pr_comments`
 - `limit`: result bound for `pr_comments` (default 20, maximum 100) or `workflow_runs_for_commit` (default 20, maximum 50)
+- `log_view`: bounded `workflow_job_log` projection, `tail` by default to retain terminal failure evidence or `head` for the beginning
 - `draft`: create a draft PR when `action` is `pr_create`
 - `dry_run`: defaults to true for `pr_create` and `workflow_run_rerun_failed`
 - `confirm`: literal `create pull request` for confirmed PR creation or `rerun failed workflow jobs` for a confirmed failed-job rerun
@@ -1316,7 +1437,7 @@ Rules:
 - `pr_checks` must return structured check names, states, workflows, and links so callers can identify the corresponding Actions run.
 - `pr_view` must include the exact head commit SHA. `workflow_runs_for_commit` must require that full SHA and return only a bounded structured run list, so callers can distinguish current evidence from stale runs.
 - `pr_comments` must filter locally rather than accepting caller-provided `jq` or API paths, return matching comments newest-first, and bound the result count.
-- `workflow_run_view` may return typed run/job metadata; `workflow_job_log` may return only one explicit job's bounded log output.
+- `workflow_run_view` may return typed run/job metadata; `workflow_job_log` may return only one explicit job's bounded log output, must default to the redacted tail, and may return the redacted head only when explicitly requested.
 - `workflow_run_rerun_failed` may run only `gh run rerun <run_id> --failed`; it must default to dry-run and require exact confirmation before rerunning failed jobs and their dependencies.
 - GitHub command output must be redacted for probable secrets and bounded before returning it to the client.
 - Repository targeting must be passed as a separate `--repo OWNER/REPO` argv pair after strict validation, never as caller-supplied command text.
@@ -1407,48 +1528,51 @@ The server currently ships:
 6. `write_new_file_base64`
 7. `write_existing_file_exact_hash`
 8. `file_info`
-9. `list_directory`
-10. `read_file_bytes`
-11. `artifact_write_text`
-12. `artifact_write_base64`
-13. `artifact_delete_exact`
-14. `bulk_write_new_files_base64`
-15. `create_directory`
-16. `diff_preview`
-17. `status_guard`
-18. `capability_manifest`
-19. `preflight_health`
-20. `run_guarded_command`
-21. `artifact_python_run`
-22. `image_cleanliness_check_run`
-23. `docker_image_inspect`
-24. `fixture_generator_run`
-25. `base_image_check_run`
-26. `fixture_manifest_verify`
-27. `fixture_manifest_refresh`
-28. `read_command_log`
-29. `validation_profile_run`
-30. `git_commit_exact`
-31. `git_stage_exact`
-32. `git_staged_scope_check`
-33. `git_commit_scoped`
-34. `git_commit_prefix`
-35. `git_restore_exact`
-36. `move_tracked`
-37. `delete_guarded`
-38. `delete_untracked_exact`
-39. `delete_generated_prefix`
-40. `git_remote_list`
-41. `git_remote_check`
-42. `git_branch_prepare`
-43. `git_merge_readiness`
-44. `git_push_exact`
-45. `github_pr_run`
-46. `github_fork_prepare`
-47. `setup_profile_run`
-48. `native_build_run`
-49. `native_device_run`
-50. `project_execute` (project surface only; the other 49 remain internal actions)
+9. `set_file_executable`
+10. `list_directory`
+11. `read_file_bytes`
+12. `artifact_write_text`
+13. `artifact_write_base64`
+14. `artifact_delete_exact`
+15. `bulk_write_new_files_base64`
+16. `create_directory`
+17. `diff_preview`
+18. `status_guard`
+19. `capability_manifest`
+20. `preflight_health`
+21. `run_guarded_command`
+22. `artifact_python_run`
+23. `task_image_python_run`
+24. `harbor_run_start`
+25. `image_cleanliness_check_run`
+26. `docker_image_inspect`
+27. `fixture_generator_run`
+28. `base_image_check_run`
+29. `fixture_manifest_verify`
+30. `fixture_manifest_refresh`
+31. `read_command_log`
+32. `validation_profile_run`
+33. `git_commit_exact`
+34. `git_stage_exact`
+35. `git_staged_scope_check`
+36. `git_commit_scoped`
+37. `git_commit_prefix`
+38. `git_restore_exact`
+39. `move_tracked`
+40. `delete_guarded`
+41. `delete_untracked_exact`
+42. `delete_generated_prefix`
+43. `git_remote_list`
+44. `git_remote_check`
+45. `git_branch_prepare`
+46. `git_merge_readiness`
+47. `git_push_exact`
+48. `github_pr_run`
+49. `github_fork_prepare`
+50. `setup_profile_run`
+51. `native_build_run`
+52. `native_device_run`
+53. `project_execute` (project surface only; the other 52 remain internal actions)
 
 The CLI `apply-patch` command remains a not-implemented stub, and `insert_at_anchor` remains a
 non-advertised boundary concept. Neither is an MCP capability. See `docs/implementation-roadmap.md`.

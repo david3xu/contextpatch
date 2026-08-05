@@ -9,6 +9,7 @@ use crate::tools::project::ProjectCall;
 use crate::tools::ToolSurface;
 
 const MAX_SERIALIZED_TOOL_RESPONSE_BYTES: usize = 900 * 1024;
+const MAX_FALLBACK_TOOL_NAME_BYTES: usize = 256;
 
 pub(crate) fn handle_tool_call(
     repo_root: &Path,
@@ -87,9 +88,12 @@ fn bounded_tool_result_response(
     }
 
     let measured_response_bytes = response.len();
+    let (fallback_tool_name, tool_name_truncated) =
+        bounded_utf8_prefix(tool_name, MAX_FALLBACK_TOOL_NAME_BYTES);
     let fallback_text = if is_error {
         json!({
-            "tool": tool_name,
+            "tool": fallback_tool_name,
+            "tool_name_truncated": tool_name_truncated,
             "handler_result": "error",
             "diagnostic_omitted": true,
             "reason": "the serialized diagnostic exceeded ContextPatch's MCP response limit",
@@ -100,7 +104,8 @@ fn bounded_tool_result_response(
         .to_string()
     } else {
         json!({
-            "tool": tool_name,
+            "tool": fallback_tool_name,
+            "tool_name_truncated": tool_name_truncated,
             "handler_result": "success",
             "output_omitted": true,
             "reason": "the serialized output exceeded ContextPatch's MCP response limit",
@@ -112,6 +117,17 @@ fn bounded_tool_result_response(
         .to_string()
     };
     success_response(id, tool_result(fallback_text, is_error))
+}
+
+fn bounded_utf8_prefix(value: &str, max_bytes: usize) -> (&str, bool) {
+    if value.len() <= max_bytes {
+        return (value, false);
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&value[..end], true)
 }
 
 fn tool_result(text: String, is_error: bool) -> Value {
@@ -193,6 +209,9 @@ fn call_tool(
         }
         tools::status_guard::NAME => tools::files::call_status_guard(repo_root, arguments),
         tools::file_info::NAME => tools::files::call_file_info(repo_root, arguments),
+        tools::set_file_executable::NAME => {
+            tools::files::call_set_file_executable(repo_root, arguments)
+        }
         tools::list_directory::NAME => tools::files::call_list_directory(repo_root, arguments),
         tools::read_file_bytes::NAME => tools::files::call_read_file_bytes(repo_root, arguments),
         tools::write_new_file::NAME => tools::files::call_write_new_file(repo_root, arguments),
@@ -237,6 +256,12 @@ fn call_tool(
         tools::docker_image_inspect::NAME => tools::process::call_docker_image_inspect(arguments),
         tools::artifact_python_run::NAME => {
             tools::process::call_artifact_python_run(repo_root, arguments)
+        }
+        tools::task_image_python_run::NAME => {
+            tools::process::call_task_image_python_run(repo_root, arguments)
+        }
+        tools::harbor_run_start::NAME => {
+            tools::process::call_harbor_run_start(repo_root, arguments)
         }
         tools::validation_profile_run::NAME => {
             tools::process::call_validation_profile_run(repo_root, arguments)
@@ -318,6 +343,7 @@ fn deadline_for(name: &str) -> Option<Duration> {
         | tools::write_new_file::NAME
         | tools::write_new_file_base64::NAME
         | tools::write_existing_file_exact_hash::NAME
+        | tools::set_file_executable::NAME
         | tools::artifact_write_text::NAME
         | tools::artifact_delete_exact::NAME
         | tools::artifact_write_base64::NAME
@@ -355,6 +381,7 @@ fn serializes_repository_mutation(name: &str) -> bool {
             | tools::write_new_file::NAME
             | tools::write_new_file_base64::NAME
             | tools::write_existing_file_exact_hash::NAME
+            | tools::set_file_executable::NAME
             | tools::artifact_write_text::NAME
             | tools::artifact_delete_exact::NAME
             | tools::artifact_write_base64::NAME

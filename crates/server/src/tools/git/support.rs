@@ -598,7 +598,22 @@ fn run_git_for_tool(
             GIT_SUBPROCESS_TIMEOUT.as_secs()
         ));
     }
+    ensure_git_output_complete(tool_name, args, &output)?;
     Ok(output)
+}
+
+fn ensure_git_output_complete(
+    tool_name: &str,
+    args: &[&str],
+    output: &BoundedProcessOutput,
+) -> Result<(), String> {
+    if output.stdout_truncated || output.stderr_truncated {
+        return Err(format!(
+            "{tool_name} refused: git {} output exceeded the bounded capture; the result is incomplete and was not used",
+            args.join(" ")
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn changed_files_between(
@@ -709,4 +724,30 @@ pub(crate) fn format_set(paths: &BTreeSet<String>) -> String {
         return "(none)".to_string();
     }
     paths.iter().cloned().collect::<Vec<_>>().join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refuses_truncated_git_output_before_parsing() {
+        let output = BoundedProcessOutput {
+            cwd: PathBuf::from("/repository"),
+            exit_code: 0,
+            timed_out: false,
+            duration_ms: 1,
+            stdout: b"partial".to_vec(),
+            stderr: Vec::new(),
+            stdout_truncated: true,
+            stderr_truncated: false,
+        };
+
+        let error =
+            ensure_git_output_complete("git_stage_exact", &["status", "--porcelain"], &output)
+                .unwrap_err();
+
+        assert!(error.contains("result is incomplete"));
+        assert!(error.contains("was not used"));
+    }
 }

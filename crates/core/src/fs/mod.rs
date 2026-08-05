@@ -1,6 +1,9 @@
 pub mod atomic_write;
 pub mod create_directory;
+pub mod directory;
+pub mod executable;
 pub mod file_identity;
+pub mod guarded_file;
 pub mod hash;
 pub mod mutation_lock;
 pub mod path;

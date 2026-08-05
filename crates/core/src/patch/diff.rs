@@ -1,8 +1,7 @@
-use std::fs;
 use std::path::Path;
 
 use crate::error::ContextPatchError;
-use crate::fs::path::resolve_existing_file;
+use crate::fs::guarded_file::open_regular_file_in_root;
 
 pub fn preview_exact_replacement(
     path: &Path,
@@ -26,8 +25,9 @@ pub fn preview_exact_replacement_in_root(
         return Err(ContextPatchError::new("old text must not be empty"));
     }
 
-    let target_path = resolve_existing_file(repo_root, path)?;
-    let current = fs::read_to_string(&target_path).map_err(|error| {
+    let target = open_regular_file_in_root(repo_root, path)?;
+    let target_path = target.target_path();
+    let current = String::from_utf8(target.read_all()?).map_err(|error| {
         ContextPatchError::new(format!("failed to read {}: {error}", target_path.display()))
     })?;
 
@@ -184,6 +184,25 @@ mod tests {
         assert_eq!(fs::read_to_string(file).unwrap(), "alpha");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn refuses_intermediate_symlinks() {
+        let root = test_root("refuses_intermediate_symlinks");
+        let outside = test_root("refuses_intermediate_symlinks_outside");
+        fs::write(outside.join("sample.txt"), "alpha\n").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+
+        let error = preview_exact_replacement_in_root(
+            &root,
+            Path::new("linked/sample.txt"),
+            "alpha",
+            "beta",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("symlink"));
+    }
+
     #[test]
     fn refuses_zero_matches() {
         let root = test_root("refuses_zero_matches");
@@ -225,7 +244,10 @@ mod tests {
         let error =
             preview_exact_replacement_in_root(&root, &outside_file, "alpha", "delta").unwrap_err();
 
-        assert!(error.to_string().contains("is outside repository root"));
+        assert_eq!(
+            error.to_string(),
+            "path must be a normalized repository-relative path"
+        );
         assert_eq!(fs::read_to_string(outside_file).unwrap(), "alpha");
     }
 

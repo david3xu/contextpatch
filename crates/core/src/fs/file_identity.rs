@@ -1,5 +1,6 @@
 //! Stable identity for an existing filesystem object.
 
+use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
@@ -24,6 +25,16 @@ impl FileIdentity {
                 "failed to identify target file {}: {error}",
                 path.display()
             ))
+        })?;
+        Ok(Self { handle })
+    }
+
+    pub fn from_file(file: &File) -> Result<Self, ContextPatchError> {
+        let file = file.try_clone().map_err(|error| {
+            ContextPatchError::new(format!("failed to clone target file handle: {error}"))
+        })?;
+        let handle = Handle::from_file(file).map_err(|error| {
+            ContextPatchError::new(format!("failed to identify open target file: {error}"))
         })?;
         Ok(Self { handle })
     }

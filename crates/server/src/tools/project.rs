@@ -67,13 +67,18 @@ pub(crate) fn resolve(arguments: &Map<String, Value>) -> Result<ProjectCall, Str
         .transpose()?;
 
     if action == "describe" {
-        reject_unknown_keys(&nested, &["name"])?;
-        let name = match nested.get("name") {
-            Some(value) => value.as_str().ok_or_else(|| {
-                "project_execute refused: describe name must be a string".to_string()
-            })?,
-            None => "",
-        };
+        reject_unknown_keys(&nested, &["name", "action"])?;
+        let name =
+            match (nested.get("name"), nested.get("action")) {
+                (Some(_), Some(_)) => return Err(
+                    "project_execute refused: describe accepts either `name` or `action`, not both"
+                        .to_string(),
+                ),
+                (Some(value), None) | (None, Some(value)) => value.as_str().ok_or_else(|| {
+                    "project_execute refused: describe name/action must be a string".to_string()
+                })?,
+                (None, None) => "",
+            };
         return describe(name).map(|text| ProjectCall::Describe { text, repository });
     }
 
@@ -104,6 +109,7 @@ fn describe(name: &str) -> Result<String, String> {
             "tool_surface": ToolSurface::Project.as_str(),
             "action_count": tools::schema::internal_action_names().len(),
             "action_names": tools::schema::internal_action_names(),
+            "action_definitions": tools::schema::internal_action_definitions(),
             "repository_selection": {
                 "argument": "repository",
                 "scope": "optional normalized workspace-relative path to an exact descendant Git worktree root",
@@ -138,7 +144,12 @@ fn reject_unknown_keys(arguments: &Map<String, Value>, allowed: &[&str]) -> Resu
         .keys()
         .find(|key| !allowed.contains(&key.as_str()))
     {
-        return Err(format!("project_execute refused: unknown argument `{key}`"));
+        let mut permitted = allowed.to_vec();
+        permitted.sort_unstable();
+        return Err(format!(
+            "project_execute refused: unknown argument `{key}`; permitted arguments: {}",
+            permitted.join(", ")
+        ));
     }
     Ok(())
 }
@@ -197,7 +208,7 @@ mod tests {
             ),
             (
                 json!({"action": "describe", "arguments": {"name": 7}}),
-                "describe name must be a string",
+                "describe name/action must be a string",
             ),
             (
                 json!({"action": "describe", "arguments": {"extra": true}}),

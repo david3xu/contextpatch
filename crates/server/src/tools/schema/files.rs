@@ -151,23 +151,74 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::file_info::NAME,
-                    "description": "Return read-only file metadata, SHA-256 for files, UTF-8 line count when available, and symlink status.",
+                    "description": "Return read-only metadata for one path or a bounded batch of paths, including SHA-256 for files, UTF-8 line count when available, mode, and symlink status.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "path": {
                                 "type": "string",
                                 "description": "File or directory path relative to the configured repository root."
+                            },
+                            "paths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": 1,
+                                "maxItems": 64,
+                                "uniqueItems": true,
+                                "description": "A bounded batch of repository-relative file or directory paths."
                             }
                         },
-                        "required": ["path"],
+                        "oneOf": [
+                            {"required": ["path"], "not": {"required": ["paths"]}},
+                            {"required": ["paths"], "not": {"required": ["path"]}}
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
+                    "name": tools::set_file_executable::NAME,
+                    "description": "Plan or apply an exact-hash, exact-mode change to only the executable bits of one regular repository file.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Existing regular repository file; symlinks are refused."
+                            },
+                            "executable": {
+                                "type": "boolean",
+                                "description": "Whether owner, group, and other executable bits should be enabled."
+                            },
+                            "expected_sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$",
+                                "description": "Required for execution; copy from a current dry-run plan."
+                            },
+                            "expected_mode": {
+                                "type": "string",
+                                "pattern": "^[0-7]{3,4}$",
+                                "description": "Required for execution; copy from a current dry-run plan."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Plan without changing the file. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Execution requires the exact phrase: set file executable"
+                            }
+                        },
+                        "required": ["path", "executable"],
                         "additionalProperties": false
                     }
                 }
         ),
         json!({
                     "name": tools::list_directory::NAME,
-                    "description": "List one repository directory with entry type, symlink flag, and file sizes without using rg.",
+                    "description": "List one repository directory with optional bounded recursion, entry type, symlink flag, and file sizes without following symlink directories.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -178,6 +229,22 @@ pub(crate) fn definitions() -> Vec<Value> {
                             "include_hidden": {
                                 "type": "boolean",
                                 "description": "Include dotfiles and dot-directories. Defaults to false."
+                            },
+                            "recursive": {
+                                "type": "boolean",
+                                "description": "Recurse into ordinary directories. Defaults to false."
+                            },
+                            "max_depth": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 16,
+                                "description": "Maximum recursive depth. Defaults to 4."
+                            },
+                            "max_entries": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 2000,
+                                "description": "Maximum entries to return. Defaults to 2000."
                             }
                         },
                         "additionalProperties": false

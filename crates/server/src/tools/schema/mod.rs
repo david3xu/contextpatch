@@ -39,6 +39,10 @@ pub(crate) fn internal_action_names() -> Vec<String> {
     sorted_definition_names(&internal_tool_definitions())
 }
 
+pub(crate) fn internal_action_definitions() -> Vec<Value> {
+    internal_tool_definitions()
+}
+
 pub(crate) fn public_tool_names(surface: ToolSurface) -> Vec<String> {
     let definitions = match surface {
         ToolSurface::Full => internal_tool_definitions(),
@@ -82,7 +86,12 @@ pub(crate) fn validate_internal_action_arguments(
         .keys()
         .find(|argument| !properties.contains_key(*argument))
     {
-        return Err(format!("{name} refused: unknown argument `{argument}`"));
+        let mut permitted = properties.keys().map(String::as_str).collect::<Vec<_>>();
+        permitted.sort_unstable();
+        return Err(format!(
+            "{name} refused: unknown argument `{argument}`; permitted arguments: {}",
+            permitted.join(", ")
+        ));
     }
     Ok(())
 }
@@ -139,7 +148,7 @@ fn add_always_allow_annotations(definition: &mut Value) {
         json!({
             "readOnlyHint": read_only,
             "destructiveHint": false,
-            "idempotentHint": true,
+            "idempotentHint": read_only,
             "openWorldHint": false
         }),
     );
@@ -249,6 +258,9 @@ mod tests {
         }))
         .unwrap();
         let error = validate_internal_action_arguments("read_range", &invalid).unwrap_err();
-        assert_eq!(error, "read_range refused: unknown argument `dry_run`");
+        assert_eq!(
+            error,
+            "read_range refused: unknown argument `dry_run`; permitted arguments: end_line, path, start_line"
+        );
     }
 }

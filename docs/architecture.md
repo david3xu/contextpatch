@@ -71,7 +71,7 @@ Owns:
 - Protocol-facing snake_case tool names
 - Tool schemas
 - Request/response adaptation
-- Server startup and client transport
+- Server startup, bounded concurrent dispatch for every ID-bearing tool call, serialized response writes, and JSON-RPC id preservation
 
 Must call `core` for edit behavior instead of owning filesystem mutation logic.
 
@@ -126,3 +126,5 @@ Repository-level integration tests should cover:
 12. Claude Desktop ordinary-config preservation, exact legacy wildcard-policy cleanup, backup, and idempotence
 13. Cooperative mutation-lock contention and deadline-worker saturation
 14. Claude Desktop stale-read refusal, no managed-library access, and Windows executable detection
+15. Out-of-order response correlation, fast-call responsiveness during long calls, and asynchronous
+    background-job polling/limits

@@ -8,7 +8,7 @@ use fs2::FileExt;
 
 use crate::error::ContextPatchError;
 use crate::fs::file_identity::FileIdentity;
-use crate::fs::scratch::ensure_scratch_root;
+use crate::fs::scratch::{ensure_scratch_root, scratch_root};
 
 const LOCK_DIRECTORY: &str = "mutation-locks";
 const REPOSITORY_LOCK: &str = "repository.lock";
@@ -19,11 +19,35 @@ pub struct MutationLockGuard {
     _identity: Option<FileIdentity>,
 }
 
+impl Drop for MutationLockGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self._file);
+    }
+}
+
 fn lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
     let directory = ensure_scratch_root(repo_root)?.join(LOCK_DIRECTORY);
     fs::create_dir_all(&directory).map_err(|error| {
         ContextPatchError::new(format!(
             "could not create mutation lock directory `{}`: {error}",
+            directory.display()
+        ))
+    })?;
+    Ok(directory)
+}
+
+fn file_lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+    let repository_scratch = scratch_root(repo_root);
+    let scratch_container = repository_scratch.parent().ok_or_else(|| {
+        ContextPatchError::new(format!(
+            "could not determine shared lock directory from `{}`",
+            repository_scratch.display()
+        ))
+    })?;
+    let directory = scratch_container.join("file-mutation-locks");
+    fs::create_dir_all(&directory).map_err(|error| {
+        ContextPatchError::new(format!(
+            "could not create shared file mutation lock directory `{}`: {error}",
             directory.display()
         ))
     })?;
@@ -79,8 +103,25 @@ pub fn try_file_mutation_lock(
     target: &Path,
 ) -> Result<MutationLockGuard, ContextPatchError> {
     let identity = FileIdentity::from_path(target)?;
+    try_file_mutation_lock_for_identity(repo_root, target, identity)
+}
+
+pub fn try_file_mutation_lock_for_open_file(
+    repo_root: &Path,
+    target: &Path,
+    file: &File,
+) -> Result<MutationLockGuard, ContextPatchError> {
+    let identity = FileIdentity::from_file(file)?;
+    try_file_mutation_lock_for_identity(repo_root, target, identity)
+}
+
+fn try_file_mutation_lock_for_identity(
+    repo_root: &Path,
+    target: &Path,
+    identity: FileIdentity,
+) -> Result<MutationLockGuard, ContextPatchError> {
     let key = identity.lock_key();
-    let path = lock_directory(repo_root)?.join(format!("{key}.lock"));
+    let path = file_lock_directory(repo_root)?.join(format!("{key}.lock"));
     try_lock(
         &path,
         &format!(
@@ -129,7 +170,7 @@ mod tests {
         assert!(try_file_mutation_lock(&root, &first_path).is_err());
         assert!(try_file_mutation_lock(&root, &second_path).is_ok());
         drop(first);
-        assert!(try_file_mutation_lock(&root, &first_path).is_ok());
+        try_file_mutation_lock(&root, &first_path).unwrap();
     }
 
     #[test]
@@ -145,7 +186,23 @@ mod tests {
 
         assert!(error.to_string().contains("still active"));
         drop(first);
-        assert!(try_file_mutation_lock(&root, &alias).is_ok());
+        try_file_mutation_lock(&root, &alias).unwrap();
+    }
+
+    #[test]
+    fn parent_and_descendant_repository_views_share_one_file_lock() {
+        let root = temp_repo("nested-repository");
+        let descendant = root.join("project");
+        fs::create_dir(&descendant).unwrap();
+        let target = descendant.join("shared.txt");
+        fs::write(&target, "same file").unwrap();
+
+        let first = try_file_mutation_lock(&root, &target).unwrap();
+        let error = try_file_mutation_lock(&descendant, &target).unwrap_err();
+
+        assert!(error.to_string().contains("still active"));
+        drop(first);
+        assert!(try_file_mutation_lock(&descendant, &target).is_ok());
     }
 
     #[test]

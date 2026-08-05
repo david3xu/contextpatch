@@ -63,11 +63,7 @@ pub fn resolve_guarded_program(program: &str) -> Option<std::path::PathBuf> {
 }
 
 pub fn redact_and_truncate_output(text: &str, max_chars: usize) -> (String, bool) {
-    let redacted = text
-        .lines()
-        .map(crate::process::runner::redact_line)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let redacted = redact_output(text);
     let mut chars = redacted.chars();
     let output: String = chars.by_ref().take(max_chars).collect();
     let truncated = chars.next().is_some();
@@ -76,6 +72,27 @@ pub fn redact_and_truncate_output(text: &str, max_chars: usize) -> (String, bool
     } else {
         (output, false)
     }
+}
+
+pub fn redact_and_truncate_output_tail(text: &str, max_chars: usize) -> (String, bool) {
+    let redacted = redact_output(text);
+    let total_chars = redacted.chars().count();
+    if total_chars <= max_chars {
+        return (redacted, false);
+    }
+
+    let output = redacted
+        .chars()
+        .skip(total_chars - max_chars)
+        .collect::<String>();
+    (format!("[truncated leading output]\n{output}"), true)
+}
+
+fn redact_output(text: &str) -> String {
+    text.lines()
+        .map(crate::process::runner::redact_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchError> {
@@ -157,7 +174,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        checked_command_timeout, redact_and_truncate_output, run_guarded_command, validate_command,
+        checked_command_timeout, redact_and_truncate_output, redact_and_truncate_output_tail,
+        run_guarded_command, validate_command,
     };
     use crate::process::runner::redact_line;
 
@@ -189,6 +207,17 @@ mod tests {
 
         let (output, truncated) = redact_and_truncate_output("éééé", 3);
         assert_eq!(output, "ééé\n[truncated]");
+        assert!(truncated);
+
+        let long_log = format!(
+            "{}\nDATACORE_TOKEN=super-secret-value\nterminal failure",
+            "prefix".repeat(20)
+        );
+        let (output, truncated) = redact_and_truncate_output_tail(&long_log, 60);
+        assert!(output.starts_with("[truncated leading output]\n"));
+        assert!(output.contains("[redacted potential secret line]"));
+        assert!(output.ends_with("terminal failure"));
+        assert!(!output.contains("super-secret-value"));
         assert!(truncated);
     }
 

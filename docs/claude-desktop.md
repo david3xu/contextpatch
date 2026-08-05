@@ -6,16 +6,19 @@
 
 The server should expose safe edit and validation tools rather than generic filesystem writes or broad shell access. Claude Desktop or another client can request bounded reads, preview diffs, apply guarded edits, discover capabilities, run preflight health checks, and run allowlisted validation commands.
 
+Every ID-bearing `tools/call` request is dispatched through a bounded 16-worker pool, so a slow command or deadline-bounded Git operation no longer blocks the stdio reader or a later bounded read. Responses may therefore arrive out of request order; clients must match every response by JSON-RPC id rather than line order. Confirmed task-image runs, Harbor runs, and validation profiles return `status: "running"` plus a `log_id` immediately. Poll that id on the same server with `read_command_log`; polling never restarts work, and active work becomes `unknown` after a server restart.
+
 ## Tool surfaces
 
 `contextpatch-server` supports two public surfaces over the same internal action handlers:
 
-- `--tool-surface full` advertises all 49 actions directly. It is the server default when the option
+- `--tool-surface full` advertises all 52 actions directly. It is the server default when the option
   is omitted.
 - `--tool-surface project` advertises only `project_execute` for the fixed `--repo-root` trust
   boundary. Call it with `action: "describe"` to list actions, or include `arguments.name` to
-  retrieve one action's exact schema. A normal call selects one action and passes its original
-  argument object.
+  retrieve one action's exact schema and annotations. A normal call selects one action and passes its
+  original argument object. Unknown arguments are refused before execution with that action's
+  permitted argument names.
 
 Project mode reduces Claude's persistent approval scope to one stable public tool identity per
 configured server entry. When the configured root is a workspace containing multiple repositories,
@@ -62,7 +65,7 @@ The expected agent workflow is:
 7. Compare the capability manifest's build SHA with the checkout before concluding that a source capability is unavailable.
 8. Use `{scratch}` inside guarded command arguments for durable byproducts that must stay outside the repository.
 9. Use `read_write_receipts` after an interrupted or timed-out receipt-enabled mutation, then compare the recorded digest or Git HEAD with current state before retrying.
-10. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, `harbor run`, the exact `references/check-base-image.sh` or `references/check-base-image.sh task` checks, or `rg` drift searches.
+10. Use `run_guarded_command` only for allowlisted validation commands such as `git status`, `git diff`, `cargo check`, project `bun run` checks, repo-relative Python scripts, `pytest`, the exact `references/check-base-image.sh` or `references/check-base-image.sh task` checks, or `rg` drift searches. Direct `harbor run` is refused; use `harbor_run_start`.
 11. Use `git_stage_exact` when files must be staged/tracked before the work is ready to commit.
 12. Use `git_staged_scope_check` to audit that staged files are limited to allowed exact paths/prefixes, such as `.gitignore` plus `task/`, before reporting staged-scope readiness.
 13. Use `git_commit_exact` only when the desired local commit path set is explicit and complete.
@@ -91,6 +94,11 @@ The expected agent workflow is:
 36. Use `native_device_run` for typed simulator/emulator/device smoke actions instead of raw `xcrun` or `adb`; keep `dry_run` enabled until the plan is reviewed.
 37. Use `write_existing_file_exact_hash` for whole-file synchronization only when the current file SHA-256 is known and reviewed.
 38. Use `fixture_manifest_verify` and `fixture_manifest_refresh` to enforce exact fixture file sets and SHA-256 digests instead of asking for ad hoc hashing scripts.
+39. Use `set_file_executable` to change only executable bits after reviewing the current hash and mode; do not create a scratch chmod script.
+40. Use `task_image_python_run` to plan one repository-relative Python script inside the built task image. Confirmed execution returns a `log_id`; poll it with `read_command_log`.
+41. Use `harbor_run_start` for a long single Harbor run, then poll its returned `log_id` with `read_command_log` rather than restarting it.
+42. Use `validation_profile_run` for named validation sequences, then poll its returned `log_id` with `read_command_log`. Harbor, task-image, and validation-profile jobs share a two-job cap.
+43. Use `github_pr_run` with `workflow_run_view` to obtain failed job ids, then `workflow_job_log`; its bounded output defaults to the tail so the terminal failure is not displaced by setup output.
 
 ## Configure ordinary Claude Desktop entries
 
@@ -174,18 +182,20 @@ The workspace package is named `server`; the installed binary remains `contextpa
 ## Quick MCP smoke test
 
 After restarting Claude Desktop, ask it to list available `contextpatch` tools. A project-surface
-entry should expose exactly `project_execute`; call `{"action":"describe"}` to verify the 49 internal
+entry should expose exactly `project_execute`; call `{"action":"describe"}` to verify the 52 internal
 actions and build stamp. A full-surface entry should expose:
 
 - `read_range`
 - `read_write_receipts`
 - `diff_preview`
 - `replace_exact`
+- `bulk_replace_exact`
 - `status_guard`
 - `write_new_file`
 - `write_new_file_base64`
 - `write_existing_file_exact_hash`
 - `file_info`
+- `set_file_executable`
 - `list_directory`
 - `read_file_bytes`
 - `artifact_write_text`
@@ -197,6 +207,8 @@ actions and build stamp. A full-surface entry should expose:
 - `preflight_health`
 - `run_guarded_command`
 - `artifact_python_run`
+- `task_image_python_run`
+- `harbor_run_start`
 - `image_cleanliness_check_run`
 - `docker_image_inspect`
 - `fixture_generator_run`
@@ -228,7 +240,7 @@ actions and build stamp. A full-surface entry should expose:
 
 Each advertised tool includes MCP annotations, but annotations do not suppress Claude Desktop approval prompts. Local MCP and Desktop Extension metadata cannot grant runtime approval; that decision belongs to Claude Desktop and its account or organization policy.
 
-The rebuilt release binary advertises 49 direct tools in full mode or one wrapper in project mode. If Claude Desktop lists a different surface, inspect the entry's `--tool-surface` argument. In full mode compare `capability_manifest.build.git_sha` with the checkout; in project mode use `project_execute` action `describe`. A mismatched SHA means the configured binary is stale; a matching SHA with stale tools usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, then confirm the ordinary `claude_desktop_config.json` entry points at the rebuilt binary:
+The rebuilt release binary advertises 52 direct tools in full mode or one wrapper in project mode. If Claude Desktop lists a different surface, inspect the entry's `--tool-surface` argument. In full mode compare `capability_manifest.build.git_sha` with the checkout; in project mode use `project_execute` action `describe`. A mismatched SHA means the configured binary is stale; a matching SHA with stale tools usually means Claude Desktop cached an older tool list. Fully quit and restart Claude Desktop, then confirm the ordinary `claude_desktop_config.json` entry points at the rebuilt binary:
 
 ```text
 /Users/291928k/Developer/contextpatch/target/release/contextpatch-server
@@ -247,11 +259,13 @@ actions behind `project_execute` in project mode:
 - `read_write_receipts`
 - `diff_preview`
 - `replace_exact`
+- `bulk_replace_exact`
 - `status_guard`
 - `write_new_file`
 - `write_new_file_base64`
 - `write_existing_file_exact_hash`
 - `file_info`
+- `set_file_executable`
 - `list_directory`
 - `read_file_bytes`
 - `artifact_write_text`
@@ -263,6 +277,8 @@ actions behind `project_execute` in project mode:
 - `preflight_health`
 - `run_guarded_command`
 - `artifact_python_run`
+- `task_image_python_run`
+- `harbor_run_start`
 - `image_cleanliness_check_run`
 - `docker_image_inspect`
 - `fixture_generator_run`
@@ -302,7 +318,7 @@ Use `{scratch}` inside guarded command data/output arguments, such as `--output-
 
 ContextPatch serializes its MCP mutations for one repository with a cooperative cross-process lock; exact replacement and exact-hash writes also lock the target while rechecking it. A competing ContextPatch mutation is refused before starting. External editors and tools that ignore the advisory lock can still race, so use `expected_sha256` where available and inspect current state after an unknown result.
 
-`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. It defaults to 120 seconds and remains capped at 600 seconds except for exact `harbor run` commands, which may use up to 3600 seconds. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary. Project validation can also run repo-relative Python scripts (`python3 scripts/name.py`), `pytest`, `harbor run`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` scripts through `base_image_check_run`; `pip`, Docker, arbitrary `python -m`, arbitrary shell scripts, and shell command strings remain refused.
+`run_guarded_command` is not a shell. It accepts an executable name and argument array, runs from a repo-root-confined working directory, allows only documented validation-oriented programs/subcommands, drains stdout/stderr concurrently, times out, redacts probable secret values without hiding ordinary paths or docs, and returns command/cwd/exit-code/duration metadata. It defaults to 120 seconds and remains capped at 600 seconds. Package-manager script execution is limited to `npm run`/`npm test`, `pnpm run`/`pnpm test`, and `bun run`/`bun test`; install/add/exec-style package-manager commands remain outside this boundary. Project validation can also run repo-relative Python scripts (`python3 scripts/name.py`), `pytest`, and the exact `references/check-base-image.sh` or `references/check-base-image.sh task` scripts through `base_image_check_run`. Direct `harbor run`, `pip`, Docker, arbitrary `python -m`, arbitrary shell scripts, and shell command strings remain refused.
 
 Use `fixture_generator_run` for Dynamo-style fixture creation when the generator should live temporarily inside the repo. The tool runs a repo-relative `.py` script with `python3`, defaults to dry-run, requires `confirm: "run fixture generator"` for execution, allows only declared pre-existing dirty paths, and refuses if the generator leaves changes outside `expected_output_paths` or `expected_output_prefixes`. Afterward, delete the temporary generator with `delete_untracked_exact` before committing if it should not be submitted.
 
@@ -318,7 +334,7 @@ Use `write_existing_file_exact_hash` when an existing text file needs whole-file
 
 Use `fixture_manifest_refresh` after fixture or SPEC changes to regenerate a manifest from explicit `fixture_paths` or `fixture_prefixes`; overwriting an existing manifest requires its current `expected_manifest_sha256`. Use `fixture_manifest_verify` before deriving truth or committing fixture changes; it fails on missing, modified, or unlisted fixture files.
 
-Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`. It reduces MCP round trips by running the server-owned allowlisted commands in sequence and returning a compact summary plus `log_id` values; the Dynamo/Harbor profile reads per-trial rewards from Harbor's repository-confined `result.json` and uses rendered output only as a fallback before producing its structured oracle/nop and determinism summary. Use `read_command_log` only for logs that need inspection.
+Use `validation_profile_run` when a workflow has a named validation sequence, such as `repo-basic`, `rust-workspace`, `datacore-vscode`, `datacore-m6-vscode`, or `dynamo-harbor-task`. It reduces MCP round trips by starting the server-owned sequence asynchronously and returning one profile `log_id`; poll that id on the same server with `read_command_log`. The terminal profile log contains compact per-command summaries and command log ids. The Dynamo/Harbor profile reads per-trial rewards from Harbor's repository-confined `result.json` and uses rendered output only as a fallback before producing its structured oracle/nop and determinism summary.
 
 Before launching a profile that depends on optional host tools, call `preflight_health`. Use `response_mode: "compact"` for routine readiness, `"minimal"` for the smallest summary, and `"full"` when resolved executable paths or detailed diagnostics are needed. Dirty-path evidence is sampled and reports its total and truncation state in every mode. Full mode reports availability and resolved paths for validation executables used by shipped profiles, including `python3`, `pytest`, `harbor`, and the exact `bash references/check-base-image.sh` workflow. If Harbor is installed outside the MCP server process `PATH`, configure the host with `CONTEXTPATCH_VALIDATION_PATHS` rather than asking the model to pass an executable path or environment override. If Harbor is unavailable in the current environment, do not claim a completed `harbor run`; verify task-local Oracle/verifier logic directly only as a documented fallback for that environment limitation.
 

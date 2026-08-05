@@ -1,8 +1,10 @@
+use std::env;
+#[cfg(test)]
+use std::fs;
 use std::path::Path;
-use std::{env, fs};
 
 use crate::error::ContextPatchError;
-use crate::fs::path::resolve_existing_file;
+use crate::fs::guarded_file::open_regular_file_in_root;
 
 pub fn read_range(
     path: &Path,
@@ -30,8 +32,9 @@ pub fn read_range_in_root(
         ));
     }
 
-    let target_path = resolve_existing_file(repo_root, path)?;
-    let contents = fs::read_to_string(&target_path).map_err(|error| {
+    let target = open_regular_file_in_root(repo_root, path)?;
+    let target_path = target.target_path();
+    let contents = String::from_utf8(target.read_all()?).map_err(|error| {
         ContextPatchError::new(format!(
             "failed to read UTF-8 text file {}: {error}",
             target_path.display()
@@ -123,7 +126,10 @@ mod tests {
 
         let error = read_range_in_root(&root, &outside_file, 1, 1).unwrap_err();
 
-        assert!(error.to_string().contains("is outside repository root"));
+        assert_eq!(
+            error.to_string(),
+            "path must be a normalized repository-relative path"
+        );
     }
 
     #[test]
@@ -135,6 +141,19 @@ mod tests {
         let error = read_range_in_root(&root, Path::new("sample.bin"), 1, 1).unwrap_err();
 
         assert!(error.to_string().contains("failed to read UTF-8 text file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_intermediate_symlinks() {
+        let root = test_root("refuses_intermediate_symlinks");
+        let outside = test_root("refuses_intermediate_symlinks_outside");
+        fs::write(outside.join("sample.txt"), "outside\n").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+
+        let error = read_range_in_root(&root, Path::new("linked/sample.txt"), 1, 1).unwrap_err();
+
+        assert!(error.to_string().contains("symlink"));
     }
 
     fn test_root(name: &str) -> PathBuf {

@@ -17,8 +17,8 @@ pub use capability::{capability_manifest, preflight_health};
 pub use files::{
     artifact_delete_exact, artifact_write_base64, artifact_write_text, bulk_replace_exact,
     bulk_write_new_files_base64, create_directory, diff_preview, file_info, list_directory,
-    read_file_bytes, read_range, read_write_receipts, replace_exact, status_guard,
-    write_existing_file_exact_hash, write_new_file, write_new_file_base64,
+    read_file_bytes, read_range, read_write_receipts, replace_exact, set_file_executable,
+    status_guard, write_existing_file_exact_hash, write_new_file, write_new_file_base64,
 };
 pub use fixtures::{
     base_image_check_run, fixture_generator_run, fixture_manifest_refresh, fixture_manifest_verify,
@@ -32,8 +32,8 @@ pub use git::{
 pub use github::{github_fork_prepare, github_pr_run};
 pub use native::{native_build_run, native_device_run};
 pub use process::{
-    artifact_python_run, docker_image_inspect, image_cleanliness_check_run, read_command_log,
-    run_guarded_command, validation_profile_run,
+    artifact_python_run, docker_image_inspect, harbor_run_start, image_cleanliness_check_run,
+    read_command_log, run_guarded_command, task_image_python_run, validation_profile_run,
 };
 pub use project::project_execute;
 pub(crate) use project::ToolSurface;

@@ -35,6 +35,12 @@ pub(crate) fn definitions() -> Vec<Value> {
                                 "minimum": 1,
                                 "description": "Workflow job database ID for workflow_job_log."
                             },
+                            "log_view": {
+                                "type": "string",
+                                "enum": ["tail", "head"],
+                                "default": "tail",
+                                "description": "Bounded workflow_job_log projection. tail is the default so terminal failure evidence is retained; head returns the beginning."
+                            },
                             "head_sha": {
                                 "type": "string",
                                 "pattern": "^[A-Fa-f0-9]{40}$",
