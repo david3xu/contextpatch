@@ -71,16 +71,14 @@ pub mod write_new_file_base64 {
     pub const NAME: &str = "write_new_file_base64";
 }
 
-use std::collections::{hash_map::DefaultHasher, BTreeSet};
-use std::fs;
-use std::hash::{Hash, Hasher};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use contextpatch_core::fs::create_directory::create_directory_in_root;
 use contextpatch_core::fs::directory::list_directory_in_root;
 use contextpatch_core::fs::guarded_file::{
     inspect_path_in_root, open_regular_file_in_root, validate_new_file_path_in_root,
-    GuardedPathKind,
+    GuardedPathKind, GuardedRegularFile,
 };
 use contextpatch_core::fs::read_range::read_range_in_root;
 use contextpatch_core::fs::write_new_file::{
@@ -93,7 +91,6 @@ use serde_json::{json, Value};
 
 use crate::tools;
 use crate::tools::common::*;
-use crate::tools::git::support::resolved_repo_root;
 use contextpatch_core::fs::rooted::canonical_label;
 use contextpatch_core::git::RepositoryRoot;
 
@@ -664,15 +661,15 @@ pub(crate) fn call_write_existing_file_exact_hash<'a>(
     )
 }
 
-pub(crate) fn call_artifact_write_text(
-    repo_root: &Path,
+pub(crate) fn call_artifact_write_text<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let path = required_string(arguments, "path")?;
     let content = required_string(arguments, "content")?;
     let parents = optional_bool(arguments, "parents")?.unwrap_or(false);
     write_artifact(
-        repo_root,
+        repository_root,
         path,
         content.as_bytes(),
         parents,
@@ -680,8 +677,8 @@ pub(crate) fn call_artifact_write_text(
     )
 }
 
-pub(crate) fn call_artifact_write_base64(
-    repo_root: &Path,
+pub(crate) fn call_artifact_write_base64<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     const MAX_DECODED_BYTES: usize = 20 * 1024 * 1024;
@@ -711,7 +708,7 @@ pub(crate) fn call_artifact_write_base64(
     }
 
     write_artifact(
-        repo_root,
+        repository_root,
         path,
         &bytes,
         parents,
@@ -810,8 +807,8 @@ pub(crate) fn call_bulk_write_new_files_base64<'a>(
     .map_err(|error| format!("bulk_write_new_files_base64 refused: {error}"))
 }
 
-pub(crate) fn call_artifact_delete_exact(
-    repo_root: &Path,
+pub(crate) fn call_artifact_delete_exact<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let tool_name = tools::artifact_delete_exact::NAME;
@@ -835,21 +832,31 @@ pub(crate) fn call_artifact_delete_exact(
         ));
     }
 
-    let root = artifact_root(repo_root, tool_name)?;
+    let root = artifact_root(repository_root, tool_name)?;
     let shown = normalize_repo_relative_path(tool_name, path)?;
     if shown != path {
         return Err(format!(
             "{tool_name} refused: path must be a normalized relative path"
         ));
     }
-    let target = root.join(&shown);
-    inspect_exact_artifact_file(tool_name, &root, Path::new(&shown))?;
+    // Opened once through the artifact directory's own authority. The digest, the lock, and the deletion all
+    // refer to that one file, so nothing can be swapped in between reading it and removing it.
+    let authority = RepositoryRoot::from_path(&root);
+    let target = open_exact_artifact_file(tool_name, authority, &shown)?;
+    let target_path = root.join(&shown);
     let _target_lock =
-        contextpatch_core::fs::mutation_lock::try_file_mutation_lock(repo_root, &target)
-            .map_err(|error| format!("{tool_name} refused: {error}"))?;
+        contextpatch_core::fs::mutation_lock::try_file_mutation_lock_for_open_file(
+            &root,
+            &target_path,
+            target.file(),
+        )
+        .map_err(|error| format!("{tool_name} refused: {error}"))?;
 
-    let metadata = inspect_exact_artifact_file(tool_name, &root, Path::new(&shown))?;
-    let current_sha256 = contextpatch_core::fs::hash::sha256_file(&target)
+    let bytes = target
+        .size_bytes()
+        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    let current_sha256 = target
+        .sha256()
         .map_err(|error| format!("{tool_name} refused: {error}"))?;
     if expected_sha256.is_some_and(|expected| expected != current_sha256) {
         return Err(format!(
@@ -866,15 +873,22 @@ pub(crate) fn call_artifact_delete_exact(
             "artifact_root": root.display().to_string(),
             "path": shown,
             "sha256": current_sha256,
-            "bytes": metadata.len(),
+            "bytes": bytes,
             "required_confirm_for_delete": tools::artifact_delete_exact::CONFIRMATION,
             "repo_mutation": false
         }))
         .map_err(|error| format!("{tool_name} refused: {error}"));
     }
 
-    let verified_metadata = inspect_exact_artifact_file(tool_name, &root, Path::new(&shown))?;
-    let verified_sha256 = contextpatch_core::fs::hash::sha256_file(&target)
+    // Reproved immediately before the removal, against the same handle rather than against the name again.
+    target
+        .revalidate_current_path()
+        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    let verified_sha256 = target
+        .sha256()
+        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    let verified_bytes = target
+        .size_bytes()
         .map_err(|error| format!("{tool_name} refused: {error}"))?;
     let expected_sha256 = expected_sha256.unwrap_or_default();
     if verified_sha256 != expected_sha256 {
@@ -882,11 +896,11 @@ pub(crate) fn call_artifact_delete_exact(
             "{tool_name} refused: artifact `{shown}` changed during validation; current_sha256={verified_sha256}, expected_sha256={expected_sha256}"
         ));
     }
-    fs::remove_file(&target)
+    contextpatch_core::fs::rooted::remove_file(authority, &shown)
         .map_err(|error| format!("{tool_name} refused: failed to delete `{shown}`: {error}"))?;
-    match fs::symlink_metadata(&target) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Ok(_) => {
+    match contextpatch_core::fs::rooted::entry_kind(authority, &shown) {
+        Ok(None) => {}
+        Ok(Some(_)) => {
             return Err(format!(
                 "{tool_name} refused: delete verification failed; `{shown}` still exists"
             ));
@@ -905,52 +919,48 @@ pub(crate) fn call_artifact_delete_exact(
         "artifact_root": root.display().to_string(),
         "path": shown,
         "sha256": verified_sha256,
-        "bytes_freed": verified_metadata.len(),
+        "bytes_freed": verified_bytes,
         "repo_mutation": false
     }))
     .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
-fn inspect_exact_artifact_file(
+/// Open one artifact file through the artifact directory's authority, refusing anything that is not one.
+///
+/// The distinct refusals are kept because they tell a caller different things. What no longer happens is the
+/// hand-rolled walk that used `symlink_metadata` on each joined component and then canonicalized the leaf to
+/// check containment: the rooted primitives refuse a symlink at any component and cannot leave the directory
+/// in the first place, so containment is structural rather than checked afterwards.
+fn open_exact_artifact_file(
     tool_name: &str,
-    root: &Path,
-    relative: &Path,
-) -> Result<fs::Metadata, String> {
-    let shown = relative.display();
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        current.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&current).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                format!("{tool_name} refused: artifact `{shown}` does not exist")
-            } else {
-                format!("{tool_name} refused: failed to inspect artifact `{shown}`: {error}")
-            }
-        })?;
-        if metadata.file_type().is_symlink() {
+    authority: RepositoryRoot<'_>,
+    shown: &str,
+) -> Result<GuardedRegularFile, String> {
+    use contextpatch_core::fs::rooted::{self, RootedEntryKind};
+
+    match rooted::entry_kind(authority, shown).map_err(|error| {
+        format!("{tool_name} refused: failed to inspect artifact `{shown}`: {error}")
+    })? {
+        None => {
+            return Err(format!(
+                "{tool_name} refused: artifact `{shown}` does not exist"
+            ))
+        }
+        Some(RootedEntryKind::Symlink) => {
             return Err(format!(
                 "{tool_name} refused: artifact `{shown}` contains a symlink component"
-            ));
+            ))
+        }
+        Some(RootedEntryKind::RegularFile) => {}
+        Some(_) => {
+            return Err(format!(
+                "{tool_name} refused: artifact `{shown}` is not a regular file"
+            ))
         }
     }
-
-    let target = root.join(relative);
-    let metadata = fs::symlink_metadata(&target)
-        .map_err(|error| format!("{tool_name} refused: failed to inspect `{shown}`: {error}"))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "{tool_name} refused: artifact `{shown}` is not a regular file"
-        ));
-    }
-    let resolved = target
-        .canonicalize()
-        .map_err(|error| format!("{tool_name} refused: failed to resolve `{shown}`: {error}"))?;
-    if !resolved.starts_with(root) {
-        return Err(format!(
-            "{tool_name} refused: artifact `{shown}` resolves outside the artifact root"
-        ));
-    }
-    Ok(metadata)
+    open_regular_file_in_root(authority, Path::new(shown)).map_err(|error| {
+        format!("{tool_name} refused: failed to inspect artifact `{shown}`: {error}")
+    })
 }
 
 /// Validate many exact replacements before applying them one file at a time.
@@ -1122,25 +1132,21 @@ pub(crate) fn call_bulk_replace_exact<'a>(
     .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
-fn write_artifact(
-    repo_root: &Path,
+fn write_artifact<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
     path: &str,
     bytes: &[u8],
     parents: bool,
     tool_name: &str,
 ) -> Result<String, String> {
-    let artifact_root = artifact_root(repo_root, tool_name)?;
+    let artifact_root = artifact_root(repository_root, tool_name)?;
     let relative = validate_relative_path(tool_name, path)?;
-    let target = artifact_root.join(&relative);
-    if parents {
-        let parent = target
-            .parent()
-            .ok_or_else(|| format!("{tool_name} refused: artifact path has no parent"))?;
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("{tool_name} refused: failed to create parents: {error}"))?;
-    }
-    let summary = write_new_file_bytes_in_root(&artifact_root, &relative, bytes)
-        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    // The artifact directory is its own authority: one no-follow open of a directory this process created,
+    // then every component beneath it reached relative to that descriptor. Parent creation goes through the
+    // same guarded layer rather than a joined `create_dir_all`.
+    let summary =
+        write_new_file_bytes_with_parents_in_root(&artifact_root, &relative, bytes, parents)
+            .map_err(|error| format!("{tool_name} refused: {error}"))?;
 
     serde_json::to_string_pretty(&json!({
         "tool": tool_name,
@@ -1154,31 +1160,17 @@ fn write_artifact(
     .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
-pub(crate) fn artifact_root(repo_root: &Path, tool_name: &str) -> Result<PathBuf, String> {
-    let root = resolved_repo_root(repo_root, tool_name)?;
-    let mut hasher = DefaultHasher::new();
-    root.display().to_string().hash(&mut hasher);
-    let repo_name = root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("repo")
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let artifact_root = std::env::temp_dir()
-        .join("contextpatch-artifacts")
-        .join(format!("{repo_name}-{:016x}", hasher.finish()));
-    fs::create_dir_all(&artifact_root)
-        .map_err(|error| format!("{tool_name} refused: failed to create artifact root: {error}"))?;
-    artifact_root
-        .canonicalize()
-        .map_err(|error| format!("{tool_name} refused: failed to resolve artifact root: {error}"))
+/// The sidecar directory for one repository, created if absent.
+///
+/// Derived from repository identity rather than from the repository's path spelling, so it follows a rename
+/// and is never inherited by a different repository that acquires the old name. The returned path is the
+/// location of a directory outside the worktree; it is not authority over the repository.
+pub(crate) fn artifact_root<'a>(
+    repository_root: impl Into<RepositoryRoot<'a>>,
+    tool_name: &str,
+) -> Result<PathBuf, String> {
+    contextpatch_core::fs::artifact::ensure_artifact_root(repository_root)
+        .map_err(|error| format!("{tool_name} refused: {error}"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

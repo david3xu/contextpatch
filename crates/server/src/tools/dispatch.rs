@@ -298,13 +298,13 @@ fn call_tool(
             tools::files::call_write_existing_file_exact_hash(repository.root(), arguments)
         }
         tools::artifact_write_text::NAME => {
-            tools::files::call_artifact_write_text(repo_root, arguments)
+            tools::files::call_artifact_write_text(repository.root(), arguments)
         }
         tools::artifact_delete_exact::NAME => {
-            tools::files::call_artifact_delete_exact(repo_root, arguments)
+            tools::files::call_artifact_delete_exact(repository.root(), arguments)
         }
         tools::artifact_write_base64::NAME => {
-            tools::files::call_artifact_write_base64(repo_root, arguments)
+            tools::files::call_artifact_write_base64(repository.root(), arguments)
         }
         tools::bulk_write_new_files_base64::NAME => {
             tools::files::call_bulk_write_new_files_base64(repository.root(), arguments)
@@ -333,7 +333,7 @@ fn call_tool(
         }
         tools::docker_image_inspect::NAME => tools::process::call_docker_image_inspect(arguments),
         tools::artifact_python_run::NAME => {
-            tools::process::call_artifact_python_run(repo_root, arguments)
+            tools::process::call_artifact_python_run(repository.root(), arguments)
         }
         tools::task_image_python_run::NAME => {
             tools::process::call_task_image_python_run(repository.root(), arguments)

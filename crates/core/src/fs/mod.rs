@@ -1,3 +1,4 @@
+pub mod artifact;
 pub mod atomic_write;
 pub mod create_directory;
 pub mod directory;

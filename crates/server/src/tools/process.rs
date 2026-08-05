@@ -698,8 +698,8 @@ pub(crate) fn call_docker_image_inspect(
     .map_err(|error| format!("docker_image_inspect refused: {error}"))
 }
 
-pub(crate) fn call_artifact_python_run(
-    repo_root: &Path,
+pub(crate) fn call_artifact_python_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let program = optional_string(arguments, "program")?.unwrap_or("python3");
@@ -721,35 +721,41 @@ pub(crate) fn call_artifact_python_run(
             return Err("artifact_python_run refused: args must not contain NUL and must be at most 1000 bytes each".to_string());
         }
     }
-    let artifact_root =
-        crate::tools::files::artifact_root(repo_root, crate::tools::artifact_python_run::NAME)?;
-    let relative = crate::tools::common::validate_relative_path(
+    let artifact_root = crate::tools::files::artifact_root(
+        repository_root,
+        crate::tools::artifact_python_run::NAME,
+    )?;
+    let relative = crate::tools::common::normalize_repo_relative_path(
         crate::tools::artifact_python_run::NAME,
         script,
     )?;
-    let script_path = artifact_root.join(&relative);
-    let resolved_script = script_path.canonicalize().map_err(|error| {
-        format!(
-            "artifact_python_run refused: failed to resolve artifact script `{script}`: {error}"
-        )
-    })?;
-    if !resolved_script.starts_with(&artifact_root) {
-        return Err(
-            "artifact_python_run refused: script resolves outside artifact root".to_string(),
-        );
-    }
-    if !resolved_script.is_file() {
+    // The artifact directory is the authority for both the script check and the child's working directory.
+    // The script is confirmed to be a regular file beneath that directory without following a symlink at any
+    // component, which replaces canonicalizing the leaf and comparing prefixes afterwards.
+    let authority = contextpatch_core::git::RepositoryRoot::from_path(&artifact_root);
+    if !contextpatch_core::fs::rooted::is_regular_file(authority, &relative)
+        .map_err(|error| format!("artifact_python_run refused: {error}"))?
+    {
         return Err(format!(
             "artifact_python_run refused: `{script}` is not an existing artifact file"
         ));
     }
-    let mut command_args = vec![resolved_script.display().to_string()];
+    // Opened and held until the child has been spawned, so the directory the child changes into is the
+    // directory that was checked rather than a name resolved again at spawn time.
+    let working_directory = contextpatch_core::fs::rooted::open_directory(authority, "")
+        .map_err(|error| format!("artifact_python_run refused: {error}"))?;
+    // The interpreter receives argv strings and there is no descriptor form of a script argument, so the
+    // script is named relative to the working directory it is about to run in.
+    let mut command_args = vec![relative.clone()];
     command_args.extend(args);
     let output = run_bounded_command(
         crate::tools::artifact_python_run::NAME,
         program,
         &command_args,
-        &artifact_root,
+        contextpatch_core::process::runner::CommandCwd::Anchored {
+            directory: &working_directory,
+            logical_path: &artifact_root,
+        },
         timeout_secs,
     )?;
     let text = format_command_output(program, &command_args, &artifact_root, &output);
@@ -1092,11 +1098,11 @@ fn run_bounded_docker(
     run_bounded_command(tool_name, "docker", args, Path::new("/"), timeout_secs)
 }
 
-fn run_bounded_command(
+fn run_bounded_command<'a>(
     tool_name: &str,
     program: &str,
     args: &[String],
-    cwd: &Path,
+    cwd: impl Into<contextpatch_core::process::runner::CommandCwd<'a>>,
     timeout_secs: u64,
 ) -> Result<BoundedProcessOutput, String> {
     let output = run_core_bounded_command(

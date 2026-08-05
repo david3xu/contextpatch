@@ -2045,3 +2045,164 @@ fn project_dispatch_plans_setup_profiles_from_the_selected_repository() {
     assert!(!replacement.join(PNPM_LOCKFILE).exists());
     assert!(!replacement.join("node_modules").exists());
 }
+
+// ---------------------------------------------------------------------------
+// Sidecar artifact identity
+// ---------------------------------------------------------------------------
+
+const ARTIFACT_PATH: &str = "notes/tool.txt";
+const ARTIFACT_SCRIPT: &str = "run.py";
+const ARTIFACT_OUTPUT: &str = "ran-in-artifacts.txt";
+const ARTIFACT_DELETE_CONFIRMATION: &str = "delete artifact exact";
+
+fn artifact_root_of(response: &Value) -> std::path::PathBuf {
+    let parsed: Value = serde_json::from_str(response_text(response)).unwrap();
+    std::path::PathBuf::from(parsed["artifact_root"].as_str().unwrap())
+}
+
+fn artifact_write_arguments(content: &str) -> String {
+    format!(r#"{{"path":"{ARTIFACT_PATH}","content":"{content}","parents":true}}"#)
+}
+
+#[cfg(unix)]
+#[test]
+fn project_dispatch_keeps_artifacts_with_the_selected_repository_identity() {
+    let workspace = temp_root("project_artifact_identity");
+    let target = file_repo(&workspace, "target");
+    let decoy = file_repo(&workspace, "decoy");
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+
+    // Each repository writes to its own sidecar directory, and neither writes into the worktree.
+    let target_written = server.exchange(&file_action(
+        "target",
+        "artifact_write_text",
+        &artifact_write_arguments("target artifact\\n"),
+    ));
+    assert_text(&target_written, "\"repo_mutation\": false");
+    let target_artifacts = artifact_root_of(&target_written);
+
+    let decoy_written = server.exchange(&file_action(
+        "decoy",
+        "artifact_write_text",
+        &artifact_write_arguments("decoy artifact\\n"),
+    ));
+    let decoy_artifacts = artifact_root_of(&decoy_written);
+    assert_ne!(
+        target_artifacts, decoy_artifacts,
+        "two repositories must not share one sidecar namespace"
+    );
+    assert!(!target.join(ARTIFACT_PATH).exists());
+    assert!(!decoy.join(ARTIFACT_PATH).exists());
+    assert!(target_artifacts.starts_with(std::env::temp_dir()));
+
+    // Artifact Python runs from the artifact directory itself, so a relative write from the script lands
+    // beside the script rather than anywhere in the repository.
+    let script_written = server.exchange(&file_action(
+        "target",
+        "artifact_write_text",
+        &format!(
+            r#"{{"path":"{ARTIFACT_SCRIPT}","content":"import pathlib\npathlib.Path('{ARTIFACT_OUTPUT}').write_text('ok\\n')\nprint('artifact-run-ok')\n","parents":true}}"#
+        ),
+    ));
+    assert_text(&script_written, "\"created\": true");
+    let ran = server.exchange(&file_action(
+        "target",
+        "artifact_python_run",
+        &format!(r#"{{"script":"{ARTIFACT_SCRIPT}","timeout_secs":30}}"#),
+    ));
+    assert_text(&ran, "artifact-run-ok");
+    assert!(
+        target_artifacts.join(ARTIFACT_OUTPUT).is_file(),
+        "the child ran in the artifact directory"
+    );
+    assert!(!target.join(ARTIFACT_OUTPUT).exists());
+    assert!(!decoy_artifacts.join(ARTIFACT_OUTPUT).exists());
+    // Nothing the artifact surface did shows up as a repository change. The fixture's own uncommitted files
+    // are expected, so the claim is specifically that no artifact name appears.
+    let status = git_stdout(&target, &["status", "--short"]);
+    for artifact_name in [ARTIFACT_OUTPUT, ARTIFACT_SCRIPT, "notes/"] {
+        assert!(
+            !status.contains(artifact_name),
+            "artifact `{artifact_name}` must not appear as a repository change: {status}"
+        );
+    }
+    server.finish();
+
+    // A rename keeps the artifacts: the sidecar follows the directory, not the name it was reached by.
+    let renamed = workspace.join("renamed");
+    fs::rename(&target, &renamed).unwrap();
+
+    let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
+    let after_rename = server.exchange(&file_action(
+        "renamed",
+        "artifact_delete_exact",
+        &format!(r#"{{"path":"{ARTIFACT_PATH}"}}"#),
+    ));
+    assert_eq!(
+        artifact_root_of(&after_rename),
+        target_artifacts,
+        "the renamed repository reaches the artifacts it wrote before the rename"
+    );
+    let planned: Value = serde_json::from_str(response_text(&after_rename)).unwrap();
+    let digest = planned["sha256"].as_str().unwrap().to_string();
+    assert_eq!(digest, sha256_hex_for_test(b"target artifact\n"));
+
+    // A different repository taking over the vacated name gets its own namespace rather than inheriting
+    // the artifacts of the repository that used to answer to that name. The original stays inside the
+    // workspace under a new name so it remains selectable, which is what lets both be observed at once.
+    let moved = workspace.join("moved");
+    fs::rename(&renamed, &moved).unwrap();
+    let replacement = file_repo(&workspace, "renamed");
+
+    let missing = server.exchange(&file_action(
+        "renamed",
+        "artifact_delete_exact",
+        &format!(r#"{{"path":"{ARTIFACT_PATH}"}}"#),
+    ));
+    assert_eq!(missing["result"]["isError"], true);
+    assert_text(&missing, "does not exist");
+
+    let replacement_written = server.exchange(&file_action(
+        "renamed",
+        "artifact_write_text",
+        &artifact_write_arguments("replacement artifact\\n"),
+    ));
+    let replacement_artifacts = artifact_root_of(&replacement_written);
+    assert_ne!(
+        replacement_artifacts, target_artifacts,
+        "a replacement at the old pathname must not inherit the original's artifact namespace"
+    );
+    assert!(replacement.join(".git").is_dir());
+
+    // Deleting through the original identity still works, and touches only that one file.
+    let deleted = server.exchange(&file_action(
+        "moved",
+        "artifact_delete_exact",
+        &format!(
+            r#"{{"path":"{ARTIFACT_PATH}","expected_sha256":"{digest}","dry_run":false,"confirm":"{ARTIFACT_DELETE_CONFIRMATION}"}}"#
+        ),
+    ));
+    server.finish();
+    assert_eq!(
+        deleted["result"]["isError"],
+        Value::Null,
+        "{}",
+        response_text(&deleted)
+    );
+    assert_text(&deleted, "\"deleted\": true");
+    assert!(!target_artifacts.join(ARTIFACT_PATH).exists());
+    assert!(
+        target_artifacts.join(ARTIFACT_SCRIPT).is_file(),
+        "an exact delete removes only the named artifact"
+    );
+
+    // The sibling and the replacement kept their own artifacts throughout.
+    assert_eq!(
+        fs::read_to_string(decoy_artifacts.join(ARTIFACT_PATH)).unwrap(),
+        "decoy artifact\n"
+    );
+    assert_eq!(
+        fs::read_to_string(replacement_artifacts.join(ARTIFACT_PATH)).unwrap(),
+        "replacement artifact\n"
+    );
+}
