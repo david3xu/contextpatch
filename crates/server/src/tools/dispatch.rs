@@ -75,15 +75,6 @@ pub(crate) enum EffectiveRepository {
 }
 
 impl EffectiveRepository {
-    /// The path for messages, receipts, and tools that still take one.
-    pub(crate) fn logical_path(&self) -> &Path {
-        match self {
-            Self::Configured(path) => path,
-            #[cfg(unix)]
-            Self::Selected(selected) => selected.path(),
-        }
-    }
-
     /// The repository root this call operates on, carrying whichever authority it has.
     ///
     /// The general form. Projections for Git and, later, for the filesystem boundaries are reached through
@@ -237,12 +228,10 @@ fn call_tool_with_mutation_lock(
 ) -> Result<String, String> {
     let _mutation_lock = if serializes_repository_mutation(name) {
         Some(
-            // Still keyed by path. Descriptor-anchored locking is deferred to the lock slice, so this
-            // takes the logical path rather than pretending to be anchored.
-            contextpatch_core::fs::mutation_lock::try_repository_mutation_lock(
-                repository.logical_path(),
-            )
-            .map_err(|error| format!("{name} refused: {error}"))?,
+            // Keyed by repository identity through the selected root's own authority, so a rename keeps a
+            // repository excluding itself and a replacement at the old name does not inherit its lock.
+            contextpatch_core::fs::mutation_lock::try_repository_mutation_lock(repository.root())
+                .map_err(|error| format!("{name} refused: {error}"))?,
         )
     } else {
         None

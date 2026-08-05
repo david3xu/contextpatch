@@ -25,7 +25,9 @@ impl Drop for MutationLockGuard {
     }
 }
 
-fn lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+fn lock_directory(
+    repo_root: crate::git::RepositoryRoot<'_>,
+) -> Result<PathBuf, ContextPatchError> {
     let directory = ensure_scratch_root(repo_root)?.join(LOCK_DIRECTORY);
     fs::create_dir_all(&directory).map_err(|error| {
         ContextPatchError::new(format!(
@@ -36,7 +38,15 @@ fn lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
     Ok(directory)
 }
 
-fn file_lock_directory(repo_root: &Path) -> Result<PathBuf, ContextPatchError> {
+/// The shared directory holding one lock file per locked target.
+///
+/// Shared across repositories on purpose, because the key below identifies a *file* rather than a repository:
+/// two repositories that reach one file through hard links or a case-insensitive alias must contend for the
+/// same lock. The root is used only to locate the container that scratch already establishes, never as
+/// authority over anything inside the repository.
+fn file_lock_directory(
+    repo_root: crate::git::RepositoryRoot<'_>,
+) -> Result<PathBuf, ContextPatchError> {
     let repository_scratch = scratch_root(repo_root)?;
     let scratch_container = repository_scratch.parent().ok_or_else(|| {
         ContextPatchError::new(format!(
@@ -86,11 +96,11 @@ fn try_lock(
     }
 }
 
-pub fn try_repository_mutation_lock(
-    repo_root: &Path,
+pub fn try_repository_mutation_lock<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
 ) -> Result<MutationLockGuard, ContextPatchError> {
     try_lock(
-        &lock_directory(repo_root)?.join(REPOSITORY_LOCK),
+        &lock_directory(repo_root.into())?.join(REPOSITORY_LOCK),
         "another ContextPatch mutation is still active for this repository; this operation was \
          not started. Wait for it to finish, then inspect read_write_receipts and status_guard \
          before retrying",
@@ -98,25 +108,25 @@ pub fn try_repository_mutation_lock(
     )
 }
 
-pub fn try_file_mutation_lock(
-    repo_root: &Path,
+pub fn try_file_mutation_lock<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     target: &Path,
 ) -> Result<MutationLockGuard, ContextPatchError> {
     let identity = FileIdentity::from_path(target)?;
-    try_file_mutation_lock_for_identity(repo_root, target, identity)
+    try_file_mutation_lock_for_identity(repo_root.into(), target, identity)
 }
 
-pub fn try_file_mutation_lock_for_open_file(
-    repo_root: &Path,
+pub fn try_file_mutation_lock_for_open_file<'a>(
+    repo_root: impl Into<crate::git::RepositoryRoot<'a>>,
     target: &Path,
     file: &File,
 ) -> Result<MutationLockGuard, ContextPatchError> {
     let identity = FileIdentity::from_file(file)?;
-    try_file_mutation_lock_for_identity(repo_root, target, identity)
+    try_file_mutation_lock_for_identity(repo_root.into(), target, identity)
 }
 
 fn try_file_mutation_lock_for_identity(
-    repo_root: &Path,
+    repo_root: crate::git::RepositoryRoot<'_>,
     target: &Path,
     identity: FileIdentity,
 ) -> Result<MutationLockGuard, ContextPatchError> {
