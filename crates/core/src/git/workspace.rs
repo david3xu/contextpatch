@@ -33,13 +33,22 @@ impl SelectedRepository {
         &self.relative
     }
 
+    /// This selection as a repository root, carrying the descriptor as its authority.
+    ///
+    /// The root is the general form; the Git projection is reached through it. Anything that needs to act
+    /// relative to the validated directory rather than resolve a name goes through here.
+    #[cfg(unix)]
+    pub fn root(&self) -> crate::git::RepositoryRoot<'_> {
+        crate::git::RepositoryRoot::anchored(&self.path, &self.directory)
+    }
+
     /// This selection as a repository target that policy functions accept.
     ///
     /// The descriptor travels with it, so every operation reached through this target runs against the
     /// directory that was validated rather than re-resolving a name.
     #[cfg(unix)]
     pub fn repository(&self) -> crate::git::GitRepository<'_> {
-        crate::git::GitRepository::anchored(&self.path, &self.directory)
+        self.root().git()
     }
 
     /// Prove the resolved path still names the directory the descriptor is anchored to.

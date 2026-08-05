@@ -84,13 +84,21 @@ impl EffectiveRepository {
         }
     }
 
+    /// The repository root this call operates on, carrying whichever authority it has.
+    ///
+    /// The general form. Projections for Git and, later, for the filesystem boundaries are reached through
+    /// it, which is what will let those boundaries stop resolving names without another plumbing change.
+    pub(crate) fn root(&self) -> contextpatch_core::git::RepositoryRoot<'_> {
+        match self {
+            Self::Configured(path) => contextpatch_core::git::RepositoryRoot::from_path(path),
+            #[cfg(unix)]
+            Self::Selected(selected) => selected.root(),
+        }
+    }
+
     /// The typed target for migrated Git policy, descriptor-backed when this is a selection.
     pub(crate) fn git_repository(&self) -> contextpatch_core::git::GitRepository<'_> {
-        match self {
-            Self::Configured(path) => contextpatch_core::git::GitRepository::from_path(path),
-            #[cfg(unix)]
-            Self::Selected(selected) => selected.repository(),
-        }
+        self.root().git()
     }
 }
 
