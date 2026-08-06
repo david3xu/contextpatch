@@ -109,14 +109,31 @@ Exact blockers, in the order they must be cleared:
    excluded. One caveat is recorded: `--read-only` is a write filter, not a spend filter, and
    `speech_stt_recognize` survives it despite consuming billable Speech quota, which is sufficient
    reason to exclude `speech` outright rather than rely on the flag.
-3. **Host actions remain operator-owned, and this is the genuine blocker.** The runbook now carries a
-   locked npm procedure with `--save-exact`, lockfile integrity values to compare, the expected
-   `--version` string carrying the build commit, the absolute executable path, a dedicated
-   `AZURE_CONFIG_DIR`, config backup, rollback, upgrade and uninstall. Executing it is not possible
-   from here: `npm install`, `npx`, and `az` are refused by policy, writes outside the repository root
-   are refused, and `configure_claude_desktop` is not exposed as an MCP action. Those refusals are
-   pinned by test and must stay that way.
-4. **None of the eight live smoke checks has run,** because no Azure MCP surface is connected.
+3. **The required capability set has no executable path under the stated identity constraints.** See
+   `docs/azure-mcp-capability-matrix.md`. Microsoft's ARM MCP at `mcp.management.azure.com` does supply
+   what local Azure MCP lacks: `execute_query` for Resource Graph, `get_arm_template_deployment_status`
+   for deployment state, and a `CostManagement` toolset for actual spend rather than retail pricing,
+   opted into with an `x-mcp-toolset` header. Speech SKU is probably reachable through `execute_query`
+   since Resource Graph exposes `sku`, but that is unproven. Its `execute_query` also makes local Azure
+   MCP's three inventory tools redundant, so the smallest complete topology is a single ARM MCP server
+   and local Azure MCP should be dropped rather than run alongside it.
+
+   Three blockers prevent adopting it. Its third-party client guidance states the account must have at
+   least Owner permissions on at least one subscription, which directly contradicts the no-Owner,
+   Reader-scoped constraint; that claim may be over-broad and specific to the deployment tools, which
+   is testable but not from here. Claude Desktop is not a supported client, the documented
+   third-party path being a claude.ai custom connector with an app registration and client secret
+   rather than a local stdio entry. And the two mutation tools, `create_template_deployment` and
+   `cancel_arm_template_deployment`, ship on by default and cannot be filtered off at the client;
+   Microsoft's own mitigation is the shipped `BlockingDeploymentsPolicy.json`, an ARM deny policy
+   against the server's first-party app id, which must be assigned before first use.
+4. **Host actions remain operator-owned.** The locked npm procedure for local Azure MCP is written and
+   verified but is not to be executed, since the topology decision supersedes it. Identity creation,
+   role assignment, and installation are postponed until the Owner question is settled. `npm install`,
+   `npx`, and `az` are refused by policy, writes outside the repository root are refused, and
+   `configure_claude_desktop` is not exposed as an MCP action.
+5. **None of the eight live smoke checks has run.** Checks 3 through 6 have no executable path that
+   satisfies the identity constraints, and the constraints are not being relaxed to manufacture one.
 2. **Namespace tokens are unknown for any specific build.** The filtering table in the runbook is
    deliberately unfilled rather than guessed, and must be captured from the pinned binary's own
    help output.
