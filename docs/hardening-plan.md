@@ -74,10 +74,17 @@ Exact blockers, in the order they must be cleared:
    whose versions stopped at `0.5.x`. Versioning continued in `microsoft/mcp` through a 1.0 stable
    release and then a 2.0 stable release. Azure MCP Server 2.0 is generally available as of
    10 April 2026, and `@azure/mcp` `2.0.2` is confirmed published, so a stable line does exist to
-   pin. Three gaps still block installation, in priority order. A third-party review reports
-   `CVE-2026-32211` at CVSS 9.1 with patching pending; that source is not Microsoft-controlled and
-   the finding is unverified, but a 9.1 against this server must be cleared before any version is
-   chosen. Platform-version skew is unconfirmed for the stable line, since whether
+   pin. Two gaps still block installation, and the CVE is no longer one of them. `CVE-2026-32211` was
+   verified and retracted as a blocker: MSRC records it as an Azure MCP Server information disclosure
+   issue, CWE-306, CVSS 9.1 base and 7.9 temporal, released 2 April 2026, already fully mitigated by
+   Microsoft with no customer action required, published under the cloud service CVE transparency
+   programme. The GitHub advisory `GHSA-5w7p-v6h9-q8c5` lists no package and no affected or fixed
+   version in any ecosystem, so `@azure/mcp` is not implicated at any version. The vector
+   `AV:N/PR:N/UI:N` with `RL:O` points to a network-reachable service deployment rather than a local
+   stdio process, which is not in scope for the planned rollout, though it would become relevant if a
+   self-hosted remote deployment were ever considered. The claim that patching was pending came from
+   a low-quality source that also misattributed the CVE to the Azure DevOps MCP server. What remains
+   is that platform-version skew is unconfirmed for the stable line, since whether
    `@azure/mcp-darwin-arm64` publishes a matching `2.0.2` was not checked, and on Apple Silicon that
    package supplies the binary. The exact newest `Azure.Mcp.Server-` tag, its commit SHA, and the
    npm publish workflow are still unrecorded, because GitHub blocks automated access to the raw

@@ -58,20 +58,68 @@ So GA status is resolved, and a stable line exists to pin: `@azure/mcp` `2.0.2` 
 published. Microsoft also documents pinning directly, the server README advising a pinned version
 rather than `@latest` when startup is slow.
 
-Three gaps still block installation.
+## CVE-2026-32211: verified real, retracted as a blocker
 
-1. **A critical CVE may be unpatched.** A third-party review of the Azure MCP ecosystem reports
-   `CVE-2026-32211` at CVSS 9.1 with patching pending. That source is not Microsoft-controlled, so
-   the finding is unverified, but a 9.1 against this exact server is disqualifying until resolved.
-   Verify against Microsoft's security advisories and the repository security policy, establish which
-   versions are affected, and confirm that the version to be pinned is not among them. **This is now
-   the first thing to check, ahead of any version decision.**
-2. **Platform-version skew is unresolved for the line that would be pinned.** Skew was observed on
+Verified 6 August 2026. The CVE exists. The characterisation that reached this document, that patching
+was pending, was **false**, and it is retracted along with the blocker status it justified.
+
+Evidence:
+
+| Source | URL | Finding |
+| --- | --- | --- |
+| MSRC Security Update Guide | `msrc.microsoft.com/update-guide/vulnerability/CVE-2026-32211` | Azure MCP Server Information Disclosure Vulnerability, released 2 April 2026, assigning CNA Microsoft |
+| GitHub Advisory Database | `github.com/advisories/GHSA-5w7p-v6h9-q8c5` | Critical, Unreviewed, published 3 April 2026, no package listed |
+| NVD | `nvd.nist.gov/vuln/detail/CVE-2026-32211` | published by the National Vulnerability Database |
+| CVE.org | `cve.org/CVERecord?id=CVE-2026-32211` | record exists |
+
+MSRC states that the vulnerability has already been fully mitigated by Microsoft, that there is no
+action for users of this service to take, and that the CVE exists to provide transparency under
+Microsoft's cloud service CVE programme. The record's own summary line says the vulnerability
+requires no customer action to resolve.
+
+Against the four questions that were asked:
+
+**Affected component and versions.** Weakness is CWE-306, missing authentication for a critical
+function. No version range is enumerated anywhere consulted. Third-party classification places the
+affected surface in the cloud service rather than a distributable artefact, associating it with Azure
+Web Apps, which Microsoft patches and manages directly.
+
+**Whether `@azure/mcp@2.0.2` is affected.** No. More precisely, no package in any ecosystem is
+listed as affected. The GitHub advisory records no package and no affected or fixed version, and says
+in terms that Dependabot alerts are unsupported for it because it has no package from a supported
+ecosystem with an affected and fixed version. There is no evidence that the npm package is in scope
+at any version.
+
+**Fixed version or commit.** None published, because remediation was service-side. The CVSS vector
+carries `RL:O`, official fix, alongside `E:U`, unproven exploit maturity, and `RC:C`, confirmed report
+confidence. Full vector: `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N/E:U/RL:O/RC:C`, base 9.1,
+temporal 7.9.
+
+**Local, remote, or both.** The evidence points to a network-reachable service deployment, not a
+local stdio process. `AV:N` with `PR:N` and `UI:N` describes an unauthenticated network attacker, and
+missing authentication is not a meaningful condition for a server that speaks over stdin and stdout
+to a single parent process. This is an inference from the vector plus the cloud-service framing rather
+than an explicit statement by Microsoft, so treat it as strong but not certain. It carries one
+forward-looking consequence: if a self-hosted remote deployment is ever considered, this CVE class
+becomes directly relevant and the authentication posture must be reviewed then. The planned local
+stdio rollout is not in its scope.
+
+One note on source quality, since it is the reason this appeared as a blocker at all. At least one
+widely circulated post claims no patch is available and attributes the CVE to `@azure-devops/mcp`,
+the Azure DevOps MCP server, which is a different product from the Azure MCP Server. That post is
+wrong on both points and closes with a vendor pitch. Where MSRC and the third-party summaries
+disagree, MSRC governs.
+
+## Decision: do not install yet
+
+Two gaps still block installation. Neither is the CVE.
+
+1. **Platform-version skew is unresolved for the line that would be pinned.** Skew was observed on
    the `3.0.0-beta.x` line, where `@azure/mcp-darwin-arm64` sat at `beta.13` while several siblings
    were at `beta.27`. Whether `@azure/mcp-darwin-arm64` publishes a matching `2.0.2` has not been
    checked. On Apple Silicon that package supplies the binary, so it decides what executes and must
    be confirmed at the exact pinned version.
-3. **The tag, commit, and publish workflow for the pinned version are still unrecorded.** Release
+2. **The tag, commit, and publish workflow for the pinned version are still unrecorded.** Release
    tags use the `Azure.Mcp.Server-` prefix and the filtered release list is reachable, but the exact
    newest tag, its commit SHA, and the workflow that publishes to npm were not captured. GitHub
    blocks automated access to the raw changelog and rejects the query-string release URL, so these
