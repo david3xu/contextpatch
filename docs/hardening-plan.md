@@ -68,18 +68,22 @@ stays open.
 
 Exact blockers, in the order they must be cleared:
 
-1. **No version is pinned, and the decision is deliberately deferred.** Provenance is now traced
-   and recorded in the runbook. The archive turned out to be a planned migration: `Azure/azure-mcp`
-   states that development moved to `github.com/microsoft/mcp`, where the Azure server lives at
-   `servers/Azure.Mcp.Server` with its own changelog and `Azure.Mcp.Server-` release tags. So an
-   authoritative source-to-package mapping does exist. What is still missing is the correspondence
-   between a specific `Azure.Mcp.Server-` tag and npm `3.0.0-beta.31`; without it, pinning an npm
-   version pins a build whose source commit and changelog entry cannot be identified. There is also
-   still no general-availability release, and the platform packages are skewed, with
-   `@azure/mcp-darwin-arm64` observed behind its siblings. On Apple Silicon the platform package
-   supplies the binary, so that skew decides what executes. Nothing is installed until this clears.
-   The Microsoft Artifact Registry image is not adopted: it appears only in archived release notes
-   and nothing identifies it as the current supported distribution.
+1. **No version is pinned, and the decision is deliberately deferred.** Provenance is now traced and
+   recorded in the runbook, and one earlier finding in this plan is retracted. The claim that no
+   general-availability release existed was wrong: it came from reading only the archived repository,
+   whose versions stopped at `0.5.x`. Versioning continued in `microsoft/mcp` through a 1.0 stable
+   release and then a 2.0 stable release. Azure MCP Server 2.0 is generally available as of
+   10 April 2026, and `@azure/mcp` `2.0.2` is confirmed published, so a stable line does exist to
+   pin. Three gaps still block installation, in priority order. A third-party review reports
+   `CVE-2026-32211` at CVSS 9.1 with patching pending; that source is not Microsoft-controlled and
+   the finding is unverified, but a 9.1 against this server must be cleared before any version is
+   chosen. Platform-version skew is unconfirmed for the stable line, since whether
+   `@azure/mcp-darwin-arm64` publishes a matching `2.0.2` was not checked, and on Apple Silicon that
+   package supplies the binary. The exact newest `Azure.Mcp.Server-` tag, its commit SHA, and the
+   npm publish workflow are still unrecorded, because GitHub blocks automated access to the raw
+   changelog and rejects the query-string release URL, so a browser is needed. The Microsoft Artifact
+   Registry image is still not adopted; the standing condition that Microsoft identify a distribution
+   as current and that its digest be pinnable is unchanged.
 2. **Namespace tokens are unknown for any specific build.** The filtering table in the runbook is
    deliberately unfilled rather than guessed, and must be captured from the pinned binary's own
    help output.

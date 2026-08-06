@@ -30,7 +30,13 @@ The current source of record is therefore:
 | Documentation | `learn.microsoft.com/azure/developer/azure-mcp-server/` |
 | Troubleshooting and support | `servers/Azure.Mcp.Server/TROUBLESHOOTING.md`, `SUPPORT.md` |
 | npm package | `@azure/mcp` |
-| npm version observed at `latest` | `3.0.0-beta.31` |
+| npm stable version confirmed published | `2.0.2`, at `npmjs.com/package/@azure/mcp/v/2.0.2` |
+| npm `latest` tag | a `3.0.0-beta.x` prerelease; snippets observed both `beta.27` and `beta.31` within the same day |
+| GA status | Azure MCP Server 2.0 is generally available |
+| GA announcement | `devblogs.microsoft.com/azure-sdk/announcing-azure-mcp-server-2-0-stable-release/` |
+| GA date | 10 April 2026 |
+| Server README | `github.com/microsoft/mcp/tree/main/servers/Azure.Mcp.Server` |
+| Release filter | `github.com/microsoft/mcp/releases?q=Azure.Mcp.Server-` |
 | VS Code extension | `ms-azuretools.vscode-azure-mcp-server` |
 
 `microsoft/mcp` publishes per-server release tags, so Azure MCP releases are found by filtering
@@ -39,23 +45,52 @@ which belongs to whichever server published most recently.
 
 ## Decision: do not install yet
 
-A source-to-package mapping now exists and is authoritative. Two gaps still block pinning, and both
-are narrower than the questions this section previously recorded.
+The source-to-package mapping is now authoritative, and one earlier conclusion in this document was
+**wrong and is retracted**: it recorded that no general-availability release existed. That was an
+artifact of reading only the archived repository, whose versions never passed `0.5.x`. Versioning
+continued in `microsoft/mcp` with a 1.0 stable release and then a 2.0 stable release. The server
+README states that Azure MCP Server 2.0 is generally available, and Microsoft's Azure SDK blog
+announced the 2.0 stable release on 10 April 2026, reporting 276 tools across 57 Azure services with
+self-hosted remote deployment as the defining change. The changelog frames 2.0 as spanning 40 beta
+iterations, `2.0.0-beta.1` dated 2025-10-29 through `2.0.0-beta.40` dated 2026-04-07.
 
-1. **The tag to package correspondence is unverified.** Nothing consulted states which
-   `Azure.Mcp.Server-<version>` tag corresponds to npm `3.0.0-beta.31`. Pinning an npm version
-   without that mapping means pinning a build whose source commit and changelog entry cannot be
-   identified, which defeats the point of pinning.
-2. **No general-availability release was found, and the platform packages are skewed.** Every
-   release on the archived repository was marked pre-release and the current npm `latest` is a beta.
-   `@azure/mcp-darwin-arm64` was observed at `3.0.0-beta.13` while `@azure/mcp-darwin-x64` and
-   several siblings were at `3.0.0-beta.27`, and `@azure/mcp-linux-x64` at `2.0.0-beta.33`. On Apple
-   Silicon the platform package supplies the binary, so the skew decides what actually executes.
+So GA status is resolved, and a stable line exists to pin: `@azure/mcp` `2.0.2` is confirmed
+published. Microsoft also documents pinning directly, the server README advising a pinned version
+rather than `@latest` when startup is slow.
 
-The Microsoft Artifact Registry image is **not** adopted. It appeared only in release notes on the
-archived repository, and nothing consulted identifies it as the current supported distribution. The
-standing condition for using it is unchanged: Microsoft must identify it as current and its digest
-must be pinnable.
+Three gaps still block installation.
+
+1. **A critical CVE may be unpatched.** A third-party review of the Azure MCP ecosystem reports
+   `CVE-2026-32211` at CVSS 9.1 with patching pending. That source is not Microsoft-controlled, so
+   the finding is unverified, but a 9.1 against this exact server is disqualifying until resolved.
+   Verify against Microsoft's security advisories and the repository security policy, establish which
+   versions are affected, and confirm that the version to be pinned is not among them. **This is now
+   the first thing to check, ahead of any version decision.**
+2. **Platform-version skew is unresolved for the line that would be pinned.** Skew was observed on
+   the `3.0.0-beta.x` line, where `@azure/mcp-darwin-arm64` sat at `beta.13` while several siblings
+   were at `beta.27`. Whether `@azure/mcp-darwin-arm64` publishes a matching `2.0.2` has not been
+   checked. On Apple Silicon that package supplies the binary, so it decides what executes and must
+   be confirmed at the exact pinned version.
+3. **The tag, commit, and publish workflow for the pinned version are still unrecorded.** Release
+   tags use the `Azure.Mcp.Server-` prefix and the filtered release list is reachable, but the exact
+   newest tag, its commit SHA, and the workflow that publishes to npm were not captured. GitHub
+   blocks automated access to the raw changelog and rejects the query-string release URL, so these
+   need a browser. Without the commit, a pinned npm version cannot be tied to reviewed source.
+
+The Microsoft Artifact Registry image is still **not** adopted, though the picture improved: 2.0
+ships AMD64 and ARM64 Docker images with trimmed binaries. The standing condition is unchanged.
+Microsoft must identify a distribution as current and its digest must be pinnable.
+
+## A distribution worth checking before anything else
+
+The same third-party review reports an **MCP Bundle** format, `.mcpb`, dated 24 April 2026, which
+installs Azure MCP into Claude Desktop by dragging one file and requires no Node.js, Python, or .NET
+runtime. If Microsoft confirms that, it is materially better than the npm path for this rollout: no
+platform package skew, no `npx` resolution at launch, no Node toolchain on the host, and a single
+artifact that can be hashed and archived.
+
+This is unverified and comes from a non-Microsoft source. Confirm it against the server README and
+Microsoft Learn before treating it as an option.
 
 ## Alternative worth evaluating before installing anything
 
