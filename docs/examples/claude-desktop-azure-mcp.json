@@ -1,0 +1,35 @@
+{
+  "_comment": "Redacted template. Placeholders only, never commit a live configuration. See docs/azure-mcp-runbook.md.",
+  "_rules": [
+    "Additive only: preserve every existing entry, including all contextpatch entries.",
+    "Back up the live configuration before editing. Prefer the contextpatch CLI configure_claude_desktop command in dry-run mode first.",
+    "Replace REPLACE_ tokens with real values in the live file only.",
+    "AZURE_CONFIG_DIR is a filesystem path and is not a secret, so it may appear here.",
+    "Never place a client secret, certificate, certificate password, or token in this file.",
+    "Credentials are resolved by DefaultAzureCredential from the isolated Azure CLI profile, not from this file.",
+    "Pin an exact version. Do not use a floating tag and do not use npx to resolve at launch.",
+    "Enable only the namespace tokens captured from the pinned build. Do not enable mutation namespaces in this rollout."
+  ],
+  "mcpServers": {
+    "azure-readonly": {
+      "command": "REPLACE_ABSOLUTE_PATH_TO_PINNED_AZMCP_BINARY",
+      "args": [
+        "server",
+        "start",
+        "--namespace",
+        "REPLACE_NAMESPACE_TOKEN_FOR_RESOURCE_INSPECTION",
+        "--namespace",
+        "REPLACE_NAMESPACE_TOKEN_FOR_RESOURCE_GRAPH",
+        "--namespace",
+        "REPLACE_NAMESPACE_TOKEN_FOR_COST_MANAGEMENT",
+        "--namespace",
+        "REPLACE_NAMESPACE_TOKEN_FOR_SPEECH_TIER",
+        "--namespace",
+        "REPLACE_NAMESPACE_TOKEN_FOR_DEPLOYMENT_INSPECTION"
+      ],
+      "env": {
+        "AZURE_CONFIG_DIR": "REPLACE_ABSOLUTE_PATH_TO_OPERATOR_OWNED_ISOLATED_AZURE_PROFILE_DIR"
+      }
+    }
+  }
+}

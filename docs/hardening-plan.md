@@ -60,7 +60,32 @@ structured access to Azure resource state, but ContextPatch remains a repository
 validation engine. Do not add Azure control-plane APIs, generic `az`, arbitrary `npx`, or cloud
 credentials to ContextPatch.
 
-### 0.1 Configure a least-privilege Azure companion server (C35)
+### 0.1 Configure a least-privilege Azure companion server (C35, open)
+
+Repository deliverables are complete: `docs/azure-mcp-runbook.md` and the redacted template at
+`docs/examples/claude-desktop-azure-mcp.json`. Host setup and live verification are not, so C35
+stays open.
+
+Exact blockers, in the order they must be cleared:
+
+1. **No version is pinned yet, and two findings block pinning.** The upstream repository
+   `github.com/Azure/azure-mcp` was archived read-only on 6 February 2026 with its release list
+   ending at `0.5.8`, while npm publishes `@azure/mcp` at `3.0.0-beta.31`. No general-availability
+   release was found; every GitHub release is marked pre-release. Platform sub-packages are skewed
+   against each other, and on Apple Silicon `@azure/mcp-darwin-arm64` was observed behind its
+   siblings at `3.0.0-beta.13`. Since the platform package supplies the binary, that skew decides
+   which build actually runs.
+2. **Namespace tokens are unknown for any specific build.** The filtering table in the runbook is
+   deliberately unfilled rather than guessed, and must be captured from the pinned binary's own
+   help output.
+3. **Host actions are outside ContextPatch's authority and remain operator-owned.** Installing the
+   package, creating the service principal, assigning roles, signing in through the isolated
+   `AZURE_CONFIG_DIR` profile, and editing Claude Desktop configuration cannot be performed from
+   here. `npm install`, `npx`, and `az` are refused by policy, and writes outside the repository
+   root are refused; those refusals are now pinned by test and must stay that way.
+4. **None of the eight live smoke checks has run,** because no Azure MCP surface is connected.
+
+C35 is marked complete only when all eight checks in the runbook pass.
 
 The current workflow requires Azure state to be copied from a terminal into the agent conversation.
 The first implementation should configure Microsoft's Azure MCP Server as a **separate** Claude
@@ -809,5 +834,5 @@ Phase-specific checks:
 | C32 | Formatting command is not allowlisted, so the gate is partial | 7.5 | Open |
 | C33 | Surface consolidation has no versioned design proposal | 5.0 | Open |
 | C34 | Exact-commit mismatch refusal swaps its `expected_paths` and `actual_dirty_paths` labels | unscheduled | Open |
-| C35 | Azure verification requires copy-paste and lacks a scoped companion MCP workflow | 0.1 | Open — first priority |
+| C35 | Azure verification requires copy-paste and lacks a scoped companion MCP workflow | 0.1 | Open — repository deliverables complete, host setup and live checks outstanding |
 | C36 | The command allowlist is described more strongly than its execution authority supports | 0.2 | Complete |
