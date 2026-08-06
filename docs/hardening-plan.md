@@ -109,31 +109,45 @@ Exact blockers, in the order they must be cleared:
    excluded. One caveat is recorded: `--read-only` is a write filter, not a spend filter, and
    `speech_stt_recognize` survives it despite consuming billable Speech quota, which is sufficient
    reason to exclude `speech` outright rather than rely on the flag.
-3. **The required capability set has no executable path under the stated identity constraints.** See
-   `docs/azure-mcp-capability-matrix.md`. Microsoft's ARM MCP at `mcp.management.azure.com` does supply
-   what local Azure MCP lacks: `execute_query` for Resource Graph, `get_arm_template_deployment_status`
-   for deployment state, and a `CostManagement` toolset for actual spend rather than retail pricing,
-   opted into with an `x-mcp-toolset` header. Speech SKU is probably reachable through `execute_query`
-   since Resource Graph exposes `sku`, but that is unproven. Its `execute_query` also makes local Azure
-   MCP's three inventory tools redundant, so the smallest complete topology is a single ARM MCP server
-   and local Azure MCP should be dropped rather than run alongside it.
+3. **Both candidate MCP surfaces are now eliminated for the required capability set.** See
+   `docs/azure-mcp-capability-matrix.md`, which carries the full source-level audit. ARM MCP supplies
+   what local Azure MCP lacks, namely `execute_query` for Resource Graph,
+   `get_arm_template_deployment_status` for deployment state, and a `CostManagement` toolset for actual
+   spend. It is nonetheless **rejected**, because its identity model is delegated-user by construction.
+   The documented app-registration manifest grants a single permission with `"type": "Scope"`, which is
+   a delegated permission; no application permission, client-credentials flow, or certificate path is
+   documented, and the app registration plus client secret is the OAuth client rather than the acting
+   Azure principal. The dedicated scoped service principal this rollout is built around therefore
+   cannot be the identity acting against ARM, and no role scoping, toolset header, or deny policy
+   changes that. Rejecting on that ground makes the Owner question moot, which is fortunate because it
+   is undecidable from the available evidence: the repository publishes no source at all, and its own
+   documentation contradicts itself, with the third-party client guide asserting an Owner requirement
+   while the FAQ states twice that the server operates purely on behalf of the signed-in user and
+   defers to Azure's authorization layer.
 
-   Three blockers prevent adopting it. Its third-party client guidance states the account must have at
-   least Owner permissions on at least one subscription, which directly contradicts the no-Owner,
-   Reader-scoped constraint; that claim may be over-broad and specific to the deployment tools, which
-   is testable but not from here. Claude Desktop is not a supported client, the documented
-   third-party path being a claude.ai custom connector with an app registration and client secret
-   rather than a local stdio entry. And the two mutation tools, `create_template_deployment` and
-   `cancel_arm_template_deployment`, ship on by default and cannot be filtered off at the client;
-   Microsoft's own mitigation is the shipped `BlockingDeploymentsPolicy.json`, an ARM deny policy
-   against the server's first-party app id, which must be assigned before first use.
-4. **Host actions remain operator-owned.** The locked npm procedure for local Azure MCP is written and
-   verified but is not to be executed, since the topology decision supersedes it. Identity creation,
-   role assignment, and installation are postponed until the Owner question is settled. `npm install`,
+   Two secondary findings are recorded. Custom connectors using remote MCP do surface in Claude
+   Desktop, so that condition passed, but they are brokered through the Claude account and the
+   connection originates from Anthropic's servers rather than the local machine, which is a different
+   trust boundary from the local stdio arrangement this rollout assumes. And the `x-mcp-toolset` header
+   needed to enable `CostManagement` would depend on Anthropic's request-header authentication feature,
+   which is documented as beta and available on request.
+
+   Reader plus Cost Management Reader would deny the create and cancel deployment calls, since ARM
+   evaluates RBAC server-side and Reader confers read actions only. That is strongly supported by the
+   platform model and by the vendor's own statement, though not proven without a live call. The
+   consequence is that the shipped `BlockingDeploymentsPolicy.json` is redundant when roles are scoped
+   correctly, and it must not be assigned as compensation for over-broad roles.
+
+   No app registration, client secret, Owner assignment, or policy assignment has been created.
+4. **Host actions remain operator-owned, and are postponed until the topology is settled.** The locked
+   npm procedure for local Azure MCP is written and verified but is not to be executed. `npm install`,
    `npx`, and `az` are refused by policy, writes outside the repository root are refused, and
    `configure_claude_desktop` is not exposed as an MCP action.
-5. **None of the eight live smoke checks has run.** Checks 3 through 6 have no executable path that
-   satisfies the identity constraints, and the constraints are not being relaxed to manufacture one.
+5. **None of the eight live smoke checks has run.** Checks 3 through 6 have no executable path across
+   Microsoft's currently available MCP surfaces under these identity constraints. Three honest options
+   are recorded in the capability matrix: take that evidence through a human-run path outside MCP,
+   accept a delegated human identity as an explicitly written exception, or narrow C35 to inventory and
+   record what was dropped. The constraints are not being relaxed to manufacture a path.
 2. **Namespace tokens are unknown for any specific build.** The filtering table in the runbook is
    deliberately unfilled rather than guessed, and must be captured from the pinned binary's own
    help output.
