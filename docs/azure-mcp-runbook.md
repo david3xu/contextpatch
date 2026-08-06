@@ -267,28 +267,73 @@ The documented invocation is `server start`. Microsoft's published client config
 and `npx -y` resolves and executes from the network on every launch. Use a controlled installation
 at an exact version and invoke its binary directly.
 
-## Tool filtering
+## Tool filtering: verified against 2.0.5
 
-The server supports `--mode` and `--namespace`. Mode `all` exposes every tool individually and can
-exceed client tool limits; from `0.5.0` onward the default listing groups tools by namespace, which
-reduces the advertised count. Tool counts have grown quickly, reported as 118 at `0.5.7` and 131 at
-`0.5.8`, so an unfiltered surface is both large and moving.
+All figures below come from the `2.0.5` binary, either `azmcp tools list` or a real MCP `tools/list`
+over stdio. Nothing here is inferred from documentation.
 
-The exact namespace tokens are not recorded here on purpose. They are build-specific and this
-document will not guess them. After installing the pinned version, capture the real list from the
-binary's own help output and fill in the table below, then use only those tokens in the Claude
-Desktop entry.
+**Total tool inventory: 235 tools across 55 namespaces.**
 
-| Required capability | Namespace token for the pinned build |
+The 55 namespace tokens are: `acr advisor aks appconfig applens applicationinsights appservice
+azuremigrate azureterraformbestpractices bicepschema cloudarchitect communication compute
+confidentialledger containerapps cosmos datadog deploy deviceregistry eventgrid eventhubs extension
+fileshares foundryextensions functionapp functions grafana group keyvault kusto loadtesting
+managedlustre marketplace monitor mysql policy postgres pricing quota redis resourcehealth role
+search servicebus servicefabric signalr speech sql storage storagesync subscription virtualdesktop
+wellarchitectedframework workbooks`.
+
+### Four of the five required capabilities do not exist in this server
+
+This is the central finding and it changes what C35 can deliver. Searched across all 235 tool names.
+
+| Required capability | Status at 2.0.5 |
 | --- | --- |
-| Resource listing and state | |
-| Resource Graph query | |
-| Cost Management read | |
-| Speech pricing tier inspection | |
-| ARM deployment inspection | |
+| Resource inventory and state | **Available.** `group_list`, `group_resource_list`, `subscription_list` |
+| Resource Graph query | **Absent.** Zero tools match graph. The changelog's "Resource Graph-based SQL implementation" refers to internal use by SQL tools, not an exposed query surface |
+| Cost Management read | **Absent.** Zero tools match cost, billing, spend, consumption, or invoice. `pricing_get` returns retail list pricing for template estimation, which is not actual spend |
+| Speech pricing tier | **Absent.** The `speech` namespace contains only `speech_stt_recognize` and `speech_tts_synthesize`, which are operations, not tier inspection |
+| ARM deployment state | **Absent.** Only `appservice_webapp_deployment_get` and `functions_template_get`, both service-specific. No general Resource Manager deployment read. The `deploy` namespace is guidance and code generation: `deploy_plan_get`, `deploy_iac_rules_get`, `deploy_pipeline_guidance_get`, `deploy_architecture_diagram_generate`, `deploy_app_logs_get` |
 
-Do not enable broad mutation namespaces in this rollout. Enable the smallest set that answers the
-five capabilities above and nothing else.
+Consequence for the smoke checks: 1 and 2 are achievable, 7 and 8 are achievable, and 3, 4, 5, and 6
+are **not achievable through this server at this version**. The operational pilot premise, that Azure
+MCP confirms through Cost Management that spending dropped, cannot be met here.
+
+The Azure Resource Manager MCP at `Azure/Azure-Resource-Manager-MCP` remains the candidate for
+Resource Graph and ARM deployment reads. Cost Management appears to need a different surface entirely.
+Both are separate decisions and neither is adopted here.
+
+### `--read-only` filters mutations, with one important exception
+
+Measured by comparing `tools/list` with and without the flag on `--namespace speech --namespace
+monitor --mode all`: 18 tools writable, 12 under `--read-only`.
+
+Correctly removed: `monitor_webtests_createorupdate`, `monitor_instrumentation_orchestrator-start`,
+`monitor_instrumentation_orchestrator-next`, `monitor_instrumentation_send-brownfield-analysis`,
+`monitor_instrumentation_send-enhancement-select`, and `speech_tts_synthesize`.
+
+**`speech_stt_recognize` survives `--read-only`.** Speech-to-text recognition consumes Speech quota and
+incurs charges, but it performs no Azure write, so the server classifies it as read-only. `--read-only`
+is a write filter, not a spend filter. For a rollout whose purpose is cost evidence, that distinction
+matters, and it is a sufficient reason to exclude the `speech` namespace outright rather than rely on
+the flag.
+
+### Selected minimum namespace set
+
+`--namespace group --namespace subscription`, with `--read-only`.
+
+Verified `tools/list` under exactly that configuration returns three tools and nothing else:
+
+```
+group_list
+group_resource_list
+subscription_list
+```
+
+All three are reads. No mutation tool remains. `role` is excluded, so `role_assignment_list` is absent,
+along with the rest of the Authorization surface. The other 52 namespaces are excluded.
+
+Do not add namespaces speculatively. Each one widens the surface, and four of them would be added in
+pursuit of capabilities this server does not have.
 
 ## Authentication
 
@@ -334,24 +379,103 @@ rollout.
 
 ## Installation outside this repository
 
-Install to an operator-owned directory that is not inside any repository ContextPatch manages, so
-the install can never be confused with repository content. Pin the exact version, do not use a
-floating tag, and keep a lockfile or an exact global version so the resolved build is reproducible.
+Chosen path: **exact-version npm installation of `@azure/mcp@2.0.5`**, into a dedicated prefix outside
+any repository ContextPatch manages. The floating `latest` tag is refused because it resolves to a
+`3.0.0-beta` prerelease. The extract-the-bundle approach is refused because it is not a documented
+Microsoft installation method.
 
-Record the install location, the resolved binary path, and the integrity value in the table above.
+Note that this path requires Node.js. The package declares `engines.node >= 20.0.0`, and its `bin`
+entry `azmcp` is a Node launcher that execs the platform binary from
+`@azure/mcp-darwin-arm64@2.0.5`.
 
-**Upgrade.** Install the new exact version alongside the current one, point a test Claude Desktop
-entry at it, re-run all eight smoke checks, and only then repoint the primary entry. Never upgrade
-by moving a floating tag.
+### Locked procedure
 
-**Rollback.** Repoint the Claude Desktop entry at the previous exact version and restart Claude
-Desktop. Keeping the prior version installed until the new one has passed smoke checks is what makes
-rollback a one-line change rather than a reinstall.
+Run as the operator, not as root. Substitute a real path for `<INSTALL_DIR>`.
 
-**Uninstall.** Remove the Azure MCP entry from Claude Desktop, restart, confirm the tools are gone,
-then remove the install directory and the isolated `AZURE_CONFIG_DIR`. Removing the credential
-directory is part of uninstall, not an afterthought: leaving it behind leaves a usable identity
-cache on disk.
+```
+mkdir -p <INSTALL_DIR> && cd <INSTALL_DIR>
+npm init -y
+npm install --save-exact @azure/mcp@2.0.5
+```
+
+`--save-exact` writes `2.0.5` rather than `^2.0.5`, and the generated `package-lock.json` records the
+integrity of every resolved artifact. Keep both files; they are what makes the install reproducible.
+
+### Integrity verification, before first launch
+
+Compare the lockfile's integrity strings against these recorded values. If either differs, stop and do
+not launch.
+
+| Package | Expected integrity |
+| --- | --- |
+| `@azure/mcp@2.0.5` | `sha512-o451hyeCa9u1jr1zYNi3OpF560IRH7LkHQHr7uOjWgaXNgF8m8aNbuxLdqs1PJcJEfrib4W8vVl0GY5X1fXtsw==` |
+| `@azure/mcp-darwin-arm64@2.0.5` | `sha512-cK+Q9InsmgI8bq+rHpkbIu+I4Ha9/p3A5hAfchjdEkSepvpc0IgL+OBKLDuO3mYtp345Z+/elfKkFXKu+9b51g==` |
+
+Then confirm the running artifact identifies itself correctly:
+
+```
+<INSTALL_DIR>/node_modules/.bin/azmcp --version
+```
+
+Expected exactly: `2.0.5+2712e19ddf1c55f8e73ead8fb671915ec92801cc`
+
+That string carries the build commit, so it is the strongest available check that the installed binary
+matches reviewed source. Recall that no stable release carries npm provenance attestations, so this
+is the check that substitutes for them.
+
+### Absolute executable path
+
+Use the absolute path in Claude Desktop configuration, never a bare command name:
+
+```
+<INSTALL_DIR>/node_modules/.bin/azmcp
+```
+
+A bare `azmcp` or an `npx` invocation would resolve against `PATH` at launch and could pick up a
+different version.
+
+### Dedicated Azure CLI profile
+
+Create a directory used by nothing else, and never the default `~/.azure`:
+
+```
+mkdir -p <AZURE_CONFIG_DIR> && chmod 700 <AZURE_CONFIG_DIR>
+```
+
+That path is passed through Claude Desktop's `env` block. It is a filesystem path, not a secret. Its
+purpose is to guarantee the server cannot silently resolve the operator's ordinary interactive Azure
+identity through `DefaultAzureCredential`.
+
+### Claude Desktop configuration backup
+
+Before editing, copy the live configuration to a timestamped file outside the config directory, and
+verify the copy is readable and parses as JSON. The Azure entry is additive: every existing entry,
+including all ContextPatch entries, must survive unchanged. Prefer the ContextPatch CLI
+`configure_claude_desktop` command in dry-run mode first, since it already refuses stale reads and
+preserves unrelated entries.
+
+### Rollback
+
+In order, stopping as soon as service is restored:
+
+1. Remove the Azure entry from Claude Desktop configuration, or restore the backup taken above.
+2. Restart Claude Desktop and confirm the Azure tools are gone while ContextPatch entries still work.
+3. If the install itself is suspect, `rm -rf <INSTALL_DIR>` and reinstall from the lockfile with
+   `npm ci`, which reinstalls exactly the locked versions rather than re-resolving.
+4. To revoke access rather than remove tooling, delete the service principal's role assignments. That
+   takes effect regardless of what is installed locally, and is the fastest true kill switch.
+
+### Upgrade
+
+Install the candidate version into a second directory, point a test Claude Desktop entry at it, re-run
+all eight smoke checks, and only then repoint the primary entry. Never upgrade in place, and never by
+moving a tag.
+
+### Uninstall
+
+Remove the Claude Desktop entry, restart, confirm the tools are gone, then remove `<INSTALL_DIR>` and
+`<AZURE_CONFIG_DIR>`. Removing the credential directory is part of uninstall: leaving it behind leaves
+a usable token cache on disk.
 
 ## Claude Desktop configuration
 

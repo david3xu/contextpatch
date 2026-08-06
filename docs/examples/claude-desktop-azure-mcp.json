@@ -12,23 +12,18 @@
   ],
   "mcpServers": {
     "azure-readonly": {
-      "command": "REPLACE_ABSOLUTE_PATH_TO_EXTRACTED_BUNDLE_DIR/server/azmcp",
+      "_verified": "azmcp 2.0.5+2712e19ddf1c55f8e73ead8fb671915ec92801cc; this exact argument list yields tools/list = [group_list, group_resource_list, subscription_list] and no mutation tools",
+      "command": "REPLACE_ABSOLUTE_INSTALL_DIR/node_modules/.bin/azmcp",
       "args": [
         "server",
         "start",
         "--read-only",
         "--mode",
-        "namespace",
+        "all",
         "--namespace",
-        "REPLACE_NAMESPACE_TOKEN_FOR_RESOURCE_INSPECTION",
+        "group",
         "--namespace",
-        "REPLACE_NAMESPACE_TOKEN_FOR_RESOURCE_GRAPH",
-        "--namespace",
-        "REPLACE_NAMESPACE_TOKEN_FOR_COST_MANAGEMENT",
-        "--namespace",
-        "REPLACE_NAMESPACE_TOKEN_FOR_SPEECH_TIER",
-        "--namespace",
-        "REPLACE_NAMESPACE_TOKEN_FOR_DEPLOYMENT_INSPECTION"
+        "subscription"
       ],
       "env": {
         "AZURE_CONFIG_DIR": "REPLACE_ABSOLUTE_PATH_TO_OPERATOR_OWNED_ISOLATED_AZURE_PROFILE_DIR"

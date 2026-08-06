@@ -92,14 +92,30 @@ Exact blockers, in the order they must be cleared:
    `--read-only` strengthens the design beyond RBAC alone. Two residual risks are recorded rather
    than resolved: no stable release carries npm provenance attestations, and `2.0.5` has no changelog
    entry, so what changed since `2.0.2` is undocumented.
-2. **Namespace tokens are still uncaptured.** The filtering table remains deliberately unfilled. The
-   flags exist, but the exact service-namespace token strings must be read from the installed build.
-3. **Host actions remain operator-owned, and this is the genuine blocker.** It arrives earlier than
-   the Entra login: downloading the bundle to the Mac, verifying its digest there, extracting it,
-   checking macOS code signing and quarantine, and editing Claude Desktop configuration are all
-   outside ContextPatch's authority. `npm install`, `npx`, and `az` are refused by policy, writes
-   outside the repository root are refused, and the `configure_claude_desktop` CLI command is not
-   exposed as an MCP action. Those refusals are pinned by test and must stay that way.
+2. **Four of the five required capabilities do not exist in Azure MCP Server 2.0.5.** Verified against
+   the complete inventory of 235 tools across 55 namespaces, read from the binary. Resource inventory
+   works: `group_list`, `group_resource_list`, `subscription_list`. Resource Graph has zero tools.
+   Cost Management has zero tools; `pricing_get` returns retail list pricing for template estimation,
+   not actual spend. Speech pricing tier inspection does not exist; the `speech` namespace contains
+   only `speech_stt_recognize` and `speech_tts_synthesize`. General ARM deployment state inspection
+   does not exist; only `appservice_webapp_deployment_get` and `functions_template_get`, and the
+   `deploy` namespace is guidance and code generation. Smoke checks 1, 2, 7 and 8 are achievable;
+   checks 3, 4, 5 and 6 are not achievable through this server at this version, so the operational
+   pilot premise that Azure MCP confirms spend through Cost Management cannot be met here. The Azure
+   Resource Manager MCP remains the candidate for Resource Graph and ARM deployment reads, and Cost
+   Management appears to need a different surface entirely. Neither is adopted.
+   The selected minimum namespace set is `group` and `subscription` under `--read-only`, verified by
+   MCP `tools/list` to expose exactly those three read tools and no mutation tool, with Authorization
+   excluded. One caveat is recorded: `--read-only` is a write filter, not a spend filter, and
+   `speech_stt_recognize` survives it despite consuming billable Speech quota, which is sufficient
+   reason to exclude `speech` outright rather than rely on the flag.
+3. **Host actions remain operator-owned, and this is the genuine blocker.** The runbook now carries a
+   locked npm procedure with `--save-exact`, lockfile integrity values to compare, the expected
+   `--version` string carrying the build commit, the absolute executable path, a dedicated
+   `AZURE_CONFIG_DIR`, config backup, rollback, upgrade and uninstall. Executing it is not possible
+   from here: `npm install`, `npx`, and `az` are refused by policy, writes outside the repository root
+   are refused, and `configure_claude_desktop` is not exposed as an MCP action. Those refusals are
+   pinned by test and must stay that way.
 4. **None of the eight live smoke checks has run,** because no Azure MCP surface is connected.
 2. **Namespace tokens are unknown for any specific build.** The filtering table in the runbook is
    deliberately unfilled rather than guessed, and must be captured from the pinned binary's own
