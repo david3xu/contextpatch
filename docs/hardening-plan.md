@@ -74,23 +74,33 @@ Exact blockers, in the order they must be cleared:
    whose versions stopped at `0.5.x`. Versioning continued in `microsoft/mcp` through a 1.0 stable
    release and then a 2.0 stable release. Azure MCP Server 2.0 is generally available as of
    10 April 2026, and `@azure/mcp` `2.0.2` is confirmed published, so a stable line does exist to
-   pin. Two gaps still block installation, and the CVE is no longer one of them. `CVE-2026-32211` was
-   verified and retracted as a blocker: MSRC records it as an Azure MCP Server information disclosure
-   issue, CWE-306, CVSS 9.1 base and 7.9 temporal, released 2 April 2026, already fully mitigated by
-   Microsoft with no customer action required, published under the cloud service CVE transparency
-   programme. The GitHub advisory `GHSA-5w7p-v6h9-q8c5` lists no package and no affected or fixed
-   version in any ecosystem, so `@azure/mcp` is not implicated at any version. The vector
-   `AV:N/PR:N/UI:N` with `RL:O` points to a network-reachable service deployment rather than a local
-   stdio process, which is not in scope for the planned rollout, though it would become relevant if a
-   self-hosted remote deployment were ever considered. The claim that patching was pending came from
-   a low-quality source that also misattributed the CVE to the Azure DevOps MCP server. What remains
-   is that platform-version skew is unconfirmed for the stable line, since whether
-   `@azure/mcp-darwin-arm64` publishes a matching `2.0.2` was not checked, and on Apple Silicon that
-   package supplies the binary. The exact newest `Azure.Mcp.Server-` tag, its commit SHA, and the
-   npm publish workflow are still unrecorded, because GitHub blocks automated access to the raw
-   changelog and rejects the query-string release URL, so a browser is needed. The Microsoft Artifact
-   Registry image is still not adopted; the standing condition that Microsoft identify a distribution
-   as current and that its digest be pinnable is unchanged.
+1. **Artifact pinned; installation is the operator boundary.** Version selection is resolved.
+   `2.0.5` is the newest stable, tag `Azure.Mcp.Server-2.0.5`, tag commit
+   `f43b47a21545e5f3f87b3bceee35986442217bb4`, build commit embedded in the binary
+   `2712e19ddf1c55f8e73ead8fb671915ec92801cc`. Digests for the macOS ARM64 bundle and the npm
+   packages are recorded in the runbook. The `latest` dist-tag points to `3.0.0-beta.32`, so an
+   unpinned install would fetch a prerelease. Platform skew is resolved: the stable wrapper pins all
+   six platform packages to exactly `2.0.5`. `CVE-2026-32211` was verified and retracted as a
+   blocker; MSRC records it as already fully mitigated with no customer action, and no package in any
+   ecosystem is listed as affected. The `.mcpb` bundle is officially supported and hash-pinnable but
+   is **rejected** for this rollout, because its manifest fixes args to `server start`, ships an empty
+   env, and has no `user_config`, so it cannot carry `--read-only`, `--namespace`, or
+   `AZURE_CONFIG_DIR`. The recommended path is to verify the bundle digest, extract it, and point
+   Claude Desktop at the extracted `server/azmcp` with explicit args. Startup and filtering options
+   are now verified by running the binary rather than inferred: `--namespace`, `--mode`, `--tool`,
+   `--read-only`, `--transport`, `--cloud`, `--outgoing-auth-strategy`, and `--env-file` all exist.
+   `--read-only` strengthens the design beyond RBAC alone. Two residual risks are recorded rather
+   than resolved: no stable release carries npm provenance attestations, and `2.0.5` has no changelog
+   entry, so what changed since `2.0.2` is undocumented.
+2. **Namespace tokens are still uncaptured.** The filtering table remains deliberately unfilled. The
+   flags exist, but the exact service-namespace token strings must be read from the installed build.
+3. **Host actions remain operator-owned, and this is the genuine blocker.** It arrives earlier than
+   the Entra login: downloading the bundle to the Mac, verifying its digest there, extracting it,
+   checking macOS code signing and quarantine, and editing Claude Desktop configuration are all
+   outside ContextPatch's authority. `npm install`, `npx`, and `az` are refused by policy, writes
+   outside the repository root are refused, and the `configure_claude_desktop` CLI command is not
+   exposed as an MCP action. Those refusals are pinned by test and must stay that way.
+4. **None of the eight live smoke checks has run,** because no Azure MCP surface is connected.
 2. **Namespace tokens are unknown for any specific build.** The filtering table in the runbook is
    deliberately unfilled rather than guessed, and must be captured from the pinned binary's own
    help output.

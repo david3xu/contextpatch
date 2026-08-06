@@ -12,10 +12,13 @@
   ],
   "mcpServers": {
     "azure-readonly": {
-      "command": "REPLACE_ABSOLUTE_PATH_TO_PINNED_AZMCP_BINARY",
+      "command": "REPLACE_ABSOLUTE_PATH_TO_EXTRACTED_BUNDLE_DIR/server/azmcp",
       "args": [
         "server",
         "start",
+        "--read-only",
+        "--mode",
+        "namespace",
         "--namespace",
         "REPLACE_NAMESPACE_TOKEN_FOR_RESOURCE_INSPECTION",
         "--namespace",

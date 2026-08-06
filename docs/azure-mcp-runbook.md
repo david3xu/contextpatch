@@ -110,35 +110,126 @@ the Azure DevOps MCP server, which is a different product from the Azure MCP Ser
 wrong on both points and closes with a vendor pitch. Where MSRC and the third-party summaries
 disagree, MSRC governs.
 
-## Decision: do not install yet
+## Resolved: pinned artifact
 
-Two gaps still block installation. Neither is the CVE.
+Verified 6 August 2026 from npm registry metadata, git protocol, GitHub release assets, and by
+executing the shipped binary. Both earlier gaps are closed. The `2.0.2` candidate named above was
+simply stale.
 
-1. **Platform-version skew is unresolved for the line that would be pinned.** Skew was observed on
-   the `3.0.0-beta.x` line, where `@azure/mcp-darwin-arm64` sat at `beta.13` while several siblings
-   were at `beta.27`. Whether `@azure/mcp-darwin-arm64` publishes a matching `2.0.2` has not been
-   checked. On Apple Silicon that package supplies the binary, so it decides what executes and must
-   be confirmed at the exact pinned version.
-2. **The tag, commit, and publish workflow for the pinned version are still unrecorded.** Release
-   tags use the `Azure.Mcp.Server-` prefix and the filtered release list is reachable, but the exact
-   newest tag, its commit SHA, and the workflow that publishes to npm were not captured. GitHub
-   blocks automated access to the raw changelog and rejects the query-string release URL, so these
-   need a browser. Without the commit, a pinned npm version cannot be tied to reviewed source.
+**Pin `2.0.5`**, newest stable, published 2026-07-10. Stable line: `2.0.0` through `2.0.5`.
 
-The Microsoft Artifact Registry image is still **not** adopted, though the picture improved: 2.0
-ships AMD64 and ARM64 Docker images with trimmed binaries. The standing condition is unchanged.
-Microsoft must identify a distribution as current and its digest must be pinnable.
+**The `latest` dist-tag points to `3.0.0-beta.32`, a prerelease.** So `npm install @azure/mcp` with no
+version installs a beta. That is the concrete reason the floating tag is refused here.
 
-## A distribution worth checking before anything else
+| Item | Value |
+| --- | --- |
+| Git tag | `Azure.Mcp.Server-2.0.5` |
+| Tag commit | `f43b47a21545e5f3f87b3bceee35986442217bb4` |
+| Build commit embedded in binary | `2712e19ddf1c55f8e73ead8fb671915ec92801cc` |
+| `--version` output | `2.0.5+2712e19ddf1c55f8e73ead8fb671915ec92801cc` |
+| npm repository field | `git+https://github.com/microsoft/mcp.git` |
+| Binary name | `azmcp` |
+| Node requirement, npm path only | `>=20.0.0` |
 
-The same third-party review reports an **MCP Bundle** format, `.mcpb`, dated 24 April 2026, which
-installs Azure MCP into Claude Desktop by dragging one file and requires no Node.js, Python, or .NET
-runtime. If Microsoft confirms that, it is materially better than the npm path for this rollout: no
-platform package skew, no `npx` resolution at launch, no Node toolchain on the host, and a single
-artifact that can be hashed and archived.
+The two commits differ. The tag resolves to `f43b47a`, the binary reports `2712e19`. Record both; the
+build commit describes what actually executes.
 
-This is unverified and comes from a non-Microsoft source. Confirm it against the server README and
-Microsoft Learn before treating it as an option.
+### Integrity digests
+
+| Artifact | Digest |
+| --- | --- |
+| `Azure.Mcp.Server-osx-arm64.mcpb` | SHA-256 `b49909a925f7e4fade530098e68f5d81bf2522f083ea9b5c5534f4be60a0c348`, 51,687,927 bytes |
+| `Azure.Mcp.Server-linux-x64.mcpb` | SHA-256 `2ae7ede16013d2646bb50ad10e9c9f4807117242ec9d5c0979521528c563326d` |
+| npm `@azure/mcp@2.0.5` | `sha512-o451hyeCa9u1jr1zYNi3OpF560IRH7LkHQHr7uOjWgaXNgF8m8aNbuxLdqs1PJcJEfrib4W8vVl0GY5X1fXtsw==` |
+| npm `@azure/mcp-darwin-arm64@2.0.5` | `sha512-cK+Q9InsmgI8bq+rHpkbIu+I4Ha9/p3A5hAfchjdEkSepvpc0IgL+OBKLDuO3mYtp345Z+/elfKkFXKu+9b51g==` |
+
+Asset URL pattern, confirmed reachable:
+`github.com/microsoft/mcp/releases/download/Azure.Mcp.Server-2.0.5/Azure.Mcp.Server-osx-arm64.mcpb`
+
+### Platform skew: resolved, and never real on the stable line
+
+The `2.0.5` wrapper pins all six platform packages to exactly `2.0.5`, not ranges.
+`@azure/mcp-darwin-arm64@2.0.5` exists with `os: [darwin]`, `cpu: [arm64]`. The skew reported earlier
+was an artifact of search snippets cached at different times.
+
+### Two residual risks, recorded rather than resolved
+
+1. **No npm provenance attestations.** Every stable `2.0.x` release has `attestations: null`. A
+   registry signature exists, but nothing cryptographically binds package to source build. The
+   source-to-package link rests on the binary's embedded commit, not on verifiable provenance.
+2. **`2.0.5` has no changelog entry.** At its own tag the changelog's highest `2.x` entry is
+   `2.0.2 (2026-04-24)`, with no entries for `2.0.3`, `2.0.4`, or `2.0.5`, and the file opens with
+   `3.0.0-beta.25 (Unreleased)`. What changed between `2.0.2` and `2.0.5` is undocumented. If
+   documented change coverage outweighs recency, `2.0.2` is the alternative.
+
+The Microsoft Artifact Registry image is still **not** adopted. 2.0 does ship AMD64 and ARM64 Docker
+images, but the standing condition is unchanged: Microsoft must identify a distribution as current
+and its digest must be pinnable.
+
+## MCPB: officially supported, and rejected for this rollout
+
+`.mcpb` is real and Microsoft-documented, not a third-party rumour. The server README describes MCP
+Bundles as portable server versions installable directly into clients like Claude Desktop, produced
+per platform and architecture, containing the binary and all dependencies so no Node.js or .NET is
+needed. Install is by dragging the file into Claude Desktop, or via Settings, Extensions, Advanced
+Settings, Install Extension.
+
+It is nonetheless **not selectable here**, on evidence from the bundle's own manifest:
+
+```
+manifest_version 0.3, version 2.0.5
+server.type         binary
+entry_point         server/azmcp
+mcp_config.command  ${__dirname}/server/azmcp
+mcp_config.args     ["server", "start"]
+mcp_config.env      {}
+user_config         absent
+```
+
+Args are fixed at `server start`, environment is empty, and there is no `user_config` block. A bundle
+install therefore cannot pass `--read-only`, cannot pass `--namespace`, and cannot set
+`AZURE_CONFIG_DIR`. Installing it would produce exactly the failure this design exists to prevent: an
+unfiltered, write-capable server resolving credentials from whatever ambient Azure CLI profile the
+operator happens to hold.
+
+**Recommended path instead:** download the pinned `.mcpb`, verify the SHA-256 above, extract it to an
+operator-owned directory, and point Claude Desktop at `<dir>/server/azmcp` with explicit args and env.
+That keeps the hash-pinned Microsoft artifact and avoids a Node toolchain, while restoring flag
+control. Two caveats: extracting a bundle and invoking the binary directly is not a documented
+Microsoft installation method, and on macOS the extracted binary may be quarantined, so verify code
+signing and notarisation before assuming it launches.
+
+## Verified startup and filtering options
+
+From `azmcp server start --help` on the `2.0.5` Linux build, so these are the real options for this
+exact version rather than documentation inference. Worth noting: the README at this tag surfaces
+namespace filtering and read-only only as VS Code extension settings, so the binary is the authority.
+
+| Option | Meaning |
+| --- | --- |
+| `--transport` | transport mechanism, default `stdio` |
+| `--namespace <namespace>` | service namespaces to expose, for example `storage`, `keyvault`, `cosmos` |
+| `--mode <mode>` | `single`, `namespace` (default), or `all` |
+| `--tool <tool>` | expose only named tools, repeatable, forces `all` mode, **mutually exclusive with `--namespace`** |
+| `--read-only` | no write operations allowed |
+| `--cloud <cloud>` | `AzureCloud` default, `AzureChinaCloud`, `AzureUSGovernment`, or custom authority URL |
+| `--outgoing-auth-strategy` | `NotSet` default, `UseHostingEnvironmentIdentity`, `UseOnBehalfOf` |
+| `--env-file` | load environment from a file |
+| `--debug` | verbose logging to stderr |
+
+`--read-only` is a material improvement on the original design, which relied on RBAC alone. Use both:
+`--read-only` blocks writes at the server, Reader-only roles block them at Azure. Check 8 still proves
+the RBAC layer independently, which matters because a server-side flag is not an authorisation
+boundary.
+
+**Never enable these.** Each is named dangerous by Microsoft and each defeats part of this design:
+`--dangerously-disable-http-incoming-auth`, `--dangerously-disable-elicitation` (removes confirmation
+before high-risk commands such as returning Key Vault secrets),
+`--dangerously-write-support-logs-to-dir` (may write sensitive data to disk),
+`--dangerously-disable-retry-limits`.
+
+One namespace to exclude deliberately: the bundle ships an `Azure.Mcp.Tools.Authorization` module, so
+role-assignment tooling exists in the product and must not appear in the enabled namespace set.
 
 ## Alternative worth evaluating before installing anything
 
