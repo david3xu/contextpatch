@@ -68,13 +68,18 @@ stays open.
 
 Exact blockers, in the order they must be cleared:
 
-1. **No version is pinned yet, and two findings block pinning.** The upstream repository
-   `github.com/Azure/azure-mcp` was archived read-only on 6 February 2026 with its release list
-   ending at `0.5.8`, while npm publishes `@azure/mcp` at `3.0.0-beta.31`. No general-availability
-   release was found; every GitHub release is marked pre-release. Platform sub-packages are skewed
-   against each other, and on Apple Silicon `@azure/mcp-darwin-arm64` was observed behind its
-   siblings at `3.0.0-beta.13`. Since the platform package supplies the binary, that skew decides
-   which build actually runs.
+1. **No version is pinned, and the decision is deliberately deferred.** Provenance is now traced
+   and recorded in the runbook. The archive turned out to be a planned migration: `Azure/azure-mcp`
+   states that development moved to `github.com/microsoft/mcp`, where the Azure server lives at
+   `servers/Azure.Mcp.Server` with its own changelog and `Azure.Mcp.Server-` release tags. So an
+   authoritative source-to-package mapping does exist. What is still missing is the correspondence
+   between a specific `Azure.Mcp.Server-` tag and npm `3.0.0-beta.31`; without it, pinning an npm
+   version pins a build whose source commit and changelog entry cannot be identified. There is also
+   still no general-availability release, and the platform packages are skewed, with
+   `@azure/mcp-darwin-arm64` observed behind its siblings. On Apple Silicon the platform package
+   supplies the binary, so that skew decides what executes. Nothing is installed until this clears.
+   The Microsoft Artifact Registry image is not adopted: it appears only in archived release notes
+   and nothing identifies it as the current supported distribution.
 2. **Namespace tokens are unknown for any specific build.** The filtering table in the runbook is
    deliberately unfilled rather than guessed, and must be captured from the pinned binary's own
    help output.
@@ -84,6 +89,13 @@ Exact blockers, in the order they must be cleared:
    here. `npm install`, `npx`, and `az` are refused by policy, and writes outside the repository
    root are refused; those refusals are now pinned by test and must stay that way.
 4. **None of the eight live smoke checks has run,** because no Azure MCP surface is connected.
+
+One alternative should be evaluated before anything is installed. `microsoft/mcp` also catalogues
+Azure Resource Manager MCP at `Azure/Azure-Resource-Manager-MCP`, a remote server at
+`mcp.management.azure.com` offering Resource Graph queries and ARM deployment tooling. That covers
+resource inspection, Resource Graph, and deployment inspection with no local install, no version to
+pin, and no platform binary skew, though not Cost Management or the Speech tier, and its deployment
+management tools mutate and would need excluding.
 
 C35 is marked complete only when all eight checks in the runbook pass.
 

@@ -8,36 +8,76 @@ Microsoft's Azure MCP Server, outside this repository and outside ContextPatch's
 boundary. ContextPatch cannot install packages, cannot run `az` or `npx`, and cannot write outside
 its repository root; those refusals are pinned by test in `crates/core/src/process/guarded_command.rs`.
 
-## Package and version
+## Provenance trace
 
-Official sources verified 6 August 2026:
+Traced 6 August 2026 against Microsoft-controlled sources only.
+
+The archive is a planned migration, not abandonment. The `Azure/azure-mcp` README states that the
+repository is archived and that going forward the Azure MCP team uses `github.com/microsoft/mcp` for
+the code and issues formerly in that repository. Note the two dates: the README gives the archive
+announcement as 25 August 2025, while GitHub's banner records the flip to read-only on 6 February
+2026. The announcement preceded the enforcement by months, which is why the release list stops at
+`0.5.8` while npm kept publishing.
+
+The current source of record is therefore:
 
 | Item | Value |
 | --- | --- |
+| Repository | `github.com/microsoft/mcp` |
+| Source path | `servers/Azure.Mcp.Server` |
+| Changelog | `servers/Azure.Mcp.Server/CHANGELOG.md` |
+| Release tag prefix | `Azure.Mcp.Server-` |
+| Documentation | `learn.microsoft.com/azure/developer/azure-mcp-server/` |
+| Troubleshooting and support | `servers/Azure.Mcp.Server/TROUBLESHOOTING.md`, `SUPPORT.md` |
 | npm package | `@azure/mcp` |
 | npm version observed at `latest` | `3.0.0-beta.31` |
-| Upstream repository | `github.com/Azure/azure-mcp` |
-| Alternate distribution | Microsoft Artifact Registry, `azure-sdk/azure-mcp` |
 | VS Code extension | `ms-azuretools.vscode-azure-mcp-server` |
 
-Two findings must be resolved before a version is pinned, because both bear on whether this package
-is a safe long-lived dependency:
+`microsoft/mcp` publishes per-server release tags, so Azure MCP releases are found by filtering
+releases on the `Azure.Mcp.Server-` prefix rather than by reading the repository's latest release,
+which belongs to whichever server published most recently.
 
-1. **The upstream GitHub repository is archived and read-only as of 6 February 2026.** Its release
-   list ends at `0.5.8`. npm meanwhile publishes `3.0.0-beta.x`. Development has evidently moved,
-   and the new home has not been identified here. Pinning a version whose source of record is
-   archived means release notes and issue history for the pinned build may be unreachable.
-2. **No general-availability release was found.** Every GitHub release is marked pre-release, and
-   the current npm `latest` is a beta. Platform sub-packages are also skewed against each other:
+## Decision: do not install yet
+
+A source-to-package mapping now exists and is authoritative. Two gaps still block pinning, and both
+are narrower than the questions this section previously recorded.
+
+1. **The tag to package correspondence is unverified.** Nothing consulted states which
+   `Azure.Mcp.Server-<version>` tag corresponds to npm `3.0.0-beta.31`. Pinning an npm version
+   without that mapping means pinning a build whose source commit and changelog entry cannot be
+   identified, which defeats the point of pinning.
+2. **No general-availability release was found, and the platform packages are skewed.** Every
+   release on the archived repository was marked pre-release and the current npm `latest` is a beta.
    `@azure/mcp-darwin-arm64` was observed at `3.0.0-beta.13` while `@azure/mcp-darwin-x64` and
-   several others were at `3.0.0-beta.27`, and `@azure/mcp-linux-x64` at `2.0.0-beta.33`. On Apple
-   Silicon the platform package is the one that supplies the binary, so the skew is not cosmetic.
+   several siblings were at `3.0.0-beta.27`, and `@azure/mcp-linux-x64` at `2.0.0-beta.33`. On Apple
+   Silicon the platform package supplies the binary, so the skew decides what actually executes.
+
+The Microsoft Artifact Registry image is **not** adopted. It appeared only in release notes on the
+archived repository, and nothing consulted identifies it as the current supported distribution. The
+standing condition for using it is unchanged: Microsoft must identify it as current and its digest
+must be pinnable.
+
+## Alternative worth evaluating before installing anything
+
+`microsoft/mcp` also catalogues **Azure Resource Manager MCP** at `Azure/Azure-Resource-Manager-MCP`,
+described as providing tools to use Azure Resource Graph to retrieve and filter information about
+resources in a subscription, plus tools to manage ARM template deployments. It is a remote server at
+`https://mcp.management.azure.com`.
+
+That covers three of the five required capabilities, namely resource inspection, Resource Graph, and
+ARM deployment inspection, with no local install, no npm version to pin, and no platform binary
+skew. It does not cover Cost Management or the Speech pricing tier, so it is not a full replacement.
+A smaller remote surface for the three capabilities it does cover may still be the better trade than
+a local beta, and it should be evaluated before the local package is installed. Note that its
+deployment management tools are mutating and must be excluded under the read-only scope.
 
 Record the resolution here before installing:
 
 | Field | Value |
 | --- | --- |
-| Pinned version | to be decided |
+| Chosen surface | to be decided |
+| Pinned version | |
+| Source tag and commit for that version | |
 | Reason for that version | |
 | Platform package and version actually resolved | |
 | Tarball SHA-512 integrity from the registry | |
@@ -107,6 +147,16 @@ approved mutation workflow, if one is ever approved.
 
 Out-of-scope reads and mutation attempts are expected to fail by Azure authorization. Those two
 failures are smoke checks 7 and 8, and they are the evidence that scoping works.
+
+Microsoft's own listing for this server makes the same point from the other direction: clients invoke
+operations according to the signed-in identity's Azure RBAC permissions, and it warns that autonomous
+or misconfigured clients may perform destructive actions. Role scope is therefore the control, and
+tool filtering is only a convenience on top of it. A filtered tool list with an over-privileged
+identity is not a least-privilege deployment.
+
+Do not enable the server's support-logging option, which is explicitly named as dangerous upstream
+and writes logs to a directory. Diagnostics that capture cloud responses do not belong in this
+rollout.
 
 ## Installation outside this repository
 
