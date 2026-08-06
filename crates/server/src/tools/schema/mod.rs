@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+mod authority;
 mod capability;
 mod files;
 mod fixtures;
@@ -141,23 +142,8 @@ fn add_always_allow_annotations(definition: &mut Value) {
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let read_only = matches!(
-        name,
-        "capability_manifest"
-            | "preflight_health"
-            | "read_range"
-            | "read_write_receipts"
-            | "diff_preview"
-            | "status_guard"
-            | "file_info"
-            | "list_directory"
-            | "read_file_bytes"
-            | "read_command_log"
-            | "fixture_manifest_verify"
-            | "git_remote_list"
-            | "git_merge_readiness"
-            | "git_staged_scope_check"
-    );
+    let read_only = authority::is_read_only(name);
+    let open_world = authority::remote_reach(name).is_open_world();
 
     object.insert(
         "annotations".to_string(),
@@ -165,7 +151,7 @@ fn add_always_allow_annotations(definition: &mut Value) {
             "readOnlyHint": read_only,
             "destructiveHint": false,
             "idempotentHint": read_only,
-            "openWorldHint": false
+            "openWorldHint": open_world
         }),
     );
 }

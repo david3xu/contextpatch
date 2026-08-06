@@ -19,6 +19,21 @@ const CAPTURE_OMISSION_MARKER: &[u8] = b"\n[... process output omitted ...]\n";
 const STREAM_READ_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const STREAM_CANCEL_DRAIN_LIMIT: Duration = Duration::from_millis(100);
 
+/// Allowlisted program names referenced by policy and by child-process hardening.
+pub const PROGRAM_GIT: &str = "git";
+pub const PROGRAM_PYTEST: &str = "pytest";
+
+/// Set for pytest children so ambient third-party plugins are not autoloaded. Repository-local
+/// `conftest.py` is still collected, which is deliberate: it is reviewed repository content and
+/// several supported suites depend on it.
+const PYTEST_DISABLE_PLUGIN_AUTOLOAD: &str = "PYTEST_DISABLE_PLUGIN_AUTOLOAD";
+const PYTEST_DISABLE_PLUGIN_AUTOLOAD_VALUE: &str = "1";
+
+/// Removed from pytest children so an ambient value cannot inject options or plugins into a run
+/// the caller did not ask for. The environment is not otherwise cleared, because supported builds
+/// depend on inherited toolchain variables.
+const PYTEST_INHERITED_INJECTION_VARS: &[&str] = &["PYTEST_ADDOPTS", "PYTEST_PLUGINS"];
+
 pub(crate) struct ProcessOutput {
     pub(crate) exit_code: i32,
     pub(crate) timed_out: bool,
@@ -207,13 +222,22 @@ fn run_bounded_command_with_wait(
             command.current_dir(cwd);
         }
     }
-    if program == "git" {
+    if program == PROGRAM_GIT {
         command.arg("--no-pager");
     }
 
     command.args(args);
     command.env("GIT_PAGER", "cat");
     command.env("NO_COLOR", "1");
+    if program == PROGRAM_PYTEST {
+        command.env(
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD,
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD_VALUE,
+        );
+        for variable in PYTEST_INHERITED_INJECTION_VARS {
+            command.env_remove(variable);
+        }
+    }
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -930,8 +954,25 @@ mod tests {
     use super::{
         capture_stream, redact_captured_output, run_bounded_command, run_bounded_command_with_wait,
         truncate_head_tail, CAPTURE_HEAD_BYTES, CAPTURE_OMISSION_MARKER, CAPTURE_TAIL_BYTES,
-        MAX_OUTPUT_CHARS,
+        MAX_OUTPUT_CHARS, PYTEST_DISABLE_PLUGIN_AUTOLOAD, PYTEST_DISABLE_PLUGIN_AUTOLOAD_VALUE,
+        PYTEST_INHERITED_INJECTION_VARS,
     };
+
+    /// Pins the pytest child hardening so widening it becomes a deliberate, reviewed change.
+    /// The environment is not otherwise cleared, because supported builds need inherited
+    /// toolchain variables; see `docs/execution-threat-model.md`.
+    #[test]
+    fn pytest_child_hardening_is_pinned() {
+        assert_eq!(
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD,
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD"
+        );
+        assert_eq!(PYTEST_DISABLE_PLUGIN_AUTOLOAD_VALUE, "1");
+        assert_eq!(
+            PYTEST_INHERITED_INJECTION_VARS,
+            &["PYTEST_ADDOPTS", "PYTEST_PLUGINS"]
+        );
+    }
     #[cfg(unix)]
     use std::cell::Cell;
     #[cfg(unix)]

@@ -69,13 +69,16 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
         &responses[2],
         "\"scope\": \"optional normalized workspace-relative path",
     );
+    // The wrapper dispatches every inner action, including ones that contact remotes and ones that
+    // start repository-controlled code with inherited network capability, so it must advertise the
+    // widest reach rather than the narrowest.
     assert_eq!(
         tools[0]["annotations"],
         serde_json::json!({
             "readOnlyHint": false,
             "destructiveHint": false,
             "idempotentHint": false,
-            "openWorldHint": false
+            "openWorldHint": true
         })
     );
 

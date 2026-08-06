@@ -52,6 +52,148 @@ earlier build stamp, so no assertion is made here about what is installed. Verif
 release rebuild, a reinstall, and a fresh `capability_manifest` read whose `git_sha` and
 `git_dirty_fingerprint` match the tree under test.
 
+## Phase 0 — Azure companion MCP workflow (first implementation)
+
+**This is the first implementation priority before the remaining open phases.** It addresses an
+operator need without widening ContextPatch's product boundary: Claude Desktop needs direct,
+structured access to Azure resource state, but ContextPatch remains a repository-confined edit and
+validation engine. Do not add Azure control-plane APIs, generic `az`, arbitrary `npx`, or cloud
+credentials to ContextPatch.
+
+### 0.1 Configure a least-privilege Azure companion server (C35)
+
+The current workflow requires Azure state to be copied from a terminal into the agent conversation.
+The first implementation should configure Microsoft's Azure MCP Server as a **separate** Claude
+Desktop entry, rather than teaching ContextPatch to call Azure. Evaluate the official
+`@azure/mcp` server first; add a separate Resource Graph or ARM deployment server only if a required
+workflow is not available through that reviewed surface.
+
+The capability and ownership boundary must be explicit:
+
+| Need | ContextPatch | Azure companion MCP | Operator or workload repository |
+| --- | --- | --- | --- |
+| Repository edits, Bicep source changes, and local validation | Yes, through existing guarded file, Git, and command policies | No | Review and approve mutations |
+| Guarded command execution | Only the supported forms of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python3`, `pytest`, `rg`, and the exact approved shell check | No | Supply confirmations where required |
+| Azure resource inventory, state, Resource Graph, cost evidence, and service-tier inspection | No | Read-only first implementation | Establish and revoke the scoped identity |
+| `az bicep build`, ARM deployment, Speech SKU mutation, and other control-plane writes | No | Disabled in the first implementation | Run explicitly and retain raw output |
+| Application sequencing such as handler migration before Redis adoption | Repository editing only | Inspect deployed state after it exists | Owned by the workload plan |
+
+The detailed 27-item human/agent queue remains in the workload repositories rather than being copied
+into this product hardening plan. Keep each workload item marked **H** (human/operator) or **A**
+(agent), and preserve these corrected dependencies:
+
+- migrate the Azure-calling handlers before adopting Redis, because nothing deployed currently
+  consumes Redis;
+- treat the App Service S1 and total-cost figures as live workload-plan estimates, not spare budget;
+  the current plan records roughly $70 for App Service, $296 total, and a $400 ceiling while three
+  services remain usage-billed;
+- keep `resend` wiring and production PostHog verification as workload-repository audits that the
+  agent can perform without Azure mutation authority.
+
+The initial integration must cover these user needs:
+
+- list resources and inspect current resource state without copy-paste;
+- query Cost Management evidence used to verify the daily spending floor;
+- confirm service configuration such as the Speech pricing tier;
+- query and filter subscription resources through Resource Graph where useful;
+- inspect ARM deployment state and evidence;
+- keep repository-local Bicep edits under ContextPatch's existing guards.
+
+The first rollout is read and verification oriented. Initial deployment remains an explicit operator
+workflow (`az bicep build` followed by the reviewed deployment command) until mutation scope,
+approval behavior, and evidence retention have their own design. Do not use a persistent
+`npx -y ...@latest` command in Claude Desktop configuration: review a release, pin the tested
+version, and record how it is upgraded and rolled back.
+
+Authentication is a separate trust boundary. Do not attach the operator's subscription-wide Owner
+identity to the server. Use a dedicated Entra identity with the narrowest useful scope:
+
+- Reader or the corresponding read-only roles for resource inspection;
+- Cost Management Reader only at the scope required for cost evidence;
+- Contributor at the target resource group only if a later, separately approved mutation workflow
+  genuinely needs it;
+- no role-assignment permission and no credential material committed to this repository or embedded
+  in Claude Desktop configuration.
+
+Acceptance:
+
+1. A documented Claude Desktop entry starts the pinned Azure MCP server and authenticates without
+   interactive secrets in configuration.
+2. The agent can list and inspect only the approved Azure scope, query cost evidence, and verify the
+   Speech tier.
+3. An out-of-scope resource query or mutation is denied by Azure authorization, not merely by prompt
+   instructions.
+4. ContextPatch's schemas, capability manifest, dependency graph, and command allowlist gain no Azure
+   authority.
+5. The runbook covers sign-in, credential rotation/revocation, version pinning, smoke checks,
+   rollback, and removal.
+
+Use the current Azure incident queue as the first end-to-end pilot, in this order:
+
+1. The operator throttles Foundry immediately; the observed daily rate exceeds the intended monthly
+   design cost.
+2. Cost Management evidence confirms that the rate dropped. Until C35 is operational this remains a
+   human copy-paste step; afterward it is the key read-only MCP acceptance case.
+3. The operator determines whether the recorded high-cost event was a runaway loop and records the
+   answer in the workload plan.
+4. The operator runs `az bicep build`, preserves the raw output, and reviews the uncompiled modules,
+   especially the `Microsoft.Cdn` and `Microsoft.ApiManagement` API versions that were selected from
+   memory.
+
+### 0.2 Correct the command-allowlist threat model (C36, complete)
+
+The audit is recorded in `docs/execution-threat-model.md`, and the corrected claims are reconciled
+across `README.md`, `docs/safety-contract.md`, `docs/architecture.md`, `docs/tool-spec.md`,
+`docs/azure-workload-position.md`, and the `run_guarded_command` schema description.
+
+What the audit changed, beyond wording:
+
+- `openWorldHint` was a blanket `false` for every advertised action, which was a false public
+  capability claim. It is now derived per action from one `RemoteReach` classification in
+  `crates/server/src/tools/schema/authority.rs`, built from the existing action-name constants.
+  Sixteen actions are open-world; `task_image_python_run` and `image_cleanliness_check_run` stay
+  closed-world because they run with networking disabled. A protocol test pins the inventory.
+- `git_merge_readiness` is both read-only and open-world, because it may fetch to report state.
+  That was previously invisible.
+- `pytest` was gated by `=> true`, so its arguments were entirely unrestricted. It now refuses the
+  plugin-loading option `-p` in both short forms, and pytest children receive
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` with `PYTEST_ADDOPTS` and `PYTEST_PLUGINS` removed. The
+  environment is not otherwise cleared, because supported builds need inherited toolchain
+  variables. Repository-local `conftest.py` collection is deliberately retained and tested.
+- Argument path confinement was found to be stronger than assumed: absolute paths and `..`
+  traversal are refused before spawn, in `validate_common_command_shape`. That claim survived the
+  audit intact and is now pinned by test rather than assumed.
+
+Refusal tests added for `az`, `npx`, npm/pnpm/bun installation forms, arbitrary `python -m` and
+`-c`, generic shell programs and shell strings, pytest plugin-loading options, pytest paths outside
+the repository, and a program supplied as a path. Every prohibition listed in item 2 below is now
+covered by a test rather than by prose alone.
+
+The original requirements, retained for the record:
+
+The executable name allowlist is not a sandbox. Repository-relative Python programs and reviewed
+`bun`, `npm`, or `pnpm` scripts can execute general code with the server process's operating-system
+permissions. The allowlist narrows entry points and arguments; it does not by itself prove
+hermeticity, network isolation, or harmlessness.
+
+Before the Azure companion is presented as a safe contrast with ContextPatch:
+
+1. Inventory the exact authority of every allowed command family, including environment, network,
+   filesystem, subprocess, lifecycle-script, and credential access.
+2. Keep package installation, arbitrary `npx`, generic `az`, arbitrary `python -m`, shell strings,
+   and unreviewed scripts outside `run_guarded_command`.
+3. Reconcile the README, capability manifest, safety contract, and Azure-position document so none
+   claims that executable-name allowlisting alone prevents arbitrary code or outbound access.
+4. State which guarantees actually come from repository-relative selection, retained root
+   authority, null stdin, bounded arguments and output, timeouts, process-group termination,
+   confirmation gates, and explicit command-family policy.
+5. Add drift tests for the refused command forms and for every public claim that depends on process
+   isolation.
+
+This audit must not turn ContextPatch into the Azure transport. Its purpose is to make both trust
+boundaries explicit: ContextPatch executes narrowly selected local tooling, while the companion
+Azure MCP server independently holds scoped cloud authority.
+
 ## Phase 1 — Recover history and pin provenance
 
 ### 1.1 Commit the untracked implementation (complete)
@@ -667,3 +809,5 @@ Phase-specific checks:
 | C32 | Formatting command is not allowlisted, so the gate is partial | 7.5 | Open |
 | C33 | Surface consolidation has no versioned design proposal | 5.0 | Open |
 | C34 | Exact-commit mismatch refusal swaps its `expected_paths` and `actual_dirty_paths` labels | unscheduled | Open |
+| C35 | Azure verification requires copy-paste and lacks a scoped companion MCP workflow | 0.1 | Open — first priority |
+| C36 | The command allowlist is described more strongly than its execution authority supports | 0.2 | Complete |

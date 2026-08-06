@@ -4,6 +4,82 @@ use serde_json::Value;
 
 use crate::support::*;
 
+/// Actions that must advertise `openWorldHint: true`, because they either contact a remote system
+/// themselves or start repository-controlled code that inherits the server's network capability.
+/// A blanket `false` here was a false public capability claim; see `docs/execution-threat-model.md`.
+const EXPECTED_OPEN_WORLD_ACTIONS: &[&str] = &[
+    "artifact_python_run",
+    "base_image_check_run",
+    "fixture_generator_run",
+    "git_branch_prepare",
+    "git_merge_readiness",
+    "git_push_exact",
+    "git_remote_check",
+    "github_fork_prepare",
+    "github_pr_run",
+    "harbor_run_start",
+    "native_build_run",
+    "native_device_run",
+    "project_execute",
+    "run_guarded_command",
+    "setup_profile_run",
+    "validation_profile_run",
+];
+
+/// Execution paths that stay closed-world because their isolation is documented and enforced:
+/// the task image and the cleanliness check both run with networking disabled.
+const EXPECTED_ISOLATED_ACTIONS: &[&str] =
+    &["task_image_python_run", "image_cleanliness_check_run"];
+
+#[test]
+fn stage2_open_world_annotations_match_the_documented_execution_authority() {
+    let root = git_repo("stage2_open_world_annotations_match_authority");
+    let responses = run_server(
+        &root,
+        &[r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#],
+    );
+
+    let tools = responses[0]["result"]["tools"]
+        .as_array()
+        .expect("tools/list array");
+    assert!(!tools.is_empty(), "tools/list must advertise something");
+
+    let mut observed_open_world = Vec::new();
+    for tool in tools {
+        let name = tool["name"].as_str().expect("tool name");
+        let open_world = tool["annotations"]["openWorldHint"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("{name} must advertise openWorldHint"));
+        if open_world {
+            observed_open_world.push(name.to_string());
+        }
+
+        if EXPECTED_ISOLATED_ACTIONS.contains(&name) {
+            assert!(
+                !open_world,
+                "{name} runs with networking disabled and must stay closed-world"
+            );
+        }
+    }
+    observed_open_world.sort();
+
+    let mut expected = EXPECTED_OPEN_WORLD_ACTIONS
+        .iter()
+        .filter(|name| {
+            tools
+                .iter()
+                .any(|tool| tool["name"].as_str() == Some(**name))
+        })
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    expected.sort();
+
+    assert_eq!(
+        observed_open_world, expected,
+        "open-world classification drifted from the documented execution authority"
+    );
+}
+
 #[test]
 fn stage2_capability_manifest_projects_cheaply_without_losing_the_build_stamp() {
     // The full manifest runs to hundreds of lines, which made the orientation tool expensive enough to

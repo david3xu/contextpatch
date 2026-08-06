@@ -6,7 +6,7 @@ pub(crate) fn definitions() -> Vec<Value> {
     vec![
         json!({
                     "name": tools::run_guarded_command::NAME,
-                    "description": "Run a repo-root-confined allowlisted validation command without using a shell.",
+                    "description": "Run an allowlisted validation command with repo-root-confined arguments and no shell interposed by this server. That narrows the entry point and the arguments; it is not a sandbox. The child inherits this server's environment, and reviewed repository code it runs (cargo build scripts and tests, npm-family scripts, Python, pytest collection) can read files, start subprocesses, and use the network with the server user's permissions. npm-family scripts may invoke their own shell. Only task_image_python_run carries the documented container isolation with networking disabled.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

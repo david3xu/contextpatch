@@ -30,7 +30,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `task_image_python_run` | Docker image/cache only | Plans a task-image Python run; confirmed execution starts asynchronously and returns a pollable log id |
 | `bulk_write_new_files_base64` | Yes | Bounded multi-file create-only import from base64 entries |
 | `create_directory` | Yes | Destination must not exist; optional explicit parent creation inside repo root |
-| `run_guarded_command` | No source edits | Repo-root-confined, no-shell, allowlisted validation command |
+| `run_guarded_command` | No source edits | Allowlisted validation command with repo-root-confined arguments and no shell interposed by this server; not a sandbox |
 | `fixture_generator_run` | Declared fixture outputs only | Dry-run/confirmation-gated repo-relative Python generator with changed-path verification |
 | `base_image_check_run` | No source edits | Exact `references/check-base-image.sh` validation workflow, optionally with the exact `task` arg; no arbitrary shell |
 | `image_cleanliness_check_run` | No source edits | Narrow Docker image `find / -name <filename>` check; dry-run default and exact confirmation |
@@ -66,7 +66,23 @@ The public tool names use snake_case because they are protocol-facing. The CLI u
 
 ## Tool annotations
 
-Every server-advertised MCP tool must include an `annotations` object in `tools/list` so clients can interpret tool intent. The server sets `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: false` for all tools, with `readOnlyHint: true` on read-only tools.
+Every server-advertised MCP tool must include an `annotations` object in `tools/list` so clients can interpret tool intent. The server sets `destructiveHint: false` for all tools, and derives `readOnlyHint` and `idempotentHint` together from the read-only classification.
+
+`openWorldHint` is per action and is derived from one centralized classification in
+`crates/server/src/tools/schema/authority.rs`. An action is advertised open-world when it either
+contacts a remote system itself, or starts repository-controlled code that inherits this server's
+environment and with it the server user's network capability. That covers Git fetch and push,
+GitHub actions, dependency-capable builds and scripts, fixture generators, validation profiles,
+Harbor, setup profiles, native builds, and artifact Python. The `project_execute` wrapper is
+open-world because it dispatches every inner action.
+
+Actions stay closed-world when they remain on the local host, and when execution happens under the
+documented container isolation with networking disabled: `task_image_python_run` and
+`image_cleanliness_check_run`. Note that `git_merge_readiness` is both read-only and open-world,
+because it may fetch from a remote in order to report state.
+
+These hints describe reach, not containment. Executable-name allowlisting is entry-point and
+argument policy, not sandboxing. See `docs/execution-threat-model.md`.
 
 ## Transport and concurrent calls
 

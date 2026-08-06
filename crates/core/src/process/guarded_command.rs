@@ -9,6 +9,10 @@ use crate::process::runner::{
 const DEFAULT_MAX_TIMEOUT_SECS: u64 = 600;
 const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
 
+/// pytest's plugin-loading option, in both its separated and combined short forms.
+const PYTEST_PLUGIN_OPTION: &str = "-p";
+const LONG_OPTION_PREFIX: &str = "--";
+
 /// Run one allowlisted command inside the repository, through the repository's own authority.
 ///
 /// The working directory is opened relative to the root descriptor and held open until the child has been
@@ -115,6 +119,16 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         ));
     }
 
+    if program == crate::process::runner::PROGRAM_PYTEST {
+        if let Some(option) = args.iter().find(|arg| is_pytest_plugin_option(arg)) {
+            return Err(ContextPatchError::new(format!(
+                "guarded command refused: pytest option `{option}` loads a caller-named plugin; \
+                 ambient plugin autoload is disabled and reviewed repository `conftest.py` is \
+                 collected instead"
+            )));
+        }
+    }
+
     let subcommand = args.first().map(String::as_str);
     let allowed = match program {
         "git" => matches!(
@@ -149,6 +163,14 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     Ok(())
 }
 
+/// pytest accepts node ids and options freely, so refuse the options that load a caller-named
+/// plugin. Outside-repository paths are already refused by argument path confinement, and ambient
+/// plugin autoload is disabled for pytest children in the bounded runner.
+fn is_pytest_plugin_option(arg: &str) -> bool {
+    arg == PYTEST_PLUGIN_OPTION
+        || (arg.starts_with(PYTEST_PLUGIN_OPTION) && !arg.starts_with(LONG_OPTION_PREFIX))
+}
+
 fn is_allowlisted_program(program: &str) -> bool {
     matches!(
         program,
@@ -181,10 +203,137 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        checked_command_timeout, redact_and_truncate_output, redact_and_truncate_output_tail,
-        run_guarded_command, validate_command,
+        checked_command_timeout, is_pytest_plugin_option, redact_and_truncate_output,
+        redact_and_truncate_output_tail, run_guarded_command, validate_command,
     };
     use crate::process::runner::redact_line;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn refusal(program: &str, values: &[&str]) -> String {
+        validate_command(program, &args(values))
+            .expect_err("policy must refuse this command")
+            .to_string()
+    }
+
+    #[test]
+    fn refuses_azure_cli() {
+        for values in [
+            vec!["login"],
+            vec!["account", "show"],
+            vec!["bicep", "build"],
+        ] {
+            assert!(refusal("az", &values).contains("not allowlisted"));
+        }
+    }
+
+    #[test]
+    fn refuses_npx() {
+        let message = refusal("npx", &["-y", "@azure/mcp", "server", "start"]);
+        assert!(message.contains("not allowlisted"), "unexpected: {message}");
+    }
+
+    #[test]
+    fn refuses_package_installation() {
+        for (program, values) in [
+            ("npm", vec!["install", "-g", "@azure/mcp"]),
+            ("npm", vec!["ci"]),
+            ("pnpm", vec!["add", "left-pad"]),
+            ("pnpm", vec!["install"]),
+            ("bun", vec!["add", "left-pad"]),
+            ("bun", vec!["install"]),
+        ] {
+            assert!(refusal(program, &values).contains("not allowlisted"));
+        }
+    }
+
+    #[test]
+    fn refuses_arbitrary_python_module_execution() {
+        for values in [
+            vec!["-m", "http.server"],
+            vec!["-c", "import os"],
+            vec!["-m", "pip", "install", "requests"],
+        ] {
+            assert!(refusal("python3", &values).contains("not allowlisted"));
+            assert!(refusal("python", &values).contains("not allowlisted"));
+        }
+    }
+
+    #[test]
+    fn refuses_generic_shell_programs_and_strings() {
+        for (program, values) in [
+            ("bash", vec!["-c", "echo hi"]),
+            ("bash", vec!["scripts/anything.sh"]),
+            ("sh", vec!["-c", "echo hi"]),
+            ("zsh", vec!["-c", "echo hi"]),
+            ("env", vec!["echo", "hi"]),
+        ] {
+            assert!(refusal(program, &values).contains("not allowlisted"));
+        }
+    }
+
+    #[test]
+    fn refuses_pytest_plugin_loading_options() {
+        for values in [
+            vec!["-p", "attacker_plugin"],
+            vec!["-pattacker_plugin"],
+            vec!["tests", "-p", "no:cacheprovider"],
+        ] {
+            let message = refusal("pytest", &values);
+            assert!(
+                message.contains("loads a caller-named plugin"),
+                "unexpected refusal: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn retains_repository_local_pytest_invocations() {
+        for values in [
+            vec!["tests"],
+            vec!["-q", "tests/test_thing.py"],
+            vec!["--maxfail", "1"],
+        ] {
+            validate_command("pytest", &args(&values))
+                .expect("repository-local pytest invocations stay permitted");
+        }
+    }
+
+    #[test]
+    fn refuses_pytest_paths_outside_the_repository() {
+        for values in [
+            vec!["/etc"],
+            vec!["../other-repo/tests"],
+            vec!["tests/../../escape"],
+            vec!["--rootdir", "/tmp"],
+        ] {
+            let message = refusal("pytest", &values);
+            assert!(
+                message.contains("outside the repository root"),
+                "unexpected refusal: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_program_given_as_a_path() {
+        for program in ["/usr/bin/env", "./scripts/run", "../bin/az"] {
+            let message = refusal(program, &["--version"]);
+            assert!(
+                message.contains("not a path"),
+                "unexpected refusal: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn long_options_are_not_mistaken_for_plugin_loading() {
+        assert!(!is_pytest_plugin_option("--pyargs"));
+        assert!(!is_pytest_plugin_option("--maxfail"));
+        assert!(is_pytest_plugin_option("-p"));
+    }
 
     #[test]
     fn runs_allowlisted_git_status() {

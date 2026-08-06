@@ -119,6 +119,8 @@ Core code is grouped by product capability rather than adapter:
 
 `process` is infrastructure, not a public shell surface. `setup` may plan external mutators, but profile modules own the action vocabulary and command plans. `native_build` and `native_device` expose high-level actions, not arbitrary native command access.
 
+The no-shell property in this layer describes what this server does: it spawns programs with explicit argument arrays and never hands a command string to an interpreter. It is not a containment claim about the resulting process tree. Children inherit this process's environment, npm-family scripts may start their own shell, and reviewed repository code that an allowlisted program executes runs with the server user's permissions and network capability. Only the task-image path applies container isolation, with networking disabled. The measured authority of each allowlisted program is in `docs/execution-threat-model.md`, which also documents the per-action `openWorldHint` classification derived in `crates/server/src/tools/schema/authority.rs`.
+
 ## Dependency direction
 
 ```text

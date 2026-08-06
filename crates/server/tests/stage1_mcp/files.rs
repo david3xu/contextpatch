@@ -540,7 +540,14 @@ fn stage1_mcp_tools_work_together() {
             annotations["idempotentHint"], annotations["readOnlyHint"],
             "{tool}"
         );
-        assert_eq!(annotations["openWorldHint"], false, "{tool}");
+        // Shape only. `openWorldHint` varies by action, because some actions contact remotes or
+        // start repository-controlled code with inherited network capability. The per-action
+        // classification is pinned by
+        // `protocol::stage2_open_world_annotations_match_the_documented_execution_authority`.
+        assert!(
+            annotations["openWorldHint"].is_boolean(),
+            "tools/list must advertise openWorldHint for {tool}"
+        );
     }
     for read_only_tool in [
         "capability_manifest",

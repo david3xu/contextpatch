@@ -15,7 +15,7 @@ This document is normative. If implementation behavior conflicts with this file,
 5. Expose Git state before guarded edits.
 6. Prefer previewable diffs over hidden mutation.
 7. Never provide an unrestricted shell or recursive delete primitive.
-8. If validation command execution is exposed, it must be no-shell, repo-root-confined, allowlisted, timeout-bound, and auditable.
+8. If validation command execution is exposed, it must interpose no shell, confine argument paths to the repository root, be allowlisted, timeout-bound, and auditable. It must not be described as a sandbox: the child inherits the server environment, and reviewed repository code it runs can read files, start subprocesses, and use the network with the server user's permissions. Only the task-image path carries the documented container isolation. See `docs/execution-threat-model.md`.
 9. If local Git commit support is exposed, it must be an explicitly confirmed exact-path checkpoint, not broad Git authority.
 10. If remote Git support is exposed, it must be split into explicit remote-check, branch-preparation, merge-readiness, and exact-push tools, not added to generic command execution.
 11. If setup support is exposed, it must be declarative and profile-owned: callers choose a profile/action with typed params, never raw package-manager or shell commands.
