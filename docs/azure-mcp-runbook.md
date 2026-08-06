@@ -1,6 +1,24 @@
-# Azure MCP companion runbook
+# Azure MCP companion runbook (RETIRED)
 
-Status: repository deliverables ready, host setup and live verification outstanding (C35 open).
+> **RETIRED, do not follow.** The installation procedure, namespace selection, and Claude Desktop
+> configuration guidance in this document describe a rollout that was **not adopted**. Both candidate
+> MCP surfaces were rejected: local Azure MCP `2.0.5` lacks four of the five required capabilities, and
+> ARM MCP is delegated-user by construction so a dedicated scoped service principal cannot be its
+> acting identity. See `docs/azure-mcp-capability-matrix.md` for the audit and the rejection.
+>
+> **The active path is `docs/azure-evidence-runbook.md`**, an operator-only procedure using `az` under a
+> dedicated Reader plus Cost Management Reader identity in an isolated `AZURE_CONFIG_DIR`.
+>
+> The redacted Claude Desktop template that accompanied this document has been deleted rather than left
+> in the tree, because a configuration artifact invites copying regardless of what the prose says.
+>
+> This document is retained for its verified findings, which remain accurate and would be expensive to
+> re-derive: the pinned version and digests, the tag and build commits, the measured option surface, the
+> measured `--read-only` behaviour including the billable tool that survives it, and the MCPB manifest
+> evidence. Conditions for reconsidering an MCP surface are recorded at the end of
+> `docs/azure-evidence-runbook.md`.
+
+Status: retired. C35 is blocked, not complete, by upstream capability and authentication limitations.
 
 ContextPatch holds zero Azure authority and must keep holding zero. See
 `docs/azure-workload-position.md`. Azure access lives in a separate Claude Desktop entry running

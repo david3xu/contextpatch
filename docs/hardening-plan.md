@@ -60,11 +60,33 @@ structured access to Azure resource state, but ContextPatch remains a repository
 validation engine. Do not add Azure control-plane APIs, generic `az`, arbitrary `npx`, or cloud
 credentials to ContextPatch.
 
-### 0.1 Configure a least-privilege Azure companion server (C35, open)
+### 0.1 Configure a least-privilege Azure companion server (C35, blocked)
 
-Repository deliverables are complete: `docs/azure-mcp-runbook.md` and the redacted template at
-`docs/examples/claude-desktop-azure-mcp.json`. Host setup and live verification are not, so C35
-stays open.
+**Blocked by upstream capability and authentication limitations, not complete and not deferred by
+choice.** No MCP surface Microsoft currently ships can satisfy the required capability set under this
+project's identity constraints. The evidence is in `docs/azure-mcp-capability-matrix.md`; the audit
+there is documentation-level because the ARM MCP repository publishes no source at all.
+
+The adopted fallback is `docs/azure-evidence-runbook.md`, an operator-only procedure that runs `az`
+directly under a dedicated service principal holding Reader at `ccl-pronunciation-trainer-rg` plus Cost
+Management Reader at the narrowest workable scope, through an isolated `AZURE_CONFIG_DIR`, capturing
+redacted output into a timestamped operator-owned evidence directory sealed with a SHA-256 manifest. It
+covers all seven evidence areas including the two denial checks, and it keeps the identity constraint
+that no MCP topology could keep.
+
+`docs/azure-mcp-runbook.md` is retired in place, retained only for its verified findings. Its Claude
+Desktop template was deleted rather than left in the tree, because a configuration artifact invites
+copying whatever the prose says.
+
+Conditions for reconsidering an MCP surface are recorded at the end of the evidence runbook: a dedicated
+application identity authenticating as itself, all five required reads in one surface, Claude Desktop
+support with the remote-connector trust boundary understood, and mutation exclusion that is enforceable
+without a deny policy compensating for over-broad roles. All four must hold; partial satisfaction
+reproduces a rejection already recorded.
+
+The MCP rollout was abandoned rather than delivered. `docs/azure-mcp-runbook.md` is retired in place,
+and its redacted Claude Desktop template has been deleted. The active path is
+`docs/azure-evidence-runbook.md`.
 
 Exact blockers, in the order they must be cleared:
 
@@ -914,5 +936,5 @@ Phase-specific checks:
 | C32 | Formatting command is not allowlisted, so the gate is partial | 7.5 | Open |
 | C33 | Surface consolidation has no versioned design proposal | 5.0 | Open |
 | C34 | Exact-commit mismatch refusal swaps its `expected_paths` and `actual_dirty_paths` labels | unscheduled | Open |
-| C35 | Azure verification requires copy-paste and lacks a scoped companion MCP workflow | 0.1 | Open — repository deliverables complete, host setup and live checks outstanding |
+| C35 | Azure verification requires copy-paste and lacks a scoped companion MCP workflow | 0.1 | Blocked — no Microsoft MCP surface satisfies the capability set under the identity constraints; operator-only fallback adopted |
 | C36 | The command allowlist is described more strongly than its execution authority supports | 0.2 | Complete |
