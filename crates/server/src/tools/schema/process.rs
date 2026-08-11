@@ -12,7 +12,7 @@ pub(crate) fn definitions() -> Vec<Value> {
                         "properties": {
                             "program": {
                                 "type": "string",
-                                "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for the exact base-image script, or rg. Use harbor_run_start for Harbor."
+                                "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for a script on the fixed validation-script list, or rg. Use harbor_run_start for Harbor."
                             },
                             "args": {
                                 "type": "array",
@@ -45,7 +45,7 @@ pub(crate) fn definitions() -> Vec<Value> {
                         "properties": {
                             "log_id": {
                                 "type": "string",
-                                "description": "Opaque log id returned by guarded commands or asynchronous Harbor, task-image, and validation-profile actions."
+                                "description": "Opaque log id returned by guarded commands or asynchronous Harbor, task-image, validation-profile, Compose-stack, and artifact-build actions."
                             },
                             "max_chars": {
                                 "type": "integer",
@@ -224,7 +224,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         ),
         json!({
                     "name": tools::harbor_run_start::NAME,
-                    "description": "Start one typed Harbor run in the background and return a log_id immediately. Poll with read_command_log; completed logs include structured Harbor evidence. Harbor, task-image, and validation-profile jobs share a two-job cap.",
+                    "description": "Start one typed Harbor run in the background and return a log_id immediately. Poll with read_command_log; completed logs include structured Harbor evidence. Harbor, task-image, validation-profile, Compose-stack, and artifact-build jobs share a two-job cap.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

@@ -70,9 +70,9 @@ impl BackgroundJobPermit {
         loop {
             if active >= MAX_ACTIVE_BACKGROUND_JOBS {
                 return Err(format!(
-                    "{tool_name} refused: at most {MAX_ACTIVE_BACKGROUND_JOBS} Harbor, task-image, \
-                     or validation-profile jobs may run at once; poll existing log_ids before \
-                     starting another job"
+                    "{tool_name} refused: at most {MAX_ACTIVE_BACKGROUND_JOBS} background jobs may run at \
+                     once, across Harbor, task-image, validation-profile, Compose-stack, and \
+                     artifact-build work; poll existing log_ids before starting another job"
                 ));
             }
             match ACTIVE_BACKGROUND_JOBS.compare_exchange_weak(
