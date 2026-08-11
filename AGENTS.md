@@ -1,6 +1,9 @@
-# CLAUDE.md
+# Repository operating rules
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+The non-obvious rules for working in this repository, kept here because rediscovering them from the
+source costs more than reading them. Named neutrally rather than for one vendor's convention: the
+rules are the project's, and which agent reads them is machine configuration rather than repository
+content. Point your tooling at this file if it does not find it by name.
 
 ## Commands
 
