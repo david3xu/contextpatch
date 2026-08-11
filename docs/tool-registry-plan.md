@@ -1,5 +1,15 @@
 # Tool Registry Plan
 
+**Status: executed.** All four phases landed on `guarded-shell-script-list` between `b89dda2` and `ab6223c`. 489 tests passing, clippy clean under `-D warnings`, fmt clean. Both snapshots are byte-identical to the versions captured before the first migration, which is the evidence that fifty-four tools changed how every one of their facts is produced without the advertised surface moving once.
+
+Three deviations from the plan as written, each recorded in the commit that made it:
+
+- `project_execute` was excluded from the registry. It is the surface wrapper rather than an internal action: resolved before the repository is determined, advertised only on the project surface, classified as the widest reach of everything it dispatches.
+- `EXPECTED_OPEN_WORLD_ACTIONS` was **not** derived from `reach`. Annotations are already computed from `reach`, so deriving the expectation would assert a tautology and discard the audit. It belongs in the guard category with the safety-contract prose.
+- The registry scaffolding migrated one tool rather than landing empty. An empty table compiles and proves nothing about whether the schema merge, handler adaptation, deadline lookup, lock lookup, and both classifiers resolve through a descriptor.
+
+A fourth staleness defect surfaced during the inventory and was fixed in `cde66bf`: `guidance::permitted_summary` told a refused `bash` caller that only the base-image script was permitted, three commits after the fixed list replaced it.
+
 Collapsing per-tool fan-out in the MCP server.
 
 Adding one tool currently touches 17 files and asserts that tool's identity independently in 8 places, with nothing checking those places agree. Three defects have already reached committed code through that gap. This plan closes it, and proves the closure by differential test rather than by inspection.
