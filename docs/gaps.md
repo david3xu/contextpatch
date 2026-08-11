@@ -276,3 +276,52 @@ checks the document names them.
 The durable fix is the same one the registry applied: stop restating the set, derive it. A descriptor
 field for whether a tool starts a background job makes the manifest read the registry, brings the fact
 under the recorded matrix, and makes the next asynchronous tool self-registering.
+
+
+## B10. The surface cannot run its own fixture-regeneration procedure
+
+`run_guarded_command` accepts a program and argv but no environment, so
+`CONTEXTPATCH_UPDATE_FIXTURES=1 cargo test -p server` — the documented way to regenerate the recorded
+snapshots, written into `AGENTS.md` as the procedure — cannot be executed through the surface at all.
+Same class as the `cargo fmt` gap closed in `4c3dcab`: a gate the server documents and cannot run.
+
+The obvious route around it, having `artifact_python_run` spawn cargo with a modified environment, was
+identified and declined. That is the same escape shape as `rg --pre`, which C37 closed three commits
+earlier, and taking it would have re-opened by convention what the allowlist closed by construction.
+The fixture is hand-written instead and the test verifies it, which is safe in the one direction that
+matters: a wrong fixture fails rather than ratifies.
+
+Deciding whether to grant a narrow environment capability, or to keep regeneration a terminal-only
+procedure and say so in `AGENTS.md`, is open.
+
+## B11. `run_guarded_command`'s schema understates the isolated set
+
+Its advertised description states that *only* `task_image_python_run` carries documented container
+isolation with networking disabled. Two descriptors carry `IsolatedExecution`:
+`image_cleanliness_check_run` runs `docker run --rm --network none` with a fixed entrypoint and is
+classified isolated by the same registry field.
+
+Found by the enumeration below rather than by reading, and it is the sixth instance of the class. The
+sentence appears only in the schema; `README.md`, `docs/execution-threat-model.md`, and
+`docs/safety-contract.md` do not repeat it, so the fix is one description.
+
+## Item 3 enumeration — every site naming three or more registered tools
+
+Measured across `crates/server/src`, excluding the registry and the per-tool declaration blocks.
+Fourteen sites, classified by whether they can go stale.
+
+| Site | Class | Action |
+| --- | --- | --- |
+| `tools/mod.rs`, `tools/git/mod.rs`, `tools/git/names.rs` | Re-exports and declarations | None. A wrong name does not compile. |
+| `protocol/instructions.rs` | Names tools the client must call | None. Already guarded, and the asynchronous list was deliberately removed. |
+| `tools/schema/project.rs`, `tools/schema/mod.rs` | Wrapper description | None. Guarded by `the_wrapper_description_advertises_the_cheap_discovery_projections`. |
+| `tools/schema/authority.rs` | Comments and tests | None. |
+| `tools/schema/process.rs` | **Advertised claim about another tool's property** | **B11.** Understates the isolated set. |
+| `tools/capability.rs` | Manifest sections | Audit remaining lists; two were wrong already (`typed_workflows`, `background_jobs`). |
+| `tools/process/mod.rs` | Refusal and log wording | Verify against the derived set now that one exists. |
+| `server.rs`, `tools/dispatch.rs`, `tools/files/*`, `tools/git/support.rs` | Handler-internal references | None. Each names one tool in its own path. |
+
+The pattern across the six instances found so far: **claims about a set are the failure, references to a
+single tool are not.** Every defect has been a place asserting which tools have a property, and every
+safe site names one tool in its own code path. That is the discriminator worth applying to any site
+added later.
