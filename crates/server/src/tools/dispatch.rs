@@ -247,10 +247,11 @@ fn call_tool(
 ) -> Result<String, String> {
     // Tools not yet migrated still take a path, and receive the logical path until each one moves to the
     // typed target. That is what lets this proceed one tool at a time instead of all at once.
+    if let Some(entry) = crate::tools::registry::descriptor(name) {
+        return (entry.handler)(repository, surface, arguments);
+    }
+
     match name {
-        tools::capability_manifest::NAME => {
-            tools::capability::call_capability_manifest(repository.root(), arguments, surface)
-        }
         tools::preflight_health::NAME => {
             tools::capability::call_preflight_health(repository.root(), arguments)
         }
@@ -405,9 +406,12 @@ fn call_tool(
 fn deadline_for(name: &str) -> Option<Duration> {
     use contextpatch_core::process::deadline::{GIT_DEADLINE, READ_DEADLINE, WRITE_DEADLINE};
 
+    if let Some(entry) = crate::tools::registry::descriptor(name) {
+        return entry.deadline;
+    }
+
     match name {
-        tools::capability_manifest::NAME
-        | tools::preflight_health::NAME
+        tools::preflight_health::NAME
         | tools::read_range::NAME
         | tools::read_write_receipts::NAME
         | tools::diff_preview::NAME
@@ -454,6 +458,10 @@ fn deadline_for(name: &str) -> Option<Duration> {
 }
 
 fn serializes_repository_mutation(name: &str) -> bool {
+    if let Some(entry) = crate::tools::registry::descriptor(name) {
+        return entry.serializes_mutation;
+    }
+
     matches!(
         name,
         tools::replace_exact::NAME

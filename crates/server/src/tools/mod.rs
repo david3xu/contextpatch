@@ -10,6 +10,7 @@ pub mod journal;
 pub mod native;
 pub mod process;
 pub mod project;
+pub mod registry;
 pub mod schema;
 pub mod setup;
 #[cfg(test)]

@@ -43,6 +43,10 @@ impl RemoteReach {
 /// Unknown names classify as `Local` so a missing entry cannot silently widen an advertised claim;
 /// the schema tests pin the classification for every documented action.
 pub fn remote_reach(name: &str) -> RemoteReach {
+    if let Some(entry) = crate::tools::registry::descriptor(name) {
+        return entry.reach;
+    }
+
     if name == project::project_execute::NAME {
         return RemoteReach::WrapperDispatch;
     }
@@ -99,8 +103,11 @@ fn executes_repository_code(name: &str) -> bool {
 
 /// Whether an action only observes state and never mutates the repository or host.
 pub fn is_read_only(name: &str) -> bool {
-    name == capability::capability_manifest::NAME
-        || name == capability::preflight_health::NAME
+    if let Some(entry) = crate::tools::registry::descriptor(name) {
+        return entry.read_only;
+    }
+
+    name == capability::preflight_health::NAME
         || name == files::read_range::NAME
         || name == files::read_write_receipts::NAME
         || name == files::diff_preview::NAME

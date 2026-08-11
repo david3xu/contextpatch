@@ -17,13 +17,22 @@ use crate::tools::ToolSurface;
 // mutation-lock axes that live in `dispatch`. Those six facts are currently decided in five separate
 // files; the registry migration collapses them, and until it does, the snapshot that guards the
 // migration needs to read all six from one place.
-// Test-gated for now because the snapshot is the only consumer; the registry makes it unconditional
-// when the descriptor carries these as fields.
+pub(crate) use authority::RemoteReach;
+pub(crate) use capability::capability_manifest_definition;
+// Still test-only: production reads these through `add_always_allow_annotations`, which lives here.
+// They become ordinary reads once every tool is a descriptor and annotations come from its fields.
 #[cfg(test)]
 pub(crate) use authority::{is_read_only, remote_reach};
 
 fn internal_tool_definitions() -> Vec<Value> {
     let mut definitions = Vec::new();
+    // Migrated tools carry their own schema on their descriptor; the module lists below hold only
+    // what has not moved yet, so the two sources are disjoint by construction.
+    definitions.extend(
+        crate::tools::registry::descriptors()
+            .iter()
+            .map(|entry| (entry.schema)()),
+    );
     definitions.extend(capability::definitions());
     definitions.extend(files::definitions());
     definitions.extend(process::definitions());
