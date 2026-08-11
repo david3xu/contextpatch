@@ -54,7 +54,7 @@ Operations do **not** take a repository path. They take `core::git::root::Reposi
 - `server::tools::dispatch::EffectiveRepository::root()` is the single place a call's authority is decided. Handlers receive it; they never resolve names themselves.
 - Boundaries that need a stable *name* (mutation locks, the receipt journal, scratch identity) use `canonical_label`, never a path used to reach a file.
 
-Most of the recent commit history is the migration of individual tools onto this model; a few handlers still take the logical path. Move them onto typed authority rather than adding new path-taking handlers.
+Most of the recent commit history is the migration of individual tools onto this model. Three sites still read `logical_path()`, all deliberately and none for access: `github.rs:38` and `github.rs:443` report `cwd` back to the caller, and `git/handlers/restore.rs:139` uses it as receipt identity, which is path-derived by design. Adding a fourth reader for *access* would be a regression; adding one for reporting needs the same justification these carry.
 
 ### Module size
 

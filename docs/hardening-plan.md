@@ -680,8 +680,18 @@ deliberately rather than pending:
 6. **The Git status scope pathspec**, normalized against the canonical label. It is a pathspec handed to
    Git rather than a path used for access, but it is recorded here rather than left implicit.
 
-Across the migrated surface, `logical_path()` is read only through `canonical_label`, and only for the
-label boundaries above. No handler reads it to gain access to a file.
+Across the migrated surface, no handler reads `logical_path()` to gain access to a file. That is the
+property that matters, and it holds without exception.
+
+The narrower claim that it is read *only* through `canonical_label` overstates, and three sites show
+where. `github.rs:38` and `github.rs:443` read it to report `cwd` back in the response body, while the
+child's actual working directory comes from the retained descriptor; a caller that asked which
+directory was used has to be told, and a descriptor is not an answer. `git/handlers/restore.rs:139`
+passes it as receipt identity, which is path-derived by design and is an acknowledged deferred
+boundary rather than part of this migration.
+
+So: reads for reporting and for receipt identity exist and are enumerated here. Reads for access do
+not.
 
 The selector is otherwise sound: it rejects parent and current-directory components, absolute paths,
 trailing and doubled separators, backslashes, control characters, drive prefixes, and the Git
