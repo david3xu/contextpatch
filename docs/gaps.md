@@ -176,3 +176,103 @@ The Git one is worth keeping rather than filing as simple error, because **both 
 **This supersedes the "My git access is read-only" claim in the note above** — that entry was written under the same misreading.
 
 Reporter's own conclusion, endorsed: call `capability_manifest` before asserting a limit. One turn, and it is authoritative.
+
+
+---
+
+# Blocker status — updated 2026-08-11, branch `guarded-shell-script-list` @ `6a2c755`
+
+Eleven commits on the branch. The installed binary is current and the guarded surface has been
+exercised live, so most of the previous register is closed. What remains is one hard blocker, one
+surface gap behind it, two unverified premises, and three carried items.
+
+## Closed since the last update
+
+| Item | Evidence |
+| --- | --- |
+| Installed binary stale at `e89889f` | False by measurement. `capability_manifest` reports `bac60a8`, release, clean. The Desktop config points at `target/release/contextpatch-server`, which is the file the rebuild replaced, so no install step ever existed. |
+| `rg --pre` arbitrary execution (C37) | Closed and verified against the live server: refused, naming the permitted option set. Previously demonstrated executing a shell and writing outside the repository root. |
+| `cargo fmt` gate produced no receipt | Closed. `cargo fmt --all -- --check` returns `allowlist: cargo/fmt`, exit 0, and a retrievable `log_id`. Its first run found two formatting deviations in `bac60a8`, the last commit that could not be fmt-gated through the surface. |
+| Nothing exercised against a running server | Substantially closed for the guarded-command surface. Still open for the Docker tools, below. |
+
+## B4. A staged rename blocks every guarded commit — **hard blocker**
+
+```
+staged:    R100  CLAUDE.md -> AGENTS.md
+unstaged:  M     AGENTS.md, docs/gaps.md
+```
+
+`git_commit_exact` requires the supplied path list to match the entire dirty set; `git_commit_scoped`
+requires a clean index. A staged `R` entry violates both, and both refuse it explicitly:
+`rename/copy entries require a future dedicated tool`.
+
+The consequence is wider than the rename, and wider than first recorded. The guard trips on a rename
+entry **existing in status at all**, not on the paths handed to the action. Measured: a
+`git_commit_scoped` dry run whose path list contained only `docs/gaps.md`, nothing to do with the
+rename, refused with the same message. So the blocker is not "the rename cannot be committed" but
+**no guarded commit can succeed on this tree for any path** until the `R` clears — including the
+register commit, and including the fix for B5 itself. It requires a terminal.
+
+## B5. `move_tracked` can produce a state the commit tools reject — surface gap
+
+The underlying incompleteness behind B4. `move_tracked` performs `git mv`, which stages an `R` entry
+that neither commit action accepts. A move tool whose output its own commit tools refuse is a gap
+worth closing rather than working around, and the refusal text already anticipates the missing tool.
+
+Closing it requires B4 cleared first, since the fix cannot otherwise be committed.
+
+## B6. `AGENTS.md` auto-load is unverified — premise under a decision already taken
+
+The rename was justified partly on discovery being machine configuration rather than repository
+content. `~/Developer/CLAUDE.md` asserts Claude Code auto-loads both `CLAUDE.md` and `AGENTS.md` at
+session start. If true, the rename costs nothing in discovery. Neither side has tested it, and it
+cannot be tested from a session already running: it needs a fresh session started in the repository,
+checked for whether the registry and snapshot rules are in context.
+
+## B7. The filename now means two things across the workspace
+
+Eight sibling projects use `AGENTS.md` as a symlink to the universal contract; five, including this
+one, use it as a regular file of project rules. The rename moved this repository between two existing
+groups rather than establishing a new pattern, but an agent reading `<project>/AGENTS.md` cannot tell
+from the name which it is getting.
+
+## Carried forward
+
+**B1. The compose action-to-file mapping is unconfirmed.** `compose_stack_run` refuses every action
+until `STACK_ACTIONS` matches a real layout. Unchanged, and still the cheapest open unblock.
+
+**B8. The Docker tools have never run.** `compose_stack_run` and `artifact_build_check_run` are
+verified by dry-run assertions and by the recorded surface, never against a real compose file or
+Dockerfile. B1 blocks the first; the second needs only a repository Dockerfile to point at.
+
+**B3. The branch is unmerged.** Eleven commits, pushed, not merged.
+
+## Defect in this record itself
+
+`docs/gaps.md` was committed in `6cff847` by an unscoped `git add -A`, in a commit about the README
+that does not mention it. It had twice been stated as deliberately kept out of this repository's
+history, on the grounds that it carries another project's handover notes. The claim and the action
+diverged and nothing caught it, which is the same class as the four staleness defects recorded above,
+committed by the party auditing them. It is pushed, so removing it is a new commit rather than an
+amendment, and that decision is open.
+
+
+## B9. The capability manifest advertises three background-job tools; there are five
+
+`capability.rs` hardcodes `background_jobs.tools` as `task_image_python_run`, `harbor_run_start`,
+`validation_profile_run`. Measured against the call sites, `compose_stack_run` and
+`artifact_build_check_run` also start background jobs and share the same two-job cap. A client reading
+the manifest to learn which calls return a pollable `log_id` is told a set two smaller than reality.
+
+This is the fifth instance of the defect class this branch was opened to close, and it survived three
+passes over the same file: the `typed_workflows` prose was corrected, the saturation refusal message
+was corrected, and this structured array beside them was not.
+
+It also exposes a gap in the guard added for exactly this. `capability_manifest_mentions_every_registered_tool`
+asserts that every tool appears *somewhere* in the manifest, which both missing tools do, elsewhere.
+Mention is not membership. A list that is wrong about which tools belong to it passes a test that only
+checks the document names them.
+
+The durable fix is the same one the registry applied: stop restating the set, derive it. A descriptor
+field for whether a tool starts a background job makes the manifest read the registry, brings the fact
+under the recorded matrix, and makes the next asynchronous tool self-registering.
