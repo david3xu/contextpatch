@@ -86,10 +86,10 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
     assert_eq!(discovery["tool_surface"], "project");
     // One more than the registered tool count, because the meta action is dispatchable too and a client
     // that enumerates actions must be able to find it.
-    assert_eq!(discovery["action_count"], 54);
+    assert_eq!(discovery["action_count"], 55);
     assert_eq!(
         discovery["action_definitions"].as_array().unwrap().len(),
-        53
+        54
     );
     let discovered: Vec<&str> = discovery["action_names"]
         .as_array()
@@ -117,7 +117,7 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
         capabilities["tool_names"],
         serde_json::json!(["project_execute"])
     );
-    assert_eq!(capabilities["action_names"].as_array().unwrap().len(), 54);
+    assert_eq!(capabilities["action_names"].as_array().unwrap().len(), 55);
     assert!(
         capabilities["action_names"]
             .as_array()

@@ -34,6 +34,10 @@ pub mod compose_stack_run {
     pub const NAME: &str = "compose_stack_run";
 }
 
+pub mod artifact_build_check_run {
+    pub const NAME: &str = "artifact_build_check_run";
+}
+
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Component, Path, PathBuf};
@@ -361,6 +365,151 @@ pub(crate) fn call_compose_stack_run<'a>(
         }))
         .map_err(|error| format!("compose_stack_run refused: {error}"))?
     ))
+}
+
+/// Plan or start one artifact build plus its import smoke check.
+///
+/// The caller names a Dockerfile and the arguments for the built image; every Docker flag, the tag,
+/// and the networkless smoke invocation are derived here.
+pub(crate) fn call_artifact_build_check_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let repository_root = repository_root.into();
+    contextpatch_core::process::artifact_build::ensure_artifact_root_is_addressable(repository_root)
+        .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
+
+    let dockerfile = required_string(arguments, "dockerfile")?;
+    let context = optional_string(arguments, "context")?;
+    let smoke_args = optional_string_array(arguments, "smoke_args")?;
+    let build_timeout_secs = optional_u64(arguments, "build_timeout_secs")?;
+    let smoke_timeout_secs = optional_u64(arguments, "smoke_timeout_secs")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    let plan = contextpatch_core::process::artifact_build::plan_artifact_build_check(
+        repository_root,
+        dockerfile,
+        context,
+        &smoke_args,
+        build_timeout_secs,
+        smoke_timeout_secs,
+    )
+    .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::artifact_build_check_run::NAME,
+            "dry_run": true,
+            "dockerfile": plan.dockerfile(),
+            "context": plan.context(),
+            "tag": plan.tag(),
+            "build": {
+                "program": "docker",
+                "args": plan.build_args(),
+                "timeout_secs": plan.build_timeout().as_secs()
+            },
+            "smoke": {
+                "program": "docker",
+                "args": plan.smoke_args(),
+                "timeout_secs": plan.smoke_timeout().as_secs()
+            },
+            "image_cleanup": {
+                "program": "docker",
+                "args": plan.image_cleanup_args()
+            },
+            "build_network": "enabled",
+            "smoke_network": "none",
+            "required_confirm_for_run":
+                contextpatch_core::process::artifact_build::CONFIRMATION
+        }))
+        .map_err(|error| format!("artifact_build_check_run refused: {error}"));
+    }
+
+    if confirm != Some(contextpatch_core::process::artifact_build::CONFIRMATION) {
+        return Err(format!(
+            "artifact_build_check_run refused: dry_run=false requires confirm: {:?}",
+            contextpatch_core::process::artifact_build::CONFIRMATION
+        ));
+    }
+
+    let initial_log = serde_json::to_string_pretty(&json!({
+        "tool": crate::tools::artifact_build_check_run::NAME,
+        "status": "running",
+        "dockerfile": plan.dockerfile(),
+        "tag": plan.tag()
+    }))
+    .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
+
+    let worker_plan = plan.clone();
+    let log_id = start_background_job(
+        crate::tools::artifact_build_check_run::NAME,
+        "artifact-build",
+        &initial_log,
+        move |_| {
+            let result = contextpatch_core::process::artifact_build::run_artifact_build_check(
+                &worker_plan,
+                Some(contextpatch_core::process::artifact_build::CONFIRMATION),
+            )
+            .map_err(|error| format!("artifact_build_check_run failed: {error}"))?;
+
+            let timed_out = result.build.timed_out
+                || result.smoke.as_ref().is_some_and(|smoke| smoke.timed_out);
+            let terminal_status = if timed_out {
+                "timed_out"
+            } else if result.success() {
+                "completed"
+            } else {
+                "failed"
+            };
+            let result_value = json!({
+                "tool": crate::tools::artifact_build_check_run::NAME,
+                "status": terminal_status,
+                "dry_run": false,
+                "dockerfile": worker_plan.dockerfile(),
+                "tag": worker_plan.tag(),
+                "build": artifact_command_value(&result.build),
+                "smoke": result.smoke.as_ref().map(artifact_command_value),
+                "image_cleanup": result.image_cleanup.as_ref().map(artifact_command_value),
+                // A leaked image is reported rather than hidden behind a passing gate.
+                "cleanup_clean": result.cleanup_clean()
+            });
+            let log = serde_json::to_string_pretty(&result_value)
+                .map_err(|error| format!("artifact_build_check_run failed: {error}"))?;
+            Ok(BackgroundJobOutcome {
+                log,
+                status: terminal_status,
+                exit_code: result.build.exit_code,
+                timed_out,
+            })
+        },
+    )?;
+
+    Ok(format!(
+        "log_id: {log_id}\n{}",
+        serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::artifact_build_check_run::NAME,
+            "status": "running",
+            "dockerfile": plan.dockerfile(),
+            "tag": plan.tag(),
+            "poll_with": crate::tools::read_command_log::NAME
+        }))
+        .map_err(|error| format!("artifact_build_check_run refused: {error}"))?
+    ))
+}
+
+fn artifact_command_value(
+    result: &contextpatch_core::process::artifact_build::ArtifactBuildCommandResult,
+) -> Value {
+    json!({
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "duration_ms": result.duration_ms,
+        "stdout": result.stdout,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr": result.stderr,
+        "stderr_truncated": result.stderr_truncated
+    })
 }
 
 fn compose_command_value(

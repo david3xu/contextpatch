@@ -146,6 +146,52 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::artifact_build_check_run::NAME,
+                    "description": "Plan or start one artifact packaging gate: docker build of a repository Dockerfile, then an import smoke run of the image that was built. Catches packaging failures and dead exports that reading source cannot. The caller names the Dockerfile, build context, and the arguments passed to the built image; this server derives every Docker flag, the unique image tag, and the cleanup. Smoke arguments are placed after the image name, so they are the container command and can never be reinterpreted as Docker options. The smoke run is pinned to --network none so a dead export cannot be masked by a successful download; the build itself has the network. With dry_run=false, run in the background and return a log_id to poll with read_command_log. The built image is always removed afterwards. Shares the two-job background cap.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "dockerfile": {
+                                "type": "string",
+                                "description": "Existing normalized repository-relative Dockerfile; symlinked and traversing paths are refused."
+                            },
+                            "context": {
+                                "type": "string",
+                                "description": "Normalized repository-relative build context directory. Defaults to the repository root."
+                            },
+                            "smoke_args": {
+                                "type": "array",
+                                "items": {"type": "string", "maxLength": 4096},
+                                "maxItems": 32,
+                                "description": "Command and arguments run inside the built image, for example [\"node\",\"-e\",\"require('.')\"]. Empty runs the image's own default command."
+                            },
+                            "build_timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3600,
+                                "description": "Build timeout in seconds. Defaults to 1800."
+                            },
+                            "smoke_timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 600,
+                                "description": "Import smoke timeout in seconds. Defaults to 300."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Return the exact build, smoke, and cleanup plan without invoking Docker. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Execution requires the exact phrase: run artifact build check"
+                            }
+                        },
+                        "required": ["dockerfile"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::compose_stack_run::NAME,
                     "description": "Plan or start one named Docker Compose stack proof. The compose file and every Docker argument are derived by this server from the action name; no caller-supplied Docker arguments are accepted. With dry_run=false, start the stack in the background, return a log_id immediately, and poll with read_command_log. Teardown is scoped to this server's own Compose project name and is always attempted, so a proof cannot stop an operator's own stack and cannot leave containers running. Unlike task_image_python_run, this path runs with networking enabled because a stack proof exercises service-to-service traffic. Compose, task-image, Harbor, and validation-profile jobs share a two-job cap.",
                     "inputSchema": {

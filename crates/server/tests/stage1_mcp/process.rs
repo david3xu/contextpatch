@@ -10,6 +10,38 @@ use serde_json::Value;
 use crate::support::*;
 
 #[test]
+fn stage2_artifact_build_check_run_plans_a_build_and_a_networkless_smoke() {
+    let root = git_repo("stage2_artifact_build_check_run_plans");
+    std::fs::create_dir_all(root.join("packaging")).unwrap();
+    std::fs::write(root.join("packaging/Dockerfile"), "FROM scratch\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"artifact_build_check_run","arguments":{"dockerfile":"packaging/Dockerfile","smoke_args":["node","-e","require('.')"]}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"artifact_build_check_run","arguments":{"dockerfile":"../escape/Dockerfile"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"artifact_build_check_run","arguments":{"dockerfile":"packaging/Dockerfile","dry_run":false}}}"#,
+        ],
+    );
+
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "\"build\"");
+    assert_text(&responses[0], "\"packaging/Dockerfile\"");
+    assert_text(&responses[0], "contextpatch-artifact:");
+    // The smoke half is isolated even though the build half is not.
+    assert_text(&responses[0], "\"smoke_network\": \"none\"");
+    // The built image is scheduled for removal in the same plan.
+    assert_text(&responses[0], "\"image_cleanup\"");
+
+    // Traversal is refused before Docker is involved.
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "repository-relative");
+
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "run artifact build check");
+}
+
+#[test]
 fn stage2_compose_stack_run_plans_a_named_proof_and_scopes_its_teardown() {
     let root = git_repo("stage2_compose_stack_run_plans_a_named_proof");
     std::fs::create_dir_all(root.join("compose")).unwrap();

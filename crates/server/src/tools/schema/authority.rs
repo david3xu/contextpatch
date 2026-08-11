@@ -87,6 +87,9 @@ fn executes_repository_code(name: &str) -> bool {
         // Containers run repository-defined images with networking enabled, so this is the
         // networked counterpart to the isolated task-image path rather than a sibling of it.
         || name == process::compose_stack_run::NAME
+        // The build half has the network and runs repository-authored Dockerfile steps, even
+        // though the smoke half is pinned to `--network none`.
+        || name == process::artifact_build_check_run::NAME
         || name == setup::setup_profile_run::NAME
         || name == native::native_build_run::NAME
         || name == native::native_device_run::NAME

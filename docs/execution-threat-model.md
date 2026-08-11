@@ -95,7 +95,7 @@ repository-controlled code inheriting this server's environment and network capa
 Open-world: `git_remote_check`, `git_push_exact`, `git_branch_prepare`, `git_merge_readiness`,
 `github_fork_prepare`, `github_pr_run`, `run_guarded_command`, `artifact_python_run`,
 `validation_profile_run`, `harbor_run_start`, `setup_profile_run`, `native_build_run`,
-`native_device_run`, `fixture_generator_run`, `base_image_check_run`, `compose_stack_run`, and
+`native_device_run`, `fixture_generator_run`, `base_image_check_run`, `compose_stack_run`, `artifact_build_check_run`, and
 `project_execute`, which dispatches every inner action.
 
 Closed-world by isolation: `task_image_python_run` and `image_cleanliness_check_run`, both of
@@ -139,7 +139,14 @@ tmpfs. `image_cleanliness_check_run` runs `docker run --rm --network none` with 
 entrypoint. `compose_stack_run` is explicitly **not** in this category: it is allowlisted by
 construction rather than isolated, since its containment comes from a per-action pinned compose
 file, server-derived argv, and a project-scoped teardown, while the containers it starts have the
-network and the server user's permissions. `artifact_python_run` refuses caller-supplied executable paths, shell snippets, and
+network and the server user's permissions.
+
+`artifact_build_check_run` splits the two halves deliberately: the build has the network, because
+dependency installation is most of what a build does, while the import smoke is pinned to
+`--network none` so a dead export cannot be masked by a successful download. Neither half is a
+sandbox. `docker build` executes repository-authored Dockerfile steps through the Docker daemon,
+which conventionally runs as root and is not namespaced from the host the way the task image is, so
+the authority of a Dockerfile is at least that of the server user and should be reviewed as such. `artifact_python_run` refuses caller-supplied executable paths, shell snippets, and
 per-request environment overrides.
 
 `run_guarded_command` has none of those properties. It is a narrowed policy over a trusted

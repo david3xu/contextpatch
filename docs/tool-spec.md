@@ -40,6 +40,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `read_command_log` | No | Reads captured command logs and asynchronous lifecycle state by opaque id |
 | `harbor_run_start` | Harbor job artifacts | Starts one typed Harbor run asynchronously and exposes pollable structured evidence through an opaque log id |
 | `compose_stack_run` | Docker containers, images, and volumes in this server's own Compose project | Plans a named Compose stack proof; confirmed execution starts asynchronously, returns a pollable log id, and always attempts a project-scoped teardown |
+| `artifact_build_check_run` | One uniquely tagged Docker image, always removed afterwards | Plans a Docker build of a repository Dockerfile plus a networkless import smoke run of the built image; confirmed execution starts asynchronously and returns a pollable log id |
 | `validation_profile_run` | No source edits | Starts predefined allowlisted validation command sequences asynchronously |
 | `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
 | `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
@@ -994,6 +995,36 @@ Rules:
 - Offsets are character offsets in the redacted UTF-8 log text, not byte offsets.
 - The response must report lifecycle status. Ordinary completed logs report `completed`; asynchronous logs may report `running`, `completed`, `failed`, or `timed_out`.
 - An asynchronous log still marked `running` but owned by an earlier server instance must report `unknown`. The caller must inspect current repository and external state before retrying because the earlier process outcome is not known.
+
+### `artifact_build_check_run`
+
+Plans one artifact packaging gate, and on confirmation runs it in a background worker: a Docker build of a repository Dockerfile followed by an import smoke run of the image that was built.
+
+Required inputs:
+
+- `dockerfile`: existing normalized repository-relative regular file
+
+Optional inputs:
+
+- `context`: normalized repository-relative directory; defaults to the repository root
+- `smoke_args`: at most 32 arguments of at most 4096 bytes, run inside the built image; empty runs the image's own default command
+- `build_timeout_secs`: from 1 to 3600; defaults to 1800
+- `smoke_timeout_secs`: from 1 to 600; defaults to 300
+- `dry_run`: defaults to `true`
+- `confirm`: execution requires the exact phrase `run artifact build check`
+
+Rules:
+
+- The caller may name a Dockerfile, a build context, and arguments for the built image. Every Docker flag, the image tag, and the cleanup argv must be derived by the server; no caller-supplied Docker option, mount, or tag is accepted.
+- Paths must be validated descriptor-relative with no-follow at every component, so traversal and symlinked components are refused before Docker is invoked.
+- The image tag must be unique per plan, so a concurrent job's cleanup cannot remove another job's image.
+- `smoke_args` must be placed after the image name in the `docker run` argv, so they are the container command by construction and cannot be reinterpreted as Docker options.
+- The smoke run must be pinned to `--network none`, so a dead export cannot be masked by a successful download. The build itself retains network access.
+- The import smoke must not run when the build failed, and the built image must be removed after any attempt that may have created it, with the outcome reported as `cleanup_clean`.
+- The gate passes only when the build and the smoke run both succeed.
+- The tool must refuse execution for a selected repository.
+- The action must be annotated `openWorldHint: true`, because the build has the network and executes repository-authored Dockerfile steps.
+- Artifact, Compose, Harbor, task-image, and validation-profile runs share a limit of two active background jobs per server process.
 
 ### `compose_stack_run`
 

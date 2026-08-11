@@ -456,7 +456,7 @@ fn stage1_mcp_tools_work_together() {
     );
 
     let list = &responses[0]["result"]["tools"];
-    assert_eq!(list.as_array().unwrap().len(), 53, "{list}");
+    assert_eq!(list.as_array().unwrap().len(), 54, "{list}");
     for name in [
         "capability_manifest",
         "preflight_health",

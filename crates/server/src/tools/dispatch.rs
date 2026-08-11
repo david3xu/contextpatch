@@ -332,6 +332,9 @@ fn call_tool(
         tools::compose_stack_run::NAME => {
             tools::process::call_compose_stack_run(repository.root(), arguments)
         }
+        tools::artifact_build_check_run::NAME => {
+            tools::process::call_artifact_build_check_run(repository.root(), arguments)
+        }
         tools::validation_profile_run::NAME => {
             tools::process::call_validation_profile_run(repository.root(), arguments)
         }
