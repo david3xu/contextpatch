@@ -19,6 +19,11 @@ use crate::tools::ToolSurface;
 // migration needs to read all six from one place.
 pub(crate) use authority::RemoteReach;
 pub(crate) use capability::{capability_manifest_definition, preflight_health_definition};
+pub(crate) use fixtures::{
+    base_image_check_run_definition, fixture_generator_run_definition,
+    fixture_manifest_refresh_definition, fixture_manifest_verify_definition,
+};
+pub(crate) use github::{github_fork_prepare_definition, github_pr_run_definition};
 pub(crate) use native::{native_build_run_definition, native_device_run_definition};
 pub(crate) use setup::setup_profile_run_definition;
 // Still test-only: production reads these through `add_always_allow_annotations`, which lives here.
@@ -37,9 +42,7 @@ fn internal_tool_definitions() -> Vec<Value> {
     );
     definitions.extend(files::definitions());
     definitions.extend(process::definitions());
-    definitions.extend(fixtures::definitions());
     definitions.extend(git::definitions());
-    definitions.extend(github::definitions());
     for definition in &mut definitions {
         add_always_allow_annotations(definition);
     }

@@ -116,6 +116,72 @@ static REGISTRY: &[ToolDescriptor] = &[
         read_only: false,
         serializes_mutation: true,
     },
+    ToolDescriptor {
+        name: crate::tools::fixture_generator_run::NAME,
+        schema: crate::tools::schema::fixture_generator_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::fixtures::call_fixture_generator_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::base_image_check_run::NAME,
+        schema: crate::tools::schema::base_image_check_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::fixtures::call_base_image_check_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::fixture_manifest_verify::NAME,
+        schema: crate::tools::schema::fixture_manifest_verify_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::fixtures::call_fixture_manifest_verify(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::fixture_manifest_refresh::NAME,
+        schema: crate::tools::schema::fixture_manifest_refresh_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::fixtures::call_fixture_manifest_refresh(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::github_pr_run::NAME,
+        schema: crate::tools::schema::github_pr_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::github::call_github_pr_run(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::DirectRemote,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::github_fork_prepare::NAME,
+        schema: crate::tools::schema::github_fork_prepare_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::github::call_github_fork_prepare(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::DirectRemote,
+        read_only: false,
+        serializes_mutation: true,
+    },
 ];
 
 pub(crate) fn descriptor(name: &str) -> Option<&'static ToolDescriptor> {

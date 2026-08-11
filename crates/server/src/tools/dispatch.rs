@@ -301,18 +301,6 @@ fn call_tool(
         tools::run_guarded_command::NAME => {
             tools::process::call_run_guarded_command(repository.root(), arguments)
         }
-        tools::fixture_generator_run::NAME => {
-            tools::fixtures::call_fixture_generator_run(repository.root(), arguments)
-        }
-        tools::base_image_check_run::NAME => {
-            tools::fixtures::call_base_image_check_run(repository.root(), arguments)
-        }
-        tools::fixture_manifest_verify::NAME => {
-            tools::fixtures::call_fixture_manifest_verify(repository.root(), arguments)
-        }
-        tools::fixture_manifest_refresh::NAME => {
-            tools::fixtures::call_fixture_manifest_refresh(repository.root(), arguments)
-        }
         tools::read_command_log::NAME => tools::process::call_read_command_log(arguments),
         tools::image_cleanliness_check_run::NAME => {
             tools::process::call_image_cleanliness_check_run(arguments)
@@ -381,12 +369,6 @@ fn call_tool(
         tools::git_push_exact::NAME => {
             tools::git::handlers::call_git_push_exact(repository.git_repository(), arguments)
         }
-        tools::github_pr_run::NAME => {
-            tools::github::call_github_pr_run(repository.root(), arguments)
-        }
-        tools::github_fork_prepare::NAME => {
-            tools::github::call_github_fork_prepare(repository.root(), arguments)
-        }
         unknown => Err(format!("unknown tool: {unknown}")),
     }
 }
@@ -406,7 +388,6 @@ fn deadline_for(name: &str) -> Option<Duration> {
         | tools::file_info::NAME
         | tools::list_directory::NAME
         | tools::read_file_bytes::NAME
-        | tools::fixture_manifest_verify::NAME
         | tools::read_command_log::NAME => Some(READ_DEADLINE),
 
         tools::replace_exact::NAME
@@ -437,7 +418,6 @@ fn deadline_for(name: &str) -> Option<Duration> {
         | tools::git_branch_prepare::NAME
         | tools::git_merge_readiness::NAME
         | tools::git_push_exact::NAME
-        | tools::github_pr_run::NAME
         | tools::github_fork_prepare::NAME => Some(GIT_DEADLINE),
 
         _ => None,
@@ -462,8 +442,6 @@ fn serializes_repository_mutation(name: &str) -> bool {
             | tools::artifact_write_base64::NAME
             | tools::bulk_write_new_files_base64::NAME
             | tools::create_directory::NAME
-            | tools::fixture_generator_run::NAME
-            | tools::fixture_manifest_refresh::NAME
             | tools::git_commit_exact::NAME
             | tools::git_commit_scoped::NAME
             | tools::git_commit_prefix::NAME
@@ -477,7 +455,6 @@ fn serializes_repository_mutation(name: &str) -> bool {
             | tools::git_branch_prepare::NAME
             | tools::git_merge_readiness::NAME
             | tools::git_push_exact::NAME
-            | tools::github_fork_prepare::NAME
     )
 }
 

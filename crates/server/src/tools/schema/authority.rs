@@ -10,7 +10,7 @@
 //! documented container isolation. See `docs/execution-threat-model.md`.
 
 use crate::tools::git::names as git_names;
-use crate::tools::{files, fixtures, github, process, project};
+use crate::tools::{files, process, project};
 
 /// How far an advertised action can reach beyond the local host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,8 +72,6 @@ fn is_direct_remote(name: &str) -> bool {
         || name == git_names::git_push_exact::NAME
         || name == git_names::git_branch_prepare::NAME
         || name == git_names::git_merge_readiness::NAME
-        || name == github::github_fork_prepare::NAME
-        || name == github::github_pr_run::NAME
 }
 
 /// Actions whose execution happens under the documented container isolation with networking off.
@@ -94,8 +92,6 @@ fn executes_repository_code(name: &str) -> bool {
         // The build half has the network and runs repository-authored Dockerfile steps, even
         // though the smoke half is pinned to `--network none`.
         || name == process::artifact_build_check_run::NAME
-        || name == fixtures::fixture_generator_run::NAME
-        || name == fixtures::base_image_check_run::NAME
 }
 
 /// Whether an action only observes state and never mutates the repository or host.
@@ -112,7 +108,6 @@ pub fn is_read_only(name: &str) -> bool {
         || name == files::list_directory::NAME
         || name == files::read_file_bytes::NAME
         || name == process::read_command_log::NAME
-        || name == fixtures::fixture_manifest_verify::NAME
         || name == git_names::git_remote_list::NAME
         || name == git_names::git_merge_readiness::NAME
         || name == git_names::git_staged_scope_check::NAME
