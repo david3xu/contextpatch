@@ -161,14 +161,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         ),
         "cargo" => match subcommand {
             Some("check" | "test" | "build" | "clippy") => true,
-            // `fmt` is admitted only as a check, never as a rewrite. Reformatting the tree is a
-            // mutation, and this surface grants none; the reason to permit it at all is that a gate
-            // whose result cannot be captured is not evidence, and `--check` produces a diff and an
-            // exit code without touching a file. `--emit` is refused because it writes.
-            Some("fmt") => {
-                args.iter().any(|arg| arg == "--check")
-                    && !args.iter().any(|arg| arg.starts_with("--emit"))
-            }
+            Some("fmt") => cargo_fmt_arguments_are_allowed(args),
             _ => false,
         },
         "bun" => matches!(subcommand, Some("run" | "test")),
@@ -193,6 +186,45 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     }
 
     Ok(())
+}
+
+/// `cargo fmt` arguments, listed positively so a later rustfmt option cannot widen this surface.
+///
+/// `fmt` is admitted only as a check, never as a rewrite: reformatting the tree is a mutation and
+/// this surface grants none. The reason to permit it at all is that a gate whose result cannot be
+/// captured is not evidence, and `--check` reports a diff and an exit code without touching a file.
+///
+/// This began as a scan that refused `--emit`, which is a denylist, and C37 is the argument that a
+/// denylist does not hold: the option worth refusing is whatever the next release adds. Measured
+/// against the current rustfmt, neither `--config emit_mode=Files` nor `--config-path` wrote a file
+/// under `--check`, so the reason to refuse them is not that they were shown to write. It is that
+/// anything not named here is refused, which does not depend on that measurement surviving an
+/// upgrade. Widening this is deliberately an edit to this list.
+const CARGO_FMT_CHECK: &str = "--check";
+
+/// The one option whose following argument is a value rather than an option.
+const CARGO_FMT_PACKAGE: &str = "-p";
+
+const CARGO_FMT_OPTIONS: &[&str] = &["--all", CARGO_FMT_CHECK, "--"];
+
+fn cargo_fmt_arguments_are_allowed(args: &[String]) -> bool {
+    let mut checked = false;
+    let mut expecting_package_name = false;
+    for argument in args.iter().skip(1).map(String::as_str) {
+        if expecting_package_name {
+            expecting_package_name = false;
+            continue;
+        }
+        if argument == CARGO_FMT_PACKAGE {
+            expecting_package_name = true;
+            continue;
+        }
+        if !CARGO_FMT_OPTIONS.contains(&argument) {
+            return false;
+        }
+        checked |= argument == CARGO_FMT_CHECK;
+    }
+    checked && !expecting_package_name
 }
 
 /// ripgrep options that only search, listed positively so a new release cannot widen this surface.
@@ -525,6 +557,8 @@ mod tests {
             vec!["fmt", "--", "--check"],
             vec!["fmt", "--all", "--", "--check"],
             vec!["fmt", "--check"],
+            // A package name is a value rather than an option, so it is not matched against the list.
+            vec!["fmt", "-p", "core", "--check"],
         ] {
             validate_command("cargo", &args(&values))
                 .unwrap_or_else(|error| panic!("{values:?} must be permitted: {error}"));
@@ -533,8 +567,15 @@ mod tests {
         for values in [
             vec!["fmt"],
             vec!["fmt", "--all"],
-            // Writes files despite naming a check.
             vec!["fmt", "--check", "--emit", "files"],
+            // Refused for being unnamed rather than for writing. Measured against the current
+            // rustfmt neither of these wrote a file under `--check`, and the list does not rest on
+            // that measurement surviving an upgrade.
+            vec!["fmt", "--check", "--config", "emit_mode=Files"],
+            vec!["fmt", "--check", "--config-path", "rustfmt.toml"],
+            // `-p` consumes the argument after it, so the check is no longer present.
+            vec!["fmt", "-p", "--check"],
+            vec!["fmt", "--check", "-p"],
         ] {
             let message = refusal("cargo", &values);
             assert!(
