@@ -252,15 +252,15 @@ pub(crate) fn harbor_run_start_definition() -> Value {
                         "agent": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": 128,
+                            "maxLength": crate::tools::process::MAX_HARBOR_AGENT_LEN,
                             "pattern": "^[A-Za-z0-9._][A-Za-z0-9._-]*$",
                             "description": "Harbor agent identifier. A leading hyphen is refused."
                         },
                         "timeout_secs": {
                             "type": "integer",
                             "minimum": 1,
-                            "maximum": 3600,
-                            "description": "Run timeout in seconds. Defaults to 3600."
+                            "maximum": crate::tools::process::MAX_HARBOR_TIMEOUT_SECS,
+                            "description": format!("Run timeout in seconds. Defaults to {}.", crate::tools::process::MAX_HARBOR_TIMEOUT_SECS)
                         }
                     },
                     "required": ["agent"],

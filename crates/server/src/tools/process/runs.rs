@@ -7,20 +7,30 @@ use crate::tools::common::{
     optional_bool, optional_string, optional_string_array, optional_u64, required_string,
 };
 
+/// The longest a Harbor run may be given, both advertised and enforced from here.
+///
+/// Numerically equal to the Compose stack cap and deliberately a separate constant. The two bound
+/// different work, so collapsing them because the numbers agree today would couple them: the next
+/// time one changed, the other would move silently with it.
+pub(crate) const MAX_HARBOR_TIMEOUT_SECS: u64 = 3600;
+
+/// The longest Harbor agent identifier accepted, advertised and enforced from here.
+pub(crate) const MAX_HARBOR_AGENT_LEN: usize = 128;
+
 pub(crate) fn call_harbor_run_start<'a>(
     repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let project = optional_string(arguments, "project")?.unwrap_or("task");
     let agent = required_string(arguments, "agent")?;
-    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(3600);
-    if timeout_secs == 0 || timeout_secs > 3600 {
-        return Err(
-            "harbor_run_start refused: timeout_secs must be between 1 and 3600".to_string(),
-        );
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(MAX_HARBOR_TIMEOUT_SECS);
+    if timeout_secs == 0 || timeout_secs > MAX_HARBOR_TIMEOUT_SECS {
+        return Err(format!(
+            "harbor_run_start refused: timeout_secs must be between 1 and {MAX_HARBOR_TIMEOUT_SECS}"
+        ));
     }
     if agent.is_empty()
-        || agent.len() > 128
+        || agent.len() > MAX_HARBOR_AGENT_LEN
         || agent.starts_with('-')
         || !agent
             .chars()
