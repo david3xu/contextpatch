@@ -524,4 +524,51 @@ mod tests {
         assert_eq!(deadline_for(tools::validation_profile_run::NAME), None);
         assert_eq!(deadline_for(tools::native_build_run::NAME), None);
     }
+
+    /// Every tool against every behavioural axis, recorded before the registry migration.
+    ///
+    /// These four facts are decided in four different functions across two files today, and the
+    /// registry collapses them into fields on one descriptor. Nothing else checks that they survive
+    /// that move: a tool that silently loses its mutation lock or its deadline still passes every
+    /// behavioural test, because the tests exercise tools one at a time and none of them asserts the
+    /// classification itself.
+    ///
+    /// File locations are deliberately excluded. Which module owns a handler is organisation, not
+    /// contract, and it changes on purpose when the oversized modules are split.
+    #[test]
+    fn the_per_tool_classification_matrix_matches_its_recorded_snapshot() {
+        use contextpatch_core::process::deadline::{GIT_DEADLINE, READ_DEADLINE, WRITE_DEADLINE};
+
+        let mut names = crate::tools::schema::internal_action_names();
+        names.push(tools::project_execute::NAME.to_string());
+        names.sort();
+        names.dedup();
+
+        let mut rendered = String::from("tool\tdeadline\tlock\treach\tread_only\n");
+        for name in &names {
+            let deadline = match deadline_for(name) {
+                Some(limit) if limit == READ_DEADLINE => "read",
+                Some(limit) if limit == WRITE_DEADLINE => "write",
+                Some(limit) if limit == GIT_DEADLINE => "git",
+                Some(_) => "other",
+                None => "none",
+            };
+            rendered.push_str(&format!(
+                "{name}\t{deadline}\t{}\t{:?}\t{}\n",
+                if serializes_repository_mutation(name) {
+                    "yes"
+                } else {
+                    "no"
+                },
+                crate::tools::schema::remote_reach(name),
+                if crate::tools::schema::is_read_only(name) {
+                    "yes"
+                } else {
+                    "no"
+                }
+            ));
+        }
+
+        crate::tools::snapshot_fixture::assert_matches("tool-matrix.tsv", &rendered);
+    }
 }

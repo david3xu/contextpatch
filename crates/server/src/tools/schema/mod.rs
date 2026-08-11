@@ -13,6 +13,15 @@ mod setup;
 
 use crate::tools::ToolSurface;
 
+// Re-exported so the advertised-authority axes can be asserted alongside the deadline and
+// mutation-lock axes that live in `dispatch`. Those six facts are currently decided in five separate
+// files; the registry migration collapses them, and until it does, the snapshot that guards the
+// migration needs to read all six from one place.
+// Test-gated for now because the snapshot is the only consumer; the registry makes it unconditional
+// when the descriptor carries these as fields.
+#[cfg(test)]
+pub(crate) use authority::{is_read_only, remote_reach};
+
 fn internal_tool_definitions() -> Vec<Value> {
     let mut definitions = Vec::new();
     definitions.extend(capability::definitions());
@@ -222,6 +231,27 @@ mod tests {
         let mut sorted = project.clone();
         sorted.sort();
         assert_eq!(project, sorted);
+    }
+
+    /// The advertised surface, recorded before the tool registry migration.
+    ///
+    /// Names, schemas, descriptions, and annotations are the entire public contract of this server, so
+    /// a migration that moves all of them must prove it produced the same thing rather than merely
+    /// something that works. Definitions are sorted by name because registration order is not part of
+    /// the contract and would otherwise churn when modules are split.
+    #[test]
+    fn the_advertised_tool_surface_matches_its_recorded_snapshot() {
+        let mut definitions = internal_tool_definitions();
+        definitions.push(project_tool_definition());
+        definitions.sort_by(|left, right| {
+            left.get("name")
+                .and_then(Value::as_str)
+                .cmp(&right.get("name").and_then(Value::as_str))
+        });
+
+        let rendered = serde_json::to_string_pretty(&Value::Array(definitions))
+            .expect("tool definitions must serialize");
+        crate::tools::snapshot_fixture::assert_matches("tools-surface.json", &(rendered + "\n"));
     }
 
     #[test]
