@@ -146,6 +146,37 @@ pub(crate) fn definitions() -> Vec<Value> {
                 }
         ),
         json!({
+                    "name": tools::compose_stack_run::NAME,
+                    "description": "Plan or start one named Docker Compose stack proof. The compose file and every Docker argument are derived by this server from the action name; no caller-supplied Docker arguments are accepted. With dry_run=false, start the stack in the background, return a log_id immediately, and poll with read_command_log. Teardown is scoped to this server's own Compose project name and is always attempted, so a proof cannot stop an operator's own stack and cannot leave containers running. Unlike task_image_python_run, this path runs with networking enabled because a stack proof exercises service-to-service traffic. Compose, task-image, Harbor, and validation-profile jobs share a two-job cap.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": contextpatch_core::process::compose_stack::action_names(),
+                                "description": "Named stack proof. Each action is pinned to one reviewed compose file."
+                            },
+                            "timeout_secs": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3600,
+                                "description": "Stack timeout in seconds. Defaults to 1800."
+                            },
+                            "dry_run": {
+                                "type": "boolean",
+                                "description": "Return the exact up and teardown plan without invoking Docker. Defaults to true."
+                            },
+                            "confirm": {
+                                "type": "string",
+                                "description": "Execution requires the exact phrase: run compose stack"
+                            }
+                        },
+                        "required": ["action"],
+                        "additionalProperties": false
+                    }
+                }
+        ),
+        json!({
                     "name": tools::harbor_run_start::NAME,
                     "description": "Start one typed Harbor run in the background and return a log_id immediately. Poll with read_command_log; completed logs include structured Harbor evidence. Harbor, task-image, and validation-profile jobs share a two-job cap.",
                     "inputSchema": {

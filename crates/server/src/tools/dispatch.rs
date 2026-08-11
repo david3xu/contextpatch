@@ -329,6 +329,9 @@ fn call_tool(
         tools::harbor_run_start::NAME => {
             tools::process::call_harbor_run_start(repository.root(), arguments)
         }
+        tools::compose_stack_run::NAME => {
+            tools::process::call_compose_stack_run(repository.root(), arguments)
+        }
         tools::validation_profile_run::NAME => {
             tools::process::call_validation_profile_run(repository.root(), arguments)
         }

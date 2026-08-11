@@ -95,11 +95,17 @@ repository-controlled code inheriting this server's environment and network capa
 Open-world: `git_remote_check`, `git_push_exact`, `git_branch_prepare`, `git_merge_readiness`,
 `github_fork_prepare`, `github_pr_run`, `run_guarded_command`, `artifact_python_run`,
 `validation_profile_run`, `harbor_run_start`, `setup_profile_run`, `native_build_run`,
-`native_device_run`, `fixture_generator_run`, `base_image_check_run`, and `project_execute`,
-which dispatches every inner action.
+`native_device_run`, `fixture_generator_run`, `base_image_check_run`, `compose_stack_run`, and
+`project_execute`, which dispatches every inner action.
 
 Closed-world by isolation: `task_image_python_run` and `image_cleanliness_check_run`, both of
 which run with networking disabled.
+
+The two Docker paths are classified differently on purpose, and the difference is the whole point.
+`task_image_python_run` pins `--network none`; `compose_stack_run` does not, because a stack proof
+exists to exercise service-to-service traffic. Running a Docker command is therefore not what makes
+an action closed-world — the isolation flags are. A test pins both classifications so the pair
+cannot drift into a single blanket claim.
 
 `git_merge_readiness` is both read-only and open-world, because it may fetch from a remote in
 order to report state. That combination is deliberate and pinned by test.
@@ -130,7 +136,10 @@ sandbox vocabulary has leaked from the first to the second.
 `task_image_python_run` is sandboxed: read-only repository mount, disabled networking, all
 capabilities dropped, `no-new-privileges`, PID cap, read-only container root, bounded `/tmp`
 tmpfs. `image_cleanliness_check_run` runs `docker run --rm --network none` with a fixed
-entrypoint. `artifact_python_run` refuses caller-supplied executable paths, shell snippets, and
+entrypoint. `compose_stack_run` is explicitly **not** in this category: it is allowlisted by
+construction rather than isolated, since its containment comes from a per-action pinned compose
+file, server-derived argv, and a project-scoped teardown, while the containers it starts have the
+network and the server user's permissions. `artifact_python_run` refuses caller-supplied executable paths, shell snippets, and
 per-request environment overrides.
 
 `run_guarded_command` has none of those properties. It is a narrowed policy over a trusted

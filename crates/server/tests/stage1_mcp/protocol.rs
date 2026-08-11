@@ -10,6 +10,8 @@ use crate::support::*;
 const EXPECTED_OPEN_WORLD_ACTIONS: &[&str] = &[
     "artifact_python_run",
     "base_image_check_run",
+    // Runs a repository-defined stack with networking enabled, unlike the isolated task image.
+    "compose_stack_run",
     "fixture_generator_run",
     "git_branch_prepare",
     "git_merge_readiness",

@@ -30,6 +30,10 @@ pub mod harbor_run_start {
     pub const NAME: &str = "harbor_run_start";
 }
 
+pub mod compose_stack_run {
+    pub const NAME: &str = "compose_stack_run";
+}
+
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Component, Path, PathBuf};
@@ -235,6 +239,142 @@ fn panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
     } else {
         "unknown panic payload".to_string()
     }
+}
+
+/// Plan or start one named Compose stack proof.
+///
+/// The argv is derived in core from the action name alone, so no caller-supplied Docker arguments
+/// reach the child. Execution is asynchronous for the same reason Harbor runs are: a stack proof
+/// routinely outlives any reply deadline, and the 600-second guarded-command cap does not apply to
+/// this path because it never passes through the guarded-command allowlist.
+pub(crate) fn call_compose_stack_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let repository_root = repository_root.into();
+    // Checked before any argument is read, so planning against a selected repository is refused
+    // exactly where executing would be.
+    contextpatch_core::process::compose_stack::ensure_compose_root_is_addressable(repository_root)
+        .map_err(|error| format!("compose_stack_run refused: {error}"))?;
+
+    let action = required_string(arguments, "action")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    let plan = contextpatch_core::process::compose_stack::plan_compose_stack_run(
+        repository_root,
+        action,
+        timeout_secs,
+    )
+    .map_err(|error| format!("compose_stack_run refused: {error}"))?;
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::compose_stack_run::NAME,
+            "dry_run": true,
+            "action": plan.action(),
+            "compose_file": plan.compose_file(),
+            "project_name": plan.project_name(),
+            "up": {
+                "program": "docker",
+                "args": plan.up_args(),
+                "timeout_secs": plan.up_timeout().as_secs()
+            },
+            "teardown": {
+                "program": "docker",
+                "args": plan.down_args(),
+                "timeout_secs": plan.down_timeout().as_secs()
+            },
+            "network": "enabled",
+            "required_confirm_for_run": contextpatch_core::process::compose_stack::CONFIRMATION
+        }))
+        .map_err(|error| format!("compose_stack_run refused: {error}"));
+    }
+
+    if confirm != Some(contextpatch_core::process::compose_stack::CONFIRMATION) {
+        return Err(format!(
+            "compose_stack_run refused: dry_run=false requires confirm: {:?}",
+            contextpatch_core::process::compose_stack::CONFIRMATION
+        ));
+    }
+
+    let initial_log = serde_json::to_string_pretty(&json!({
+        "tool": crate::tools::compose_stack_run::NAME,
+        "status": "running",
+        "action": plan.action(),
+        "compose_file": plan.compose_file(),
+        "project_name": plan.project_name()
+    }))
+    .map_err(|error| format!("compose_stack_run refused: {error}"))?;
+
+    let worker_plan = plan.clone();
+    let log_id = start_background_job(
+        crate::tools::compose_stack_run::NAME,
+        "compose-stack",
+        &initial_log,
+        move |_| {
+            let result = contextpatch_core::process::compose_stack::run_compose_stack(
+                &worker_plan,
+                Some(contextpatch_core::process::compose_stack::CONFIRMATION),
+            )
+            .map_err(|error| format!("compose_stack_run failed: {error}"))?;
+
+            let terminal_status = if result.up.timed_out {
+                "timed_out"
+            } else if result.success() {
+                "completed"
+            } else {
+                "failed"
+            };
+            let result_value = json!({
+                "tool": crate::tools::compose_stack_run::NAME,
+                "status": terminal_status,
+                "dry_run": false,
+                "action": worker_plan.action(),
+                "compose_file": worker_plan.compose_file(),
+                "project_name": worker_plan.project_name(),
+                "up": compose_command_value(&result.up),
+                "teardown": result.teardown.as_ref().map(compose_command_value),
+                // Surfaced separately because a leaked stack must not be hidden by a passing proof.
+                "teardown_clean": result.teardown_clean()
+            });
+            let log = serde_json::to_string_pretty(&result_value)
+                .map_err(|error| format!("compose_stack_run failed: {error}"))?;
+            Ok(BackgroundJobOutcome {
+                log,
+                status: terminal_status,
+                exit_code: result.up.exit_code,
+                timed_out: result.up.timed_out,
+            })
+        },
+    )?;
+
+    Ok(format!(
+        "log_id: {log_id}\n{}",
+        serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::compose_stack_run::NAME,
+            "status": "running",
+            "action": plan.action(),
+            "project_name": plan.project_name(),
+            "poll_with": crate::tools::read_command_log::NAME
+        }))
+        .map_err(|error| format!("compose_stack_run refused: {error}"))?
+    ))
+}
+
+fn compose_command_value(
+    result: &contextpatch_core::process::compose_stack::ComposeStackCommandResult,
+) -> Value {
+    json!({
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "duration_ms": result.duration_ms,
+        "stdout": result.stdout,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr": result.stderr,
+        "stderr_truncated": result.stderr_truncated
+    })
 }
 
 pub(crate) fn call_task_image_python_run<'a>(

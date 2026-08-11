@@ -10,6 +10,46 @@ use serde_json::Value;
 use crate::support::*;
 
 #[test]
+fn stage2_compose_stack_run_plans_a_named_proof_and_scopes_its_teardown() {
+    let root = git_repo("stage2_compose_stack_run_plans_a_named_proof");
+    std::fs::create_dir_all(root.join("compose")).unwrap();
+    std::fs::write(root.join("compose/full-platform.yml"), "services: {}\n").unwrap();
+
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compose_stack_run","arguments":{"action":"full-platform"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"compose_stack_run","arguments":{"action":"whole-world"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"compose_stack_run","arguments":{"action":"front-door"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"compose_stack_run","arguments":{"action":"full-platform","dry_run":false}}}"#,
+        ],
+    );
+
+    // The plan names the derived argv, so a reviewer can see exactly what would run.
+    assert_text(&responses[0], "\"dry_run\": true");
+    assert_text(&responses[0], "\"compose\"");
+    assert_text(&responses[0], "\"compose/full-platform.yml\"");
+    assert_text(&responses[0], "\"contextpatch-proof-full-platform\"");
+    assert_text(&responses[0], "\"--abort-on-container-exit\"");
+    // Teardown is planned up front and scoped to this server's own project.
+    assert_text(&responses[0], "\"down\"");
+    assert_text(&responses[0], "\"--project-name\"");
+
+    // An unknown action is refused and the real ones are named.
+    assert_eq!(responses[1]["result"]["isError"], true);
+    assert_text(&responses[1], "unknown compose stack action");
+    assert_text(&responses[1], "full-platform");
+
+    // A pinned compose file that is absent refuses by name rather than starting another stack.
+    assert_eq!(responses[2]["result"]["isError"], true);
+    assert_text(&responses[2], "compose/front-door.yml");
+
+    // Execution needs the exact confirmation.
+    assert_eq!(responses[3]["result"]["isError"], true);
+    assert_text(&responses[3], "run compose stack");
+}
+
+#[test]
 fn stage2_image_cleanliness_check_run_plans_bounded_docker_find() {
     let root = git_repo("stage2_image_cleanliness_check_run_plans_bounded_docker_find");
 

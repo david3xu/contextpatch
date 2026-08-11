@@ -84,6 +84,9 @@ fn executes_repository_code(name: &str) -> bool {
         || name == process::artifact_python_run::NAME
         || name == process::validation_profile_run::NAME
         || name == process::harbor_run_start::NAME
+        // Containers run repository-defined images with networking enabled, so this is the
+        // networked counterpart to the isolated task-image path rather than a sibling of it.
+        || name == process::compose_stack_run::NAME
         || name == setup::setup_profile_run::NAME
         || name == native::native_build_run::NAME
         || name == native::native_device_run::NAME
@@ -143,6 +146,18 @@ mod tests {
             RemoteReach::WrapperDispatch
         );
         assert!(remote_reach(project::project_execute::NAME).is_open_world());
+    }
+
+    /// The two Docker paths are deliberately classified differently: the task image pins
+    /// `--network none`, the compose stack does not.
+    #[test]
+    fn the_networked_docker_path_is_open_world_unlike_the_isolated_one() {
+        assert_eq!(
+            remote_reach(process::compose_stack_run::NAME),
+            RemoteReach::InheritedByExecutedCode
+        );
+        assert!(remote_reach(process::compose_stack_run::NAME).is_open_world());
+        assert!(!remote_reach(process::task_image_python_run::NAME).is_open_world());
     }
 
     #[test]

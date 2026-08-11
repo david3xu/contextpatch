@@ -39,6 +39,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `fixture_manifest_refresh` | Manifest file only | Regenerates fixture manifest from declared files/prefixes with dry-run, confirmation, and existing-manifest hash guard |
 | `read_command_log` | No | Reads captured command logs and asynchronous lifecycle state by opaque id |
 | `harbor_run_start` | Harbor job artifacts | Starts one typed Harbor run asynchronously and exposes pollable structured evidence through an opaque log id |
+| `compose_stack_run` | Docker containers, images, and volumes in this server's own Compose project | Plans a named Compose stack proof; confirmed execution starts asynchronously, returns a pollable log id, and always attempts a project-scoped teardown |
 | `validation_profile_run` | No source edits | Starts predefined allowlisted validation command sequences asynchronously |
 | `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
 | `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
@@ -993,6 +994,32 @@ Rules:
 - Offsets are character offsets in the redacted UTF-8 log text, not byte offsets.
 - The response must report lifecycle status. Ordinary completed logs report `completed`; asynchronous logs may report `running`, `completed`, `failed`, or `timed_out`.
 - An asynchronous log still marked `running` but owned by an earlier server instance must report `unknown`. The caller must inspect current repository and external state before retrying because the earlier process outcome is not known.
+
+### `compose_stack_run`
+
+Plans one named Docker Compose stack proof, and on confirmation starts it in a background worker, returning immediately with an opaque log id.
+
+Required inputs:
+
+- `action`: one of the named stack proofs, each pinned by this server to exactly one reviewed compose file
+
+Optional inputs:
+
+- `timeout_secs`: from 1 to 3600; defaults to 1800
+- `dry_run`: defaults to `true`
+- `confirm`: execution requires the exact phrase `run compose stack`
+
+Rules:
+
+- The compose file and every Docker argument must be derived by the server from the action name. No caller-supplied Docker argument, compose file path, service name, or project name is accepted.
+- An unknown action must be refused and the available actions named.
+- A pinned compose file that is not a regular file in the repository must be refused by name before Docker is invoked, so a wrong pin cannot start a different stack.
+- Every run must use this server's own Compose project name, so `down` cannot stop or delete a stack an operator is running by hand from the same compose file.
+- Teardown must be attempted after every outcome, including a failed or timed-out start, and its result reported separately as `teardown_clean` so a leaked stack is visible rather than hidden by a passing proof.
+- The tool must refuse execution for a selected repository, because a container receives argv paths rather than a directory descriptor.
+- Unlike `task_image_python_run`, this path runs with networking enabled and must be annotated `openWorldHint: true`.
+- Compose, Harbor, task-image, and validation-profile runs share a limit of two active background jobs per server process.
+- The start response must return `status: "running"`, the stable `log_id`, and the `read_command_log` polling tool.
 
 ### `harbor_run_start`
 
