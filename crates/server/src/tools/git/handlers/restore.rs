@@ -47,8 +47,7 @@ pub(crate) fn call_git_restore_exact<'a>(
     // and then used against another.
     let confined = policy.bind_root(authority);
     let root = confined.git();
-    let normalized_paths =
-        normalize_git_paths(tools::git_restore_exact::NAME, confined, &paths)?;
+    let normalized_paths = normalize_git_paths(tools::git_restore_exact::NAME, confined, &paths)?;
     let plan = core_restore::plan_restore_exact(root, &normalized_paths)
         .map_err(|error| refused(tools::git_restore_exact::NAME, error))?;
 

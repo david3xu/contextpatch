@@ -193,7 +193,9 @@ mod tests {
         let second = temp_root("second");
 
         assert_ne!(
-            identity_of(RepositoryRoot::from_path(&first)).unwrap().key(),
+            identity_of(RepositoryRoot::from_path(&first))
+                .unwrap()
+                .key(),
             identity_of(RepositoryRoot::from_path(&second))
                 .unwrap()
                 .key()
@@ -233,7 +235,9 @@ mod tests {
         let still_anchored = identity_of(RepositoryRoot::anchored(&root, &directory)).unwrap();
         assert_eq!(anchored.key(), still_anchored.key());
         assert_eq!(
-            identity_of(RepositoryRoot::from_path(&moved)).unwrap().key(),
+            identity_of(RepositoryRoot::from_path(&moved))
+                .unwrap()
+                .key(),
             anchored.key(),
             "the moved directory is the one that was anchored"
         );

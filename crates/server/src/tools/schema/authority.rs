@@ -165,7 +165,10 @@ mod tests {
 
     #[test]
     fn local_writes_stay_closed_world() {
-        assert_eq!(remote_reach(files::write_new_file::NAME), RemoteReach::Local);
+        assert_eq!(
+            remote_reach(files::write_new_file::NAME),
+            RemoteReach::Local
+        );
         assert!(!remote_reach(files::write_new_file::NAME).is_open_world());
     }
 

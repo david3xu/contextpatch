@@ -197,7 +197,10 @@ mod tests {
         let fewer = [entry("a.rs", "M", "aaa")];
         let more = [entry("a.rs", "M", "aaa"), entry("b.rs", "??", "bbb")];
 
-        assert_ne!(dirty_tree_fingerprint(&fewer), dirty_tree_fingerprint(&more));
+        assert_ne!(
+            dirty_tree_fingerprint(&fewer),
+            dirty_tree_fingerprint(&more)
+        );
     }
 
     #[test]

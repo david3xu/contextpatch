@@ -123,11 +123,8 @@ pub(crate) fn call_git_branch_prepare<'a>(
     // Confinement, required-file presence, and Git execution all derive from one authority, so a branch
     // preparation cannot verify a file in one directory and land the branch in another.
     let authority = repository_root.into();
-    let policy = repository_under_policy(
-        authority.git(),
-        TOOL,
-        WorktreeRootPolicy::ExactWorktreeRoot,
-    )?;
+    let policy =
+        repository_under_policy(authority.git(), TOOL, WorktreeRootPolicy::ExactWorktreeRoot)?;
     let confined = policy.bind_root(authority);
     let root = confined.git();
     ensure_remote_exists(TOOL, root, &remote)?;
@@ -318,7 +315,8 @@ pub(crate) fn call_git_merge_readiness(
 
     let base_commit = resolve_commit(TOOL, root, &base_ref)?;
     let target_commit = resolve_commit(TOOL, root, &target_ref)?;
-    let merge_base = git_stdout_for_tool(TOOL, root, &["merge-base", &base_commit, &target_commit])?;
+    let merge_base =
+        git_stdout_for_tool(TOOL, root, &["merge-base", &base_commit, &target_commit])?;
     let merge_base = merge_base.trim().to_string();
 
     let base_ahead_count = rev_count_for_tool(TOOL, root, &format!("{merge_base}..{base_commit}"))?;

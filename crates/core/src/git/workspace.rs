@@ -189,11 +189,9 @@ fn walk_selector_with_descriptors(
     let mut walked = PathBuf::new();
     for (index, component) in components.iter().enumerate() {
         walked.push(component.as_os_str());
-        let component_name =
-            std::ffi::CString::new(component.as_os_str().as_encoded_bytes()).map_err(|_| {
-                ContextPatchError::invalid(format!(
-                    "repository `{relative}` must not contain NUL"
-                ))
+        let component_name = std::ffi::CString::new(component.as_os_str().as_encoded_bytes())
+            .map_err(|_| {
+                ContextPatchError::invalid(format!("repository `{relative}` must not contain NUL"))
             })?;
 
         let child = unsafe {
@@ -247,9 +245,7 @@ fn classify_walk_failure(
     if inspected != 0 {
         let error = std::io::Error::last_os_error();
         if error.kind() == ErrorKind::NotFound {
-            return ContextPatchError::invalid(format!(
-                "repository `{relative}` does not exist"
-            ));
+            return ContextPatchError::invalid(format!("repository `{relative}` does not exist"));
         }
         return ContextPatchError::new(format!(
             "failed to inspect repository path component `{display}`: {error}"
@@ -382,9 +378,12 @@ mod tests {
             .to_string();
         assert_eq!(head_after_swap, original_head);
         assert_eq!(
-            state::stdout(selected.repository(), &["show", "-s", "--format=%s", "HEAD"])
-                .unwrap()
-                .trim(),
+            state::stdout(
+                selected.repository(),
+                &["show", "-s", "--format=%s", "HEAD"]
+            )
+            .unwrap()
+            .trim(),
             "original"
         );
 
@@ -412,7 +411,9 @@ mod tests {
         // The replacement is untouched: same head, same subject, still one commit.
         assert_eq!(state::rev_count(&target, "HEAD").unwrap(), 1);
         assert_eq!(
-            state::stdout(&target, &["rev-parse", "HEAD"]).unwrap().trim(),
+            state::stdout(&target, &["rev-parse", "HEAD"])
+                .unwrap()
+                .trim(),
             decoy_head_before
         );
         assert_eq!(
@@ -425,10 +426,7 @@ mod tests {
     fn commit_marker(root: &Path, contents: &str) {
         fs::write(root.join("marker.txt"), contents).unwrap();
         run_git(root, &["add", "."]);
-        run_git(
-            root,
-            &["commit", "--quiet", "-m", contents.trim()],
-        );
+        run_git(root, &["commit", "--quiet", "-m", contents.trim()]);
     }
 
     #[cfg(unix)]

@@ -177,7 +177,12 @@ fn project_dispatch_queries_the_anchored_repository_not_a_replacement() {
     init_git_repo(&target);
     git(
         &target,
-        &["remote", "add", "origin", "https://example.invalid/target.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/target.git",
+        ],
     );
 
     let decoy = workspace.join("decoy");
@@ -185,7 +190,12 @@ fn project_dispatch_queries_the_anchored_repository_not_a_replacement() {
     init_git_repo(&decoy);
     git(
         &decoy,
-        &["remote", "add", "origin", "https://example.invalid/decoy.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/decoy.git",
+        ],
     );
 
     let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
@@ -362,7 +372,10 @@ fn commit_at(root: &std::path::Path, reference: &str) -> String {
 fn bare_remote(parent: &std::path::Path, name: &str) -> std::path::PathBuf {
     let bare = parent.join(name);
     fs::create_dir_all(&bare).unwrap();
-    git(&bare, &["init", "--quiet", "--bare", "--initial-branch=main"]);
+    git(
+        &bare,
+        &["init", "--quiet", "--bare", "--initial-branch=main"],
+    );
     bare
 }
 
@@ -401,8 +414,14 @@ fn project_dispatch_fetches_only_the_selected_repository_refs() {
     // observable rather than pre-satisfied.
     git(&target, &["update-ref", "-d", tracking]);
     git(&decoy, &["update-ref", "-d", tracking]);
-    assert!(!has_ref(&target, tracking), "no tracking ref before fetching");
-    assert!(!has_ref(&decoy, tracking), "no tracking ref before fetching");
+    assert!(
+        !has_ref(&target, tracking),
+        "no tracking ref before fetching"
+    );
+    assert!(
+        !has_ref(&decoy, tracking),
+        "no tracking ref before fetching"
+    );
     let decoy_head_before = commit_at(&decoy, "HEAD");
 
     let mut server = ServerExchange::spawn(&workspace, &["--tool-surface", "project"], &[]);
@@ -420,7 +439,10 @@ fn project_dispatch_fetches_only_the_selected_repository_refs() {
     assert_eq!(report["head"], commit_at(&target, "HEAD"));
 
     // Only the selected repository advanced.
-    assert!(has_ref(&target, tracking), "the selected repository fetched");
+    assert!(
+        has_ref(&target, tracking),
+        "the selected repository fetched"
+    );
     assert!(
         !has_ref(&decoy, tracking),
         "the sibling repository must not have been fetched into"
@@ -436,8 +458,14 @@ fn project_dispatch_fetches_only_the_selected_repository_refs() {
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"project_execute","arguments":{"repository":"target","action":"git_remote_check","arguments":{"branch":"main"}}}}"#,
     );
     let swapped: Value = serde_json::from_str(response_text(&after_swap)).unwrap();
-    assert_eq!(swapped["head"], decoy_head_before, "the swapped directory answers as itself");
-    assert_eq!(commit_at(&moved_aside, "HEAD"), report["head"].as_str().unwrap());
+    assert_eq!(
+        swapped["head"], decoy_head_before,
+        "the swapped directory answers as itself"
+    );
+    assert_eq!(
+        commit_at(&moved_aside, "HEAD"),
+        report["head"].as_str().unwrap()
+    );
 
     server.finish();
 }
@@ -794,7 +822,10 @@ fn project_dispatch_cleans_untracked_and_generated_paths_only_in_the_selected_re
         "{}",
         response_text(&pruned)
     );
-    assert!(!decoy.join("build").exists(), "the named ignored tree goes whole");
+    assert!(
+        !decoy.join("build").exists(),
+        "the named ignored tree goes whole"
+    );
     assert!(
         target.join("build").join("deep").join("more.bin").exists(),
         "the sibling's identically named ignored tree must survive"
@@ -882,7 +913,11 @@ fn file_repo(workspace: &std::path::Path, name: &str) -> std::path::PathBuf {
     fs::create_dir_all(repo.join("nested")).unwrap();
     init_git_repo(&repo);
     fs::write(repo.join("sample.txt"), format!("{name} line one\n")).unwrap();
-    fs::write(repo.join("nested").join("inner.txt"), format!("{name} inner\n")).unwrap();
+    fs::write(
+        repo.join("nested").join("inner.txt"),
+        format!("{name} inner\n"),
+    )
+    .unwrap();
     repo
 }
 
@@ -929,7 +964,10 @@ fn project_dispatch_refuses_task_image_runs_for_a_selected_repository() {
     server.finish();
     assert_eq!(executed["result"]["isError"], true);
     assert_text(&executed, "a Docker bind mount can only be named by path");
-    assert_text(&executed, "run this action against the configured repository root");
+    assert_text(
+        &executed,
+        "run this action against the configured repository root",
+    );
 }
 
 #[cfg(unix)]
@@ -1091,9 +1129,7 @@ fn project_dispatch_reads_and_lists_only_the_selected_repository() {
         let diff = server.exchange(&file_action(
             selected,
             "diff_preview",
-            &format!(
-                r#"{{"path":"sample.txt","old":"{selected} line one","new":"changed"}}"#
-            ),
+            &format!(r#"{{"path":"sample.txt","old":"{selected} line one","new":"changed"}}"#),
         ));
         assert_ne!(
             diff["result"]["isError"],
@@ -1341,7 +1377,10 @@ fn project_dispatch_refuses_symlinked_paths_across_the_file_surface() {
 
     // An intermediate symlink is refused by every family that resolves a path.
     for (action, arguments) in [
-        ("read_range", r#"{"path":"escape/secret.txt","start_line":1,"end_line":1}"#),
+        (
+            "read_range",
+            r#"{"path":"escape/secret.txt","start_line":1,"end_line":1}"#,
+        ),
         ("read_file_bytes", r#"{"path":"escape/secret.txt"}"#),
         (
             "replace_exact",
@@ -1358,7 +1397,8 @@ fn project_dispatch_refuses_symlinked_paths_across_the_file_surface() {
     ] {
         let response = server.exchange(&file_action("target", action, arguments));
         assert_eq!(
-            response["result"]["isError"], true,
+            response["result"]["isError"],
+            true,
             "{action} must refuse an intermediate symlink: {}",
             response_text(&response)
         );
@@ -1384,7 +1424,8 @@ fn project_dispatch_refuses_symlinked_paths_across_the_file_surface() {
     ));
     server.finish();
     assert_eq!(
-        read["result"]["isError"], true,
+        read["result"]["isError"],
+        true,
         "reading a symlink leaf is refused rather than followed: {}",
         response_text(&read)
     );
@@ -1428,7 +1469,10 @@ fn project_dispatch_file_actions_do_not_follow_a_replaced_root() {
 
     // Reads and writes refuse rather than answering from, or writing into, the replacement.
     for (action, arguments) in [
-        ("read_range", r#"{"path":"sample.txt","start_line":1,"end_line":1}"#),
+        (
+            "read_range",
+            r#"{"path":"sample.txt","start_line":1,"end_line":1}"#,
+        ),
         ("write_new_file", r#"{"path":"leaked.txt","content":"x\n"}"#),
         ("list_directory", r#"{"path":"."}"#),
     ] {
@@ -1795,7 +1839,11 @@ fn project_dispatch_refuses_symlinked_fixtures_without_reaching_outside_the_sele
     )
     .unwrap();
     symlink(&outside, target.join("escape")).unwrap();
-    symlink(outside.join("secret.txt"), target.join(ALIASED_MANIFEST_PATH)).unwrap();
+    symlink(
+        outside.join("secret.txt"),
+        target.join(ALIASED_MANIFEST_PATH),
+    )
+    .unwrap();
 
     // A symlink inside the collected tree is refused rather than followed, in both directions.
     for (action, arguments) in [
@@ -1816,9 +1864,7 @@ fn project_dispatch_refuses_symlinked_fixtures_without_reaching_outside_the_sele
     let escaped = server.exchange(&file_action(
         "target",
         "fixture_manifest_verify",
-        &format!(
-            r#"{{"manifest_path":"{FIXTURE_MANIFEST_PATH}","fixture_prefixes":["escape"]}}"#
-        ),
+        &format!(r#"{{"manifest_path":"{FIXTURE_MANIFEST_PATH}","fixture_prefixes":["escape"]}}"#),
     ));
     assert_eq!(escaped["result"]["isError"], true);
     assert!(
@@ -1877,11 +1923,7 @@ struct SetupLayout {
 ///
 /// The directory exists in both repositories so a Podfile refusal comes from the missing Podfile rather than
 /// from a working directory that could not be opened.
-fn setup_repo(
-    workspace: &std::path::Path,
-    name: &str,
-    layout: SetupLayout,
-) -> std::path::PathBuf {
+fn setup_repo(workspace: &std::path::Path, name: &str, layout: SetupLayout) -> std::path::PathBuf {
     let repo = workspace.join(name);
     fs::create_dir_all(repo.join(IOS_PROJECT_DIR)).unwrap();
     init_git_repo(&repo);
@@ -1983,9 +2025,7 @@ fn project_dispatch_plans_setup_profiles_from_the_selected_repository() {
             "setup_profile_run",
             &setup_action(
                 "install_capacitor_dependencies",
-                &format!(
-                    r#","dry_run":false,"confirm":"{SETUP_CONFIRMATION}","timeout_secs":30"#
-                ),
+                &format!(r#","dry_run":false,"confirm":"{SETUP_CONFIRMATION}","timeout_secs":30"#),
             ),
         ));
         let text = response_text(&blocked).to_string();
@@ -2269,12 +2309,7 @@ fn project_dispatch_refuses_gradle_for_a_selected_repository_and_anchors_the_res
         "native_build_run",
         r#"{"action":"ios_build","params":{"workspace":"ios/App/App.xcworkspace","scheme":"App"},"dry_run":true,"timeout_secs":30}"#,
     ));
-    assert_ne!(
-        ios["result"]["isError"],
-        true,
-        "{}",
-        response_text(&ios)
-    );
+    assert_ne!(ios["result"]["isError"], true, "{}", response_text(&ios));
     assert_text(&ios, "xcodebuild");
 
     // Device planning reads the selected repository's own lockfile, in both directions.
@@ -2356,12 +2391,14 @@ fn project_dispatch_describes_and_targets_only_the_selected_repository() {
             "health names the selected repository: {reported}"
         );
         assert_eq!(
-            parsed["validation_tools"]["base_image_check"]["script_present"], present,
+            parsed["validation_tools"]["base_image_check"]["script_present"],
+            present,
             "health reports the selected repository's own script: {}",
             response_text(&health)
         );
         assert_eq!(
-            parsed["native_build"]["required_tools"]["gradlew"], present,
+            parsed["native_build"]["required_tools"]["gradlew"],
+            present,
             "health reports the selected repository's own wrapper: {}",
             response_text(&health)
         );
@@ -2519,7 +2556,13 @@ fn project_dispatch_keeps_harbor_authority_across_a_rename_and_a_replacement() {
     // rather than reporting the replacement's empty tree as absent evidence. Asserted positively: an
     // optional artefact this fake never writes is legitimately reported absent, so the absence of any
     // evidence error would be the wrong thing to require.
-    let document: Value = serde_json::from_str(text.split_once('{').map(|(_, rest)| format!("{{{rest}")).unwrap().as_str()).unwrap();
+    let document: Value = serde_json::from_str(
+        text.split_once('{')
+            .map(|(_, rest)| format!("{{{rest}"))
+            .unwrap()
+            .as_str(),
+    )
+    .unwrap();
     let harbor = &document["harbor"];
     assert_eq!(harbor["available"], true, "{text}");
     assert_eq!(harbor["rewards"][0], 1.0, "{text}");

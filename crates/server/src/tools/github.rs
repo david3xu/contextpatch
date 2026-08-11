@@ -33,8 +33,8 @@ pub(crate) fn call_github_pr_run<'a>(
     // descriptor rather than a name, so the repository it discovers is the one that was selected. The
     // logical path is still reported, because that is what a caller reading `cwd` expects to see.
     let root = repository_root.into();
-    let cwd = resolve_child_cwd(root, None)
-        .map_err(|error| format!("github_pr_run refused: {error}"))?;
+    let cwd =
+        resolve_child_cwd(root, None).map_err(|error| format!("github_pr_run refused: {error}"))?;
     let root = cwd.logical_path();
     let repository = optional_github_repository(arguments)?;
     let job_log_view = if action == "workflow_job_log" {

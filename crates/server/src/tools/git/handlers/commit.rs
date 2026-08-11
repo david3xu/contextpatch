@@ -20,9 +20,7 @@ fn refused_after_staging(
 }
 
 /// Read the commit message arguments shared by all three commit shapes.
-fn commit_message(
-    arguments: &serde_json::Map<String, Value>,
-) -> Result<(String, String), String> {
+fn commit_message(arguments: &serde_json::Map<String, Value>) -> Result<(String, String), String> {
     let subject = validate_commit_subject(required_string(arguments, "subject")?)?;
     let body = optional_string(arguments, "body")?
         .map(validate_commit_body)
@@ -508,8 +506,11 @@ mod tests {
             "git_commit_exact refused: at most 100 paths may be committed"
         );
         assert_eq!(
-            call_git_commit_exact(&root, &arguments(json!({"paths": [], "subject": "Subject"})))
-                .unwrap_err(),
+            call_git_commit_exact(
+                &root,
+                &arguments(json!({"paths": [], "subject": "Subject"}))
+            )
+            .unwrap_err(),
             "git_commit_exact refused: paths must not be empty"
         );
         assert_eq!(
@@ -537,8 +538,11 @@ mod tests {
         let root = std::env::temp_dir();
 
         assert_eq!(
-            call_git_commit_scoped(&root, &arguments(json!({"paths": ["a.txt"], "subject": "  "})))
-                .unwrap_err(),
+            call_git_commit_scoped(
+                &root,
+                &arguments(json!({"paths": ["a.txt"], "subject": "  "}))
+            )
+            .unwrap_err(),
             "git_commit_exact refused: subject must not be empty"
         );
     }

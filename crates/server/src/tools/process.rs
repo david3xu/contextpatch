@@ -139,7 +139,7 @@ pub(crate) fn call_run_guarded_command<'a>(
         &args,
         timeout_secs,
     )
-        .map_err(|error| format!("run_guarded_command refused: {error}"))?;
+    .map_err(|error| format!("run_guarded_command refused: {error}"))?;
     let log_id = write_command_log(&output)
         .map_err(|error| format!("run_guarded_command log write failed: {error}"))?;
     Ok(format!("log_id: {log_id}\n{output}"))
@@ -376,8 +376,10 @@ pub(crate) fn call_artifact_build_check_run<'a>(
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let repository_root = repository_root.into();
-    contextpatch_core::process::artifact_build::ensure_artifact_root_is_addressable(repository_root)
-        .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
+    contextpatch_core::process::artifact_build::ensure_artifact_root_is_addressable(
+        repository_root,
+    )
+    .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
 
     let dockerfile = required_string(arguments, "dockerfile")?;
     let context = optional_string(arguments, "context")?;
@@ -1076,8 +1078,9 @@ pub(crate) fn call_validation_profile_run<'a>(
     // name. Capturing a path here would mean the directory each command runs in is resolved after this call
     // has already returned, which is the longest possible gap between validating a repository and acting on
     // it.
-    let worker_authority = contextpatch_core::git::OwnedRepositoryRoot::retain(repository_root.into())
-        .map_err(|error| format!("validation_profile_run refused: {error}"))?;
+    let worker_authority =
+        contextpatch_core::git::OwnedRepositoryRoot::retain(repository_root.into())
+            .map_err(|error| format!("validation_profile_run refused: {error}"))?;
     let worker_arguments = arguments.clone();
     let profile_name = profile.to_string();
     let initial_log = json!({

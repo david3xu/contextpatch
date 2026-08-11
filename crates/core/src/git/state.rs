@@ -174,7 +174,11 @@ pub fn parse_untracked_and_ignored_porcelain_paths(
     for entry in porcelain_entries(bytes) {
         ensure_porcelain_entry_shape(entry, label)?;
         if (entry[0] == b'?' && entry[1] == b'?') || (entry[0] == b'!' && entry[1] == b'!') {
-            paths.insert(porcelain_entry_path(entry, label)?.trim_end_matches('/').to_string());
+            paths.insert(
+                porcelain_entry_path(entry, label)?
+                    .trim_end_matches('/')
+                    .to_string(),
+            );
         }
     }
     Ok(paths)
@@ -202,9 +206,7 @@ fn porcelain_entries(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
 /// Porcelain v1 prefixes two status characters and one separating space before each path.
 fn ensure_porcelain_entry_shape(entry: &[u8], label: &str) -> Result<(), ContextPatchError> {
     if entry.len() < 4 || entry[2] != b' ' {
-        return Err(ContextPatchError::new(format!(
-            "unexpected {label} entry"
-        )));
+        return Err(ContextPatchError::new(format!("unexpected {label} entry")));
     }
     Ok(())
 }
@@ -266,10 +268,7 @@ pub fn cached_paths<'a>(
 pub fn status_short<'a>(
     repository: impl Into<GitRepository<'a>>,
 ) -> Result<String, ContextPatchError> {
-    stdout(
-        repository,
-        &["status", "--short", "--untracked-files=all"],
-    )
+    stdout(repository, &["status", "--short", "--untracked-files=all"])
 }
 
 /// The current head commit, or [`UNBORN_HEAD`] when the repository has no commits.
@@ -283,9 +282,7 @@ pub fn head<'a>(repository: impl Into<GitRepository<'a>>) -> Result<String, Cont
     if probe.success() {
         return String::from_utf8(probe.stdout)
             .map(|head| head.trim().to_string())
-            .map_err(|error| {
-                ContextPatchError::new(format!("git output was not UTF-8: {error}"))
-            });
+            .map_err(|error| ContextPatchError::new(format!("git output was not UTF-8: {error}")));
     }
 
     let revision_count = stdout(repository, &["rev-list", "--all", "--count"])?;
@@ -323,7 +320,10 @@ pub fn local_branch_exists<'a>(
     branch: &str,
 ) -> Result<bool, ContextPatchError> {
     let branch_ref = format!("refs/heads/{branch}");
-    match exit_code(repository, &["show-ref", "--verify", "--quiet", &branch_ref])? {
+    match exit_code(
+        repository,
+        &["show-ref", "--verify", "--quiet", &branch_ref],
+    )? {
         0 => Ok(true),
         1 => Ok(false),
         code => Err(ContextPatchError::new(format!(
@@ -431,7 +431,10 @@ mod tests {
 
         let reported = head(&root).unwrap();
         assert_eq!(reported.len(), 40, "{reported}");
-        assert!(reported.chars().all(|c| c.is_ascii_hexdigit()), "{reported}");
+        assert!(
+            reported.chars().all(|c| c.is_ascii_hexdigit()),
+            "{reported}"
+        );
         assert_eq!(current_branch(&root).unwrap(), "main");
         assert_eq!(resolve_commit(&root, "HEAD").unwrap(), reported);
         assert_eq!(rev_count(&root, "HEAD").unwrap(), 1);
@@ -506,11 +509,21 @@ mod tests {
         let root = committed_repo("missing_remote");
 
         assert_eq!(
-            ensure_remote_exists(&root, "origin").unwrap_err().to_string(),
+            ensure_remote_exists(&root, "origin")
+                .unwrap_err()
+                .to_string(),
             "remote `origin` is not configured"
         );
 
-        git(&root, &["remote", "add", "origin", "https://example.invalid/repo.git"]);
+        git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/repo.git",
+            ],
+        );
         assert!(ensure_remote_exists(&root, "origin").is_ok());
     }
 
@@ -522,7 +535,10 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.starts_with("git rev-parse --verify refs/heads/absent failed:"), "{error}");
+        assert!(
+            error.starts_with("git rev-parse --verify refs/heads/absent failed:"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -530,11 +546,19 @@ mod tests {
         let root = committed_repo("exit_code");
 
         assert_eq!(
-            exit_code(&root, &["show-ref", "--verify", "--quiet", "refs/heads/main"]).unwrap(),
+            exit_code(
+                &root,
+                &["show-ref", "--verify", "--quiet", "refs/heads/main"]
+            )
+            .unwrap(),
             0
         );
         assert_eq!(
-            exit_code(&root, &["show-ref", "--verify", "--quiet", "refs/heads/absent"]).unwrap(),
+            exit_code(
+                &root,
+                &["show-ref", "--verify", "--quiet", "refs/heads/absent"]
+            )
+            .unwrap(),
             1
         );
     }
@@ -561,7 +585,10 @@ mod tests {
         assert!(error.contains("result is incomplete"), "{error}");
         assert!(error.contains("was not used"), "{error}");
         // The detail names the argv it ran, and carries no tool prefix.
-        assert!(error.starts_with("git status --porcelain output exceeded"), "{error}");
+        assert!(
+            error.starts_with("git status --porcelain output exceeded"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -796,12 +796,13 @@ fn ensure_parent_is_current(
     relative: &Path,
     expected_parent: &File,
 ) -> Result<(), ContextPatchError> {
-    let current_parent = open_parent_unix(root_directory, relative, false, false)?.ok_or_else(|| {
-        ContextPatchError::new(format!(
-            "parent directory for `{}` no longer exists",
-            relative.display()
-        ))
-    })?;
+    let current_parent =
+        open_parent_unix(root_directory, relative, false, false)?.ok_or_else(|| {
+            ContextPatchError::new(format!(
+                "parent directory for `{}` no longer exists",
+                relative.display()
+            ))
+        })?;
     if FileIdentity::from_file(expected_parent)? != FileIdentity::from_file(&current_parent)? {
         return Err(ContextPatchError::new(format!(
             "parent directory for `{}` changed before mutation",

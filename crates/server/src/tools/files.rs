@@ -131,10 +131,7 @@ pub(crate) fn call_read_write_receipts<'a>(
     use contextpatch_core::fs::receipt::{self, DEFAULT_RECENT_LIMIT};
 
     // The receipt journal is a deferred boundary and stays keyed by path.
-    let repo_root = label(
-        repository_root.into(),
-        tools::read_write_receipts::NAME,
-    )?;
+    let repo_root = label(repository_root.into(), tools::read_write_receipts::NAME)?;
     let repo_root = repo_root.as_path();
     let interrupted_only = optional_bool(arguments, "interrupted_only")?.unwrap_or(false);
     let limit = optional_u64(arguments, "limit")?
@@ -195,21 +192,11 @@ pub(crate) fn call_replace_exact<'a>(
     let authority = repository_root.into();
     // The receipt journal is keyed by path; the replacement itself goes through the authority.
     let journal_root = label(authority, tools::replace_exact::NAME)?;
-    let summary = crate::tools::journal::recorded(
-        &journal_root,
-        tools::replace_exact::NAME,
-        path,
-        || {
-            replace_exact_in_root_with_sha256(
-                authority,
-                Path::new(path),
-                old,
-                new,
-                expected_sha256,
-            )
-            .map_err(|error| format!("replace_exact refused: {error}"))
-        },
-    )?;
+    let summary =
+        crate::tools::journal::recorded(&journal_root, tools::replace_exact::NAME, path, || {
+            replace_exact_in_root_with_sha256(authority, Path::new(path), old, new, expected_sha256)
+                .map_err(|error| format!("replace_exact refused: {error}"))
+        })?;
 
     Ok(format!(
         "replaced bytes {}..{} in {} ({} bytes written); sha256={}",
@@ -844,13 +831,12 @@ pub(crate) fn call_artifact_delete_exact<'a>(
     let authority = RepositoryRoot::from_path(&root);
     let target = open_exact_artifact_file(tool_name, authority, &shown)?;
     let target_path = root.join(&shown);
-    let _target_lock =
-        contextpatch_core::fs::mutation_lock::try_file_mutation_lock_for_open_file(
-            &root,
-            &target_path,
-            target.file(),
-        )
-        .map_err(|error| format!("{tool_name} refused: {error}"))?;
+    let _target_lock = contextpatch_core::fs::mutation_lock::try_file_mutation_lock_for_open_file(
+        &root,
+        &target_path,
+        target.file(),
+    )
+    .map_err(|error| format!("{tool_name} refused: {error}"))?;
 
     let bytes = target
         .size_bytes()
@@ -1120,7 +1106,12 @@ pub(crate) fn call_bulk_replace_exact<'a>(
     }
 
     // Restore submission order, because plans are grouped and sorted by path.
-    applied.sort_by_key(|entry| entry.get("entry").and_then(Value::as_u64).unwrap_or_default());
+    applied.sort_by_key(|entry| {
+        entry
+            .get("entry")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+    });
 
     serde_json::to_string_pretty(&json!({
         "tool": tool_name,
