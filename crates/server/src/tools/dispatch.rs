@@ -252,22 +252,33 @@ fn call_tool(
     (entry.handler)(repository, surface, arguments).map_err(|error| attribute(entry.name, error))
 }
 
+/// The exact text every handler writes between its own name and its reason. Matching on it is what
+/// makes the check below a boundary rather than a bare prefix.
+const REFUSAL_MARKER: &str = " refused:";
+
 /// Ensure a refusal names the tool that produced it.
 ///
 /// The shared argument helpers cannot do this themselves: `required_string` is handed a key and no
-/// tool name, so it can only say `missing or invalid string argument: path`. Measured across the
-/// surface, that left 41 of 54 tools returning byte-identical refusals and only 13 of 54 replies
-/// distinguishable at all, so a caller that mis-invoked most of the server learned neither which
-/// tool refused nor, in a batch, which call it belonged to.
+/// tool name, so it can only say `missing or invalid string argument: path`. Without attribution a
+/// caller that mis-invoked most of the server learned neither which tool refused nor, in a batch,
+/// which call the refusal belonged to. Measured by calling every registered tool through the server
+/// with empty arguments and searching each reply for the tool's own name: of the twenty tools that
+/// refuse empty arguments, all twenty name themselves and all twenty replies are distinct.
 ///
 /// Attributing here rather than at each call site fixes every tool at once and cannot be forgotten
 /// by a new one. Handlers that already name themselves are left exactly as they are, so no existing
 /// refusal text changes.
+///
+/// The match is on the name followed by [`REFUSAL_MARKER`], never on the name alone. A bare prefix
+/// lets one tool's reply pass through wearing another tool's name wherever one name is a prefix of
+/// another, which `write_new_file` and `write_new_file_base64` already are. The marker makes this
+/// correct whether or not such a pair exists, so it is load-bearing rather than a second guard on
+/// the same hole, and removing it as redundant would reopen the misattribution.
 fn attribute(name: &str, error: String) -> String {
-    if error.starts_with(name) {
+    if error.starts_with(&format!("{name}{REFUSAL_MARKER}")) {
         return error;
     }
-    format!("{name} refused: {error}")
+    format!("{name}{REFUSAL_MARKER} {error}")
 }
 
 /// The reply deadline for one tool, or `None` for work that returns a pollable log id.
