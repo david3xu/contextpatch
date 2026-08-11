@@ -696,6 +696,46 @@ mod tests {
         );
     }
 
+    /// Record which registry names are proper prefixes of another, because one is.
+    ///
+    /// This documents an assumption rather than guarding anything. `dispatch::attribute` matches a
+    /// name followed by the refusal marker, so it is correct whether or not prefix pairs exist, and
+    /// this test must not be read as the thing that makes it safe: deleting the boundary because
+    /// this passes would reintroduce the misattribution the boundary exists to prevent.
+    ///
+    /// What it does is keep the assumption measured instead of remembered. The set is asserted whole
+    /// rather than counted, so a new pair fails here and is looked at deliberately, and a pair that
+    /// disappears fails too rather than leaving a stale claim behind. The scope is registry names
+    /// only: `project_execute` resolves before the repository is determined and never reaches
+    /// `call_tool`, so it cannot be misattributed and asserting over it would claim something wider
+    /// than the property being documented.
+    #[test]
+    fn the_registry_names_that_are_prefixes_of_another_are_the_known_ones() {
+        const KNOWN_PREFIX_PAIRS: &[(&str, &str)] = &[("write_new_file", "write_new_file_base64")];
+
+        let names: Vec<&str> = REGISTRY.iter().map(|entry| entry.name).collect();
+        let mut observed: Vec<(&str, &str)> = names
+            .iter()
+            .flat_map(|shorter| {
+                names
+                    .iter()
+                    .filter(move |longer| *longer != shorter && longer.starts_with(*shorter))
+                    .map(move |longer| (*shorter, *longer))
+            })
+            .collect();
+        observed.sort_unstable();
+
+        let mut known = KNOWN_PREFIX_PAIRS.to_vec();
+        known.sort_unstable();
+
+        assert_eq!(
+            observed, known,
+            "the set of registry names that are proper prefixes of another has changed; confirm \
+             that dispatch::attribute still matches on the refusal marker rather than the bare name, \
+             then record the new set here"
+        );
+    }
+
     /// A descriptor whose schema advertises a different name than the descriptor claims would make
     /// the registry disagree with the surface it generates.
     #[test]
