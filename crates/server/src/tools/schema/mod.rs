@@ -254,6 +254,53 @@ mod tests {
         crate::tools::snapshot_fixture::assert_matches("tools-surface.json", &(rendered + "\n"));
     }
 
+    /// Refusal guidance must point at tools that exist.
+    ///
+    /// `core::process::guidance` names tools as the route forward from a refusal, but it lives in a
+    /// crate that cannot see the tool registry, so nothing has ever checked those names resolve. A
+    /// renamed or retired tool leaves advice pointing at nothing, which is worse than a bare refusal:
+    /// the caller is told a capability exists under a name it cannot call.
+    ///
+    /// Every alternative is required to *begin* with a registered tool name. That is already the
+    /// convention — trailing detail like "(actions: run_list, run_view)" or "with `git ls-tree`"
+    /// qualifies the tool rather than replacing it — and it keeps the tool name first, where a caller
+    /// reads it.
+    #[test]
+    fn every_refusal_alternative_begins_with_a_registered_tool() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../core/src/process/guidance.rs"),
+        )
+        .expect("core guidance module must be readable");
+
+        let body = source
+            .split_once("pub fn tool_redirects")
+            .expect("guidance must expose tool_redirects")
+            .1;
+        let body = body.split_once("\npub fn ").map_or(body, |(head, _)| head);
+
+        let registered = registered_names();
+        let mut offenders = Vec::new();
+        for literal in body.split('"').skip(1).step_by(2) {
+            // Skip the match patterns, which are program names rather than alternatives.
+            if !literal.contains('_') || literal.starts_with(char::is_uppercase) {
+                continue;
+            }
+            if !registered
+                .iter()
+                .any(|tool| literal == tool || literal.starts_with(&format!("{tool} ")))
+            {
+                offenders.push(literal.to_string());
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "refusal guidance names tools that are not registered, so the advice cannot be \
+             followed: {offenders:?}"
+        );
+    }
+
     #[test]
     fn every_registered_tool_has_a_documented_contract() {
         // The drift this catches is real and has happened repeatedly: a tool is registered, works, and is

@@ -1,24 +1,29 @@
 //! Concise orientation surfaced to clients during MCP initialization.
+//!
+//! These strings name tools only where the client has to *call* one. They deliberately do not
+//! enumerate which tools behave asynchronously: that list was written when there were three, fell
+//! behind when there were five, and would fall behind again. A client does not need to know which
+//! actions are asynchronous, it needs to know what to do when a reply says so, and phrasing the rule
+//! against the reply shape rather than against a tool list cannot go stale.
 
 use crate::tools::ToolSurface;
 
 const FULL_CLIENT_INSTRUCTIONS: &str = "\
 Call capability_manifest first. Before declaring a tool unavailable, compare build.git_sha with the \
 checkout; a stale install may predate it. Follow exact anchors, hashes, dry-run, and confirmation; raw \
-shell access is unavailable. Tool replies can arrive out of order: correlate by JSON-RPC id. \
-task_image_python_run, harbor_run_start, and validation_profile_run return status=\"running\" plus a \
-log_id; poll on the same server with read_command_log. Polling never restarts work; a restart makes \
-active logs unknown. Use artifact_write_text for non-repo scratch. After interrupted or timed-out \
-mutations, call read_write_receipts before retrying.";
+shell access is unavailable. Tool replies can arrive out of order: correlate by JSON-RPC id. Any reply \
+with status=\"running\" carries a log_id; poll it on the same server with read_command_log. Polling \
+never restarts work; a restart makes active logs unknown. Use artifact_write_text for non-repo \
+scratch. After interrupted or timed-out mutations, call read_write_receipts before retrying.";
 
 const PROJECT_CLIENT_INSTRUCTIONS: &str = "\
 Call project_execute first with action=\"describe\". Omit arguments.name to list actions, or provide \
 one action name for its exact schema. Execute one action per call with its original arguments. \
 repository may select a normalized exact child Git worktree. All guards remain. Tool replies can \
-arrive out of order: correlate by JSON-RPC id. task_image_python_run, harbor_run_start, and \
-validation_profile_run return status=\"running\" plus a log_id; poll on the same server through \
-read_command_log. Polling never restarts work; a restart makes active logs unknown. After interrupted \
-or timed-out mutations, inspect receipts and current state before retrying.";
+arrive out of order: correlate by JSON-RPC id. Any reply with status=\"running\" carries a log_id; \
+poll it on the same server through read_command_log. Polling never restarts work; a restart makes \
+active logs unknown. After interrupted or timed-out mutations, inspect receipts and current state \
+before retrying.";
 
 pub(crate) const fn client_instructions(surface: ToolSurface) -> &'static str {
     match surface {
@@ -50,7 +55,7 @@ mod tests {
             "read_write_receipts",
             "artifact_write_text",
             "JSON-RPC id",
-            "harbor_run_start",
+            "status=\"running\"",
             "read_command_log",
         ] {
             assert!(
@@ -62,6 +67,33 @@ mod tests {
         assert!(client_instructions(ToolSurface::Project).contains("one action per call"));
         assert!(client_instructions(ToolSurface::Project).contains("JSON-RPC id"));
         assert!(client_instructions(ToolSurface::Project).contains("read_command_log"));
+    }
+
+    /// The asynchronous rule must be stated against the reply shape, never as a tool list.
+    ///
+    /// The previous wording named three of the five tools that return a `log_id`, and stayed wrong
+    /// through two additions because nothing pointed at it. Any subset is wrong the moment the set
+    /// changes, so naming an asynchronous producer here is the defect, not an omission.
+    #[test]
+    fn the_asynchronous_rule_names_no_tools_that_produce_log_ids() {
+        for surface in [ToolSurface::Full, ToolSurface::Project] {
+            let text = client_instructions(surface);
+            for producer in [
+                crate::tools::task_image_python_run::NAME,
+                crate::tools::harbor_run_start::NAME,
+                crate::tools::validation_profile_run::NAME,
+                crate::tools::compose_stack_run::NAME,
+                crate::tools::artifact_build_check_run::NAME,
+            ] {
+                assert!(
+                    !text.contains(producer),
+                    "instructions enumerate {producer}; state the rule against status=\"running\" \
+                     instead, or the list goes stale on the next asynchronous tool"
+                );
+            }
+            assert!(text.contains("status=\"running\""));
+            assert!(text.contains(crate::tools::read_command_log::NAME));
+        }
     }
 
     #[test]
