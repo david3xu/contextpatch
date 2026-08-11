@@ -16,7 +16,7 @@ the program itself decides what to do with it.
 | Program | Permitted first argument | Executes repository-authored code | May reach network |
 | --- | --- | --- | --- |
 | `git` | `status`, `diff`, `log`, `show`, `rev-parse`, `ls-tree` | No | No for these subcommands |
-| `cargo` | `check`, `test`, `build`, `clippy` | Yes: `build.rs`, proc macros, test binaries | Yes: registry and dependency fetch |
+| `cargo` | `check`, `test`, `build`, `clippy`, `fmt --check` | Yes: `build.rs`, proc macros, test binaries | Yes: registry and dependency fetch |
 | `bun` | `run`, `test` | Yes: `package.json` scripts, test files | Yes |
 | `npm` | `run`, `test` | Yes: `package.json` scripts, via a shell npm starts | Yes |
 | `pnpm` | `run`, `test` | Yes: `package.json` scripts | Yes |

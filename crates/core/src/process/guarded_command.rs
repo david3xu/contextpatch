@@ -159,7 +159,18 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
             subcommand,
             Some("status" | "diff" | "log" | "show" | "rev-parse" | "ls-tree")
         ),
-        "cargo" => matches!(subcommand, Some("check" | "test" | "build" | "clippy")),
+        "cargo" => match subcommand {
+            Some("check" | "test" | "build" | "clippy") => true,
+            // `fmt` is admitted only as a check, never as a rewrite. Reformatting the tree is a
+            // mutation, and this surface grants none; the reason to permit it at all is that a gate
+            // whose result cannot be captured is not evidence, and `--check` produces a diff and an
+            // exit code without touching a file. `--emit` is refused because it writes.
+            Some("fmt") => {
+                args.iter().any(|arg| arg == "--check")
+                    && !args.iter().any(|arg| arg.starts_with("--emit"))
+            }
+            _ => false,
+        },
         "bun" => matches!(subcommand, Some("run" | "test")),
         "npm" => matches!(subcommand, Some("run" | "test")),
         "pnpm" => matches!(subcommand, Some("run" | "test")),
@@ -507,6 +518,32 @@ mod tests {
     /// `--pre sh --pre-glob '*'` was demonstrated executing a shell over repository files and
     /// writing outside the repository root, which defeated the fixed shell-script list, the
     /// repository-relative Python rule, and the pytest hardening at once.
+    /// Formatting is a mutation; checking is not. Only the second is admitted.
+    #[test]
+    fn permits_cargo_fmt_only_as_a_check() {
+        for values in [
+            vec!["fmt", "--", "--check"],
+            vec!["fmt", "--all", "--", "--check"],
+            vec!["fmt", "--check"],
+        ] {
+            validate_command("cargo", &args(&values))
+                .unwrap_or_else(|error| panic!("{values:?} must be permitted: {error}"));
+        }
+
+        for values in [
+            vec!["fmt"],
+            vec!["fmt", "--all"],
+            // Writes files despite naming a check.
+            vec!["fmt", "--check", "--emit", "files"],
+        ] {
+            let message = refusal("cargo", &values);
+            assert!(
+                message.contains("not allowlisted"),
+                "unexpected refusal for {values:?}: {message}"
+            );
+        }
+    }
+
     #[test]
     fn refuses_rg_options_that_start_programs() {
         for values in [

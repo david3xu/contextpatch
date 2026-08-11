@@ -760,7 +760,17 @@ mod tests {
             }
         }
 
-        assert!(seen > 0, "the registry table parsed as empty");
+        // Fail closed. This parses its own source with fixed indentation, so a reformatted descriptor
+        // would drop out of the loop silently and the check would still pass on whatever remained.
+        // Comparing against the table length makes the formatting coupling harmless instead of
+        // load-bearing: if the parse stops matching, this fails rather than shrinking.
+        assert_eq!(
+            seen,
+            REGISTRY.len(),
+            "the source parse found {seen} descriptors but the table holds {}; the parse has \
+             drifted from the source layout and is no longer checking every tool",
+            REGISTRY.len()
+        );
         assert!(
             offenders.is_empty(),
             "these descriptors invoke a handler named for a different tool, which no snapshot can \

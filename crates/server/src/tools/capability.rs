@@ -289,7 +289,7 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
             "harbor_run_max_timeout_secs": 3600,
             "programs": {
                 "git": ["status", "diff", "log", "show", "rev-parse", "ls-tree"],
-                "cargo": ["check", "test", "build", "clippy"],
+                "cargo": ["check", "test", "build", "clippy", "fmt (only with --check)"],
                 "bun": ["run", "test"],
                 "npm": ["run", "test"],
                 "pnpm": ["run", "test"],

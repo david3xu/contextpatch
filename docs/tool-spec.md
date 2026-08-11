@@ -789,7 +789,7 @@ Rules:
 - The executable must be an allowlisted program name, not a path.
 - The subcommand must be allowlisted:
   - `git`: `status`, `diff`, `log`, `show`, `rev-parse`, `ls-tree`
-  - `cargo`: `check`, `test`, `build`, `clippy`
+  - `cargo`: `check`, `test`, `build`, `clippy`, and `fmt` only when `--check` is present and `--emit` is absent
   - `bun`: `run`, `test`
   - `npm`: `run`, `test`
   - `pnpm`: `run`, `test`
