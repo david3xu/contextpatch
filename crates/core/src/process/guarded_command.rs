@@ -6,6 +6,11 @@ use crate::process::runner::{
     run_bounded_command, validate_common_command_shape,
 };
 
+/// Cap for an allowlisted guarded command.
+///
+/// Equal to `runner::MAX_TIMEOUT_SECS` and `task_image::MAX_RUN_TIMEOUT_SECS` today, and separate
+/// from both on purpose: the call sets are disjoint, so they bound different work and agree only by
+/// coincidence.
 const DEFAULT_MAX_TIMEOUT_SECS: u64 = 600;
 /// The longest a Harbor run may be given, whether reached through a guarded `harbor run` command or
 /// through `harbor_run_start`. Public because the advertised bound must read it rather than restate

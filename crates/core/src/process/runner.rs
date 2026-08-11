@@ -8,8 +8,24 @@ use std::time::{Duration, Instant};
 
 use crate::error::ContextPatchError;
 
+/// Default timeout for a guarded command.
+///
+/// `task_image.rs` passes a bare `120` for a task-image run. That is a different operation whose
+/// default happens to agree, not this bound reached twice.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
+/// Cap for typed native and setup actions, reached only through [`checked_timeout`].
+///
+/// Two other constants in `core` are also 600: `guarded_command::DEFAULT_MAX_TIMEOUT_SECS` caps an
+/// allowlisted guarded command, and `task_image::MAX_RUN_TIMEOUT_SECS` caps a task-image run. Their
+/// call sets are disjoint, so these are three bounds that agree today rather than one bound named
+/// three times. Collapsing them would couple limits that govern different work, and the next change
+/// to one would move the others silently.
 const MAX_TIMEOUT_SECS: u64 = 600;
+/// Maximum argument count for a guarded command.
+///
+/// `task_image::MAX_ARGS` is a different constant of the same name bounding task-image arguments at
+/// 32. One name for two bounds in one crate is a trap: it has already produced one wrong conclusion
+/// about which limit a schema was advertising.
 const MAX_ARGS: usize = 64;
 const MAX_ARG_LEN: usize = 4096;
 const MAX_OUTPUT_CHARS: usize = 12_000;
@@ -772,6 +788,10 @@ fn normalized_relative_cwd(
     Ok(parts.join("/"))
 }
 
+/// Bound a guarded command's timeout against [`MAX_TIMEOUT_SECS`].
+///
+/// `task_image.rs` defines a private function of the same name taking three arguments, where this one
+/// takes the timeout alone. Same name, different arity, same crate.
 pub(crate) fn checked_timeout(timeout_secs: Option<u64>) -> Result<Duration, ContextPatchError> {
     checked_timeout_with_max(timeout_secs, MAX_TIMEOUT_SECS)
 }

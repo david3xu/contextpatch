@@ -15,8 +15,16 @@ use crate::process::runner::{run_bounded_command, BoundedProcessOutput};
 pub const CONFIRMATION: &str = "run task image python";
 const TASK_ENVIRONMENT: &str = "task/environment";
 const TASK_DOCKERFILE: &str = "task/environment/Dockerfile";
+/// Maximum argument count for a task-image run.
+///
+/// `runner::MAX_ARGS` is a different constant of the same name bounding guarded-command arguments at
+/// 64. Attributing one to the other misreads which limit is advertised where.
 const MAX_ARGS: usize = 32;
 const MAX_ARG_BYTES: usize = 4096;
+/// Cap for a task-image run.
+///
+/// Equal to `runner::MAX_TIMEOUT_SECS` and `guarded_command::DEFAULT_MAX_TIMEOUT_SECS` today, and
+/// separate from both on purpose: three operations, three bounds, one number they currently share.
 const MAX_RUN_TIMEOUT_SECS: u64 = 600;
 const MAX_BUILD_TIMEOUT_SECS: u64 = 1800;
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
@@ -420,6 +428,11 @@ fn command_result(
     }
 }
 
+/// Bound a task-image timeout against a caller-supplied default and maximum.
+///
+/// `runner::checked_timeout` is a different function of the same name taking only the timeout. This
+/// one is private and takes three arguments, so a call reads unambiguously only if the reader already
+/// knows both exist.
 fn checked_timeout(
     requested: Option<u64>,
     default_secs: u64,
