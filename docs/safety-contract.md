@@ -66,12 +66,21 @@ This document is normative. If implementation behavior conflicts with this file,
 34. An advertised input schema is a promise about argument *names* and nothing else. Runtime
     validation closes the schema and rejects a name that is not a declared property; it does not
     check `type`, `enum`, `minimum`, `maximum`, `pattern`, `maxItems`, or any other keyword. Every
-    such constraint is therefore advisory at the surface and must have a guard in `core` that
-    enforces the same rule, which is where it is actually enforced. A constraint advertised with no
-    counterpart is unenforced with nothing to catch it, and a counterpart whose limit differs from
-    the advertised one is worse, because a caller that trusts the document is wrong in a direction
-    the document cannot reveal. Where the guard holds the limit as a named constant, the schema must
-    derive from it rather than restate it.
+    such constraint is therefore advisory at the surface, and the rule runs in both directions: a
+    bound the implementation enforces must be advertised, a bound advertised must be enforced, and
+    where both exist they must come from one named constant rather than two literals.
+
+    The three failures differ in kind. An advertised constraint with no guard is unenforced, with
+    nothing to catch it. A guard whose limit differs from the advertised one is worse, because a
+    caller that trusts the document is wrong in a direction the document cannot reveal. An enforced
+    bound advertised nowhere fails latest of all: it cannot be planned against, so a caller meets it
+    as a refusal partway through work it had already committed to, which is the worst available shape
+    for a surface whose contract is dry run and then confirm.
+
+    The guard need not live in `core`. Validation of an argument belonging to one tool legitimately
+    sits in that tool's handler, which is where `harbor_run_start` bounds its agent name. What
+    matters is that a guard exists, that its limit is the advertised one, and that neither side
+    restates a number the other owns.
 
 ## Required refusal cases
 
