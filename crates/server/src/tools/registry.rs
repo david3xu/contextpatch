@@ -58,9 +58,10 @@ pub(crate) struct ToolDescriptor {
     pub(crate) schema: fn() -> Value,
     pub(crate) handler: ToolHandler,
     /// Reply deadline, or `None` where no shared class bounds it. `None` alone does not mean the work
-    /// is asynchronous: ten tools carry their own operation-specific timeout and still reply with a
-    /// result. `starts_background_job` separates those from the pollable ones, and the absence of that
-    /// separation is why the manifest's list of asynchronous tools had to be maintained by hand.
+    /// is asynchronous: most tools carrying it hold their own operation-specific timeout and reply
+    /// with a result. `starts_background_job` separates those from the pollable ones, and the absence
+    /// of that separation is why the manifest's list of asynchronous tools had to be maintained by
+    /// hand.
     pub(crate) deadline: Option<Duration>,
     pub(crate) reach: RemoteReach,
     pub(crate) read_only: bool,
@@ -815,9 +816,9 @@ mod tests {
     /// Two fields could disagree, so pin the one direction that would be a lie.
     ///
     /// A tool that returns a log id cannot also promise a bounded reply, because there is no result
-    /// to return within it. The converse is deliberately not asserted: ten tools carry `None` while
-    /// replying with a result, since they hold their own operation-specific timeout, and that is the
-    /// distinction this field exists to make rather than one to forbid.
+    /// to return within it. The converse is deliberately not asserted: `None` with a result is the
+    /// legitimate majority case, since those tools hold their own operation-specific timeout, and
+    /// that is the distinction this field exists to make rather than one to forbid.
     #[test]
     fn a_background_job_never_also_advertises_a_reply_deadline() {
         for entry in REGISTRY {
