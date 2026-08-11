@@ -355,6 +355,15 @@ fn is_allowed_rg_argument(arg: &str) -> bool {
 /// The capability manifest previously carried its own hand-written copy of this list and fell
 /// behind the moment the list changed, which is the worst possible staleness: the manifest exists so
 /// a client can tell a missing capability from a stale binary.
+/// The ripgrep options this server permits, for the capability manifest to advertise.
+///
+/// Exposed so the manifest can derive the list instead of describing it. The hand-written `["search"]`
+/// it replaces was accurate when any argument was accepted and survived C37 replacing that with a
+/// positive allowlist, so it went on describing a surface that no longer existed.
+pub fn allowed_rg_long_options() -> &'static [&'static str] {
+    RG_LONG_OPTIONS
+}
+
 pub fn allowed_shell_scripts() -> &'static [&'static str] {
     ALLOWED_SHELL_SCRIPTS
 }

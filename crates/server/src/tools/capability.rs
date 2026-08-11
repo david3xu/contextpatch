@@ -294,7 +294,9 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "pytest": ["validation invocation"],
                 // Derived, not restated: a hand-copied list here fell behind the allowlist itself.
                 "bash": contextpatch_core::process::guarded_command::allowed_shell_scripts(),
-                "rg": ["search"]
+                // Derived for the same reason as `bash` above: `["search"]` described the surface
+                // where any argument was accepted, and outlived it.
+                "rg": contextpatch_core::process::guarded_command::allowed_rg_long_options()
             },
             "typed_workflows": {
                 "read_command_log": "Reads command logs with max_chars and offset paging.",
