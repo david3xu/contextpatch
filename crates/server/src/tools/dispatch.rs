@@ -392,10 +392,8 @@ mod tests {
         // literal here would add `dispatch.rs` to the observed set and quietly make the recorded map
         // describe the test instead of the code it is pinning.
         const READER: &str = concat!(".logical_", "path()");
-        const KNOWN_READERS: &[(&str, usize)] = &[
-            ("tools/git/handlers/restore.rs", 1),
-            ("tools/github.rs", 2),
-        ];
+        const KNOWN_READERS: &[(&str, usize)] =
+            &[("tools/git/handlers/restore.rs", 1), ("tools/github.rs", 2)];
 
         // A unit test in this binary runs with `CARGO_MANIFEST_DIR` at `crates/server`, so the scan
         // root is this crate's own sources. `canonical_label` reads the logical path inside `core`,
@@ -414,7 +412,8 @@ mod tests {
                 if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
                     continue;
                 }
-                let source = std::fs::read_to_string(&path).expect("a source file must be readable");
+                let source =
+                    std::fs::read_to_string(&path).expect("a source file must be readable");
                 let count = source.matches(READER).count();
                 if count > 0 {
                     let relative = path
