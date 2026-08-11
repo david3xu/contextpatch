@@ -78,13 +78,7 @@ mod tests {
     fn the_asynchronous_rule_names_no_tools_that_produce_log_ids() {
         for surface in [ToolSurface::Full, ToolSurface::Project] {
             let text = client_instructions(surface);
-            for producer in [
-                crate::tools::task_image_python_run::NAME,
-                crate::tools::harbor_run_start::NAME,
-                crate::tools::validation_profile_run::NAME,
-                crate::tools::compose_stack_run::NAME,
-                crate::tools::artifact_build_check_run::NAME,
-            ] {
+            for producer in crate::tools::registry::background_job_tools() {
                 assert!(
                     !text.contains(producer),
                     "instructions enumerate {producer}; state the rule against status=\"running\" \

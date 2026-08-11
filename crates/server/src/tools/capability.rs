@@ -135,11 +135,7 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
             "responses_may_arrive_out_of_order": true,
             "correlate_by": "JSON-RPC id",
             "background_jobs": {
-                "tools": [
-                    tools::task_image_python_run::NAME,
-                    tools::harbor_run_start::NAME,
-                    tools::validation_profile_run::NAME
-                ],
+                "tools": crate::tools::registry::background_job_tools(),
                 "max_active": crate::tools::process::MAX_ACTIVE_BACKGROUND_JOBS,
                 "poll_with": tools::read_command_log::NAME,
                 "same_server_required": true,

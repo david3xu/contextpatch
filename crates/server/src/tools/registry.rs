@@ -48,12 +48,19 @@ pub(crate) type ToolHandler = fn(
 
 pub(crate) struct ToolDescriptor {
     pub(crate) name: &'static str,
+    /// Whether the reply carries a log id to poll rather than a result. Recorded per tool because it
+    /// is not derivable from anything else here: it describes what the handler returns, and
+    /// `deadline: None` covers both this and the operation-specific-timeout case.
+    pub(crate) starts_background_job: bool,
     /// The advertised schema, including its `inputSchema` and description. Annotations are added
     /// centrally from `reach` and `read_only`, so a descriptor cannot advertise an authority that
     /// disagrees with the one it is classified under.
     pub(crate) schema: fn() -> Value,
     pub(crate) handler: ToolHandler,
-    /// Reply deadline, or `None` for work that returns a pollable log id instead of a result.
+    /// Reply deadline, or `None` where no shared class bounds it. `None` alone does not mean the work
+    /// is asynchronous: ten tools carry their own operation-specific timeout and still reply with a
+    /// result. `starts_background_job` separates those from the pollable ones, and the absence of that
+    /// separation is why the manifest's list of asynchronous tools had to be maintained by hand.
     pub(crate) deadline: Option<Duration>,
     pub(crate) reach: RemoteReach,
     pub(crate) read_only: bool,
@@ -65,6 +72,7 @@ pub(crate) struct ToolDescriptor {
 static REGISTRY: &[ToolDescriptor] = &[
     ToolDescriptor {
         name: crate::tools::capability_manifest::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::capability_manifest_definition,
         handler: |repository, surface, arguments| {
             crate::tools::capability::call_capability_manifest(
@@ -80,6 +88,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::preflight_health::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::preflight_health_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::capability::call_preflight_health(repository.root(), arguments)
@@ -91,6 +100,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::setup_profile_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::setup_profile_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::setup::call_setup_profile_run(repository.root(), arguments)
@@ -102,6 +112,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::native_build_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::native_build_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::native::call_native_build_run(repository.root(), arguments)
@@ -113,6 +124,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::native_device_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::native_device_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::native::call_native_device_run(repository.root(), arguments)
@@ -124,6 +136,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::fixture_generator_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::fixture_generator_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::fixtures::call_fixture_generator_run(repository.root(), arguments)
@@ -135,6 +148,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::base_image_check_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::base_image_check_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::fixtures::call_base_image_check_run(repository.root(), arguments)
@@ -146,6 +160,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::fixture_manifest_verify::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::fixture_manifest_verify_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::fixtures::call_fixture_manifest_verify(repository.root(), arguments)
@@ -157,6 +172,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::fixture_manifest_refresh::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::fixture_manifest_refresh_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::fixtures::call_fixture_manifest_refresh(repository.root(), arguments)
@@ -168,6 +184,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::github_pr_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::github_pr_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::github::call_github_pr_run(repository.root(), arguments)
@@ -179,6 +196,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::github_fork_prepare::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::github_fork_prepare_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::github::call_github_fork_prepare(repository.root(), arguments)
@@ -190,6 +208,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::move_tracked::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::move_tracked_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_move_tracked(repository.root(), arguments)
@@ -201,6 +220,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::delete_guarded::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::delete_guarded_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_delete_guarded(repository.root(), arguments)
@@ -212,6 +232,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_commit_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_commit_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_commit_exact(repository.root(), arguments)
@@ -223,6 +244,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_commit_scoped::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_commit_scoped_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_commit_scoped(repository.root(), arguments)
@@ -234,6 +256,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_commit_prefix::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_commit_prefix_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_commit_prefix(repository.root(), arguments)
@@ -245,6 +268,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_stage_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_stage_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_stage_exact(repository.root(), arguments)
@@ -256,6 +280,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_staged_scope_check::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_staged_scope_check_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_staged_scope_check(repository.root(), arguments)
@@ -267,6 +292,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_restore_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_restore_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_restore_exact(repository.root(), arguments)
@@ -278,6 +304,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::delete_untracked_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::delete_untracked_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_delete_untracked_exact(repository.root(), arguments)
@@ -289,6 +316,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::delete_generated_prefix::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::delete_generated_prefix_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_delete_generated_prefix(repository.root(), arguments)
@@ -300,6 +328,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_remote_list::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_remote_list_definition,
         handler: |repository, _surface, _arguments| {
             crate::tools::git::handlers::call_git_remote_list(repository.git_repository())
@@ -311,6 +340,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_remote_check::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_remote_check_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_remote_check(
@@ -325,6 +355,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_branch_prepare::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_branch_prepare_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_branch_prepare(repository.root(), arguments)
@@ -336,6 +367,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_merge_readiness::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_merge_readiness_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_merge_readiness(
@@ -350,6 +382,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::git_push_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::git_push_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::git::handlers::call_git_push_exact(repository.git_repository(), arguments)
@@ -361,6 +394,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::read_range::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::read_range_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_read_range(repository.root(), arguments)
@@ -372,6 +406,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::artifact_delete_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::artifact_delete_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_artifact_delete_exact(repository.root(), arguments)
@@ -383,6 +418,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::read_write_receipts::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::read_write_receipts_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_read_write_receipts(repository.root(), arguments)
@@ -394,6 +430,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::diff_preview::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::diff_preview_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_diff_preview(repository.root(), arguments)
@@ -405,6 +442,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::replace_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::replace_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_replace_exact(repository.root(), arguments)
@@ -416,6 +454,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::status_guard::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::status_guard_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_status_guard(repository.root(), arguments)
@@ -427,6 +466,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::file_info::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::file_info_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_file_info(repository.root(), arguments)
@@ -438,6 +478,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::set_file_executable::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::set_file_executable_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_set_file_executable(repository.root(), arguments)
@@ -449,6 +490,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::list_directory::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::list_directory_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_list_directory(repository.root(), arguments)
@@ -460,6 +502,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::read_file_bytes::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::read_file_bytes_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_read_file_bytes(repository.root(), arguments)
@@ -471,6 +514,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::write_new_file::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::write_new_file_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_write_new_file(repository.root(), arguments)
@@ -482,6 +526,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::write_new_file_base64::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::write_new_file_base64_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_write_new_file_base64(repository.root(), arguments)
@@ -493,6 +538,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::write_existing_file_exact_hash::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::write_existing_file_exact_hash_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_write_existing_file_exact_hash(repository.root(), arguments)
@@ -504,6 +550,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::artifact_write_text::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::artifact_write_text_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_artifact_write_text(repository.root(), arguments)
@@ -515,6 +562,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::artifact_write_base64::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::artifact_write_base64_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_artifact_write_base64(repository.root(), arguments)
@@ -526,6 +574,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::bulk_replace_exact::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::bulk_replace_exact_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_bulk_replace_exact(repository.root(), arguments)
@@ -537,6 +586,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::bulk_write_new_files_base64::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::bulk_write_new_files_base64_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_bulk_write_new_files_base64(repository.root(), arguments)
@@ -548,6 +598,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::create_directory::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::create_directory_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::files::call_create_directory(repository.root(), arguments)
@@ -559,6 +610,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::run_guarded_command::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::run_guarded_command_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::process::call_run_guarded_command(repository.root(), arguments)
@@ -570,6 +622,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::read_command_log::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::read_command_log_definition,
         handler: |_repository, _surface, arguments| {
             crate::tools::process::call_read_command_log(arguments)
@@ -581,6 +634,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::artifact_python_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::artifact_python_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::process::call_artifact_python_run(repository.root(), arguments)
@@ -592,6 +646,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::task_image_python_run::NAME,
+        starts_background_job: true,
         schema: crate::tools::schema::task_image_python_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::process::call_task_image_python_run(repository.root(), arguments)
@@ -603,6 +658,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::artifact_build_check_run::NAME,
+        starts_background_job: true,
         schema: crate::tools::schema::artifact_build_check_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::process::call_artifact_build_check_run(repository.root(), arguments)
@@ -614,6 +670,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::compose_stack_run::NAME,
+        starts_background_job: true,
         schema: crate::tools::schema::compose_stack_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::process::call_compose_stack_run(repository.root(), arguments)
@@ -625,6 +682,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::harbor_run_start::NAME,
+        starts_background_job: true,
         schema: crate::tools::schema::harbor_run_start_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::process::call_harbor_run_start(repository.root(), arguments)
@@ -636,6 +694,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::image_cleanliness_check_run::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::image_cleanliness_check_run_definition,
         handler: |_repository, _surface, arguments| {
             crate::tools::process::call_image_cleanliness_check_run(arguments)
@@ -647,6 +706,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::docker_image_inspect::NAME,
+        starts_background_job: false,
         schema: crate::tools::schema::docker_image_inspect_definition,
         handler: |_repository, _surface, arguments| {
             crate::tools::process::call_docker_image_inspect(arguments)
@@ -658,6 +718,7 @@ static REGISTRY: &[ToolDescriptor] = &[
     },
     ToolDescriptor {
         name: crate::tools::validation_profile_run::NAME,
+        starts_background_job: true,
         schema: crate::tools::schema::validation_profile_run_definition,
         handler: |repository, _surface, arguments| {
             crate::tools::process::call_validation_profile_run(repository.root(), arguments)
@@ -675,6 +736,21 @@ pub(crate) fn descriptor(name: &str) -> Option<&'static ToolDescriptor> {
 
 pub(crate) fn descriptors() -> &'static [ToolDescriptor] {
     REGISTRY
+}
+
+/// Every tool whose reply carries a log id to poll, in table order.
+///
+/// The manifest advertises this so a client knows which calls to poll rather than await. It was an
+/// array written by hand and it was wrong by two: `compose_stack_run` and `artifact_build_check_run`,
+/// the two asynchronous tools added most recently. Both had already been missed once in
+/// `typed_workflows` in the same file and fixed in `7de5b1d`, so the same omission survived in a
+/// second list because the fix was applied to the instance rather than to the class.
+pub(crate) fn background_job_tools() -> Vec<&'static str> {
+    REGISTRY
+        .iter()
+        .filter(|entry| entry.starts_background_job)
+        .map(|entry| entry.name)
+        .collect()
 }
 
 #[cfg(test)]
@@ -733,6 +809,55 @@ mod tests {
             "the set of registry names that are proper prefixes of another has changed; confirm \
              that dispatch::attribute still matches on the refusal marker rather than the bare name, \
              then record the new set here"
+        );
+    }
+
+    /// Two fields could disagree, so pin the one direction that would be a lie.
+    ///
+    /// A tool that returns a log id cannot also promise a bounded reply, because there is no result
+    /// to return within it. The converse is deliberately not asserted: ten tools carry `None` while
+    /// replying with a result, since they hold their own operation-specific timeout, and that is the
+    /// distinction this field exists to make rather than one to forbid.
+    #[test]
+    fn a_background_job_never_also_advertises_a_reply_deadline() {
+        for entry in REGISTRY {
+            assert!(
+                !(entry.starts_background_job && entry.deadline.is_some()),
+                "{} starts a background job and also advertises a reply deadline; one of the two \
+                 is wrong, because a pollable reply has no result to deliver within a deadline",
+                entry.name
+            );
+        }
+    }
+
+    /// The derived list must be right, not merely self-consistent.
+    ///
+    /// Deriving `background_jobs.tools` from the table removes the chance of forgetting a new
+    /// asynchronous tool, but it does not check that the flags themselves are set correctly: every
+    /// flag could be false and the manifest would advertise an empty list, consistently and wrongly.
+    /// The consumers cannot catch that either, since the instructions test iterates this same list and
+    /// an empty one passes it trivially. So the set is asserted whole here, which is an assertion
+    /// rather than a second source: changing which tools are asynchronous is meant to fail here and be
+    /// re-recorded deliberately.
+    #[test]
+    fn the_tools_that_start_background_jobs_are_the_known_ones() {
+        const KNOWN_BACKGROUND_JOB_TOOLS: &[&str] = &[
+            "task_image_python_run",
+            "artifact_build_check_run",
+            "compose_stack_run",
+            "harbor_run_start",
+            "validation_profile_run",
+        ];
+
+        let mut observed = background_job_tools();
+        observed.sort_unstable();
+        let mut known = KNOWN_BACKGROUND_JOB_TOOLS.to_vec();
+        known.sort_unstable();
+
+        assert_eq!(
+            observed, known,
+            "the set of tools that return a pollable log id has changed; the manifest and the client \
+             instructions both derive from it, so record the new set here deliberately"
         );
     }
 
