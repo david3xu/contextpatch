@@ -43,6 +43,13 @@ pub(crate) use git::{
 };
 pub(crate) use github::{github_fork_prepare_definition, github_pr_run_definition};
 pub(crate) use native::{native_build_run_definition, native_device_run_definition};
+pub(crate) use process::{
+    artifact_build_check_run_definition, artifact_python_run_definition,
+    compose_stack_run_definition, docker_image_inspect_definition, harbor_run_start_definition,
+    image_cleanliness_check_run_definition, read_command_log_definition,
+    run_guarded_command_definition, task_image_python_run_definition,
+    validation_profile_run_definition,
+};
 pub(crate) use setup::setup_profile_run_definition;
 // Still test-only: production reads these through `add_always_allow_annotations`, which lives here.
 // They become ordinary reads once every tool is a descriptor and annotations come from its fields.
@@ -58,7 +65,6 @@ fn internal_tool_definitions() -> Vec<Value> {
             .iter()
             .map(|entry| (entry.schema)()),
     );
-    definitions.extend(process::definitions());
     for definition in &mut definitions {
         add_always_allow_annotations(definition);
     }

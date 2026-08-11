@@ -245,65 +245,19 @@ fn call_tool(
     name: &str,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    // Tools not yet migrated still take a path, and receive the logical path until each one moves to the
-    // typed target. That is what lets this proceed one tool at a time instead of all at once.
-    if let Some(entry) = crate::tools::registry::descriptor(name) {
-        return (entry.handler)(repository, surface, arguments);
-    }
-
-    match name {
-        tools::run_guarded_command::NAME => {
-            tools::process::call_run_guarded_command(repository.root(), arguments)
-        }
-        tools::read_command_log::NAME => tools::process::call_read_command_log(arguments),
-        tools::image_cleanliness_check_run::NAME => {
-            tools::process::call_image_cleanliness_check_run(arguments)
-        }
-        tools::docker_image_inspect::NAME => tools::process::call_docker_image_inspect(arguments),
-        tools::artifact_python_run::NAME => {
-            tools::process::call_artifact_python_run(repository.root(), arguments)
-        }
-        tools::task_image_python_run::NAME => {
-            tools::process::call_task_image_python_run(repository.root(), arguments)
-        }
-        tools::harbor_run_start::NAME => {
-            tools::process::call_harbor_run_start(repository.root(), arguments)
-        }
-        tools::compose_stack_run::NAME => {
-            tools::process::call_compose_stack_run(repository.root(), arguments)
-        }
-        tools::artifact_build_check_run::NAME => {
-            tools::process::call_artifact_build_check_run(repository.root(), arguments)
-        }
-        tools::validation_profile_run::NAME => {
-            tools::process::call_validation_profile_run(repository.root(), arguments)
-        }
-        unknown => Err(format!("unknown tool: {unknown}")),
-    }
+    let Some(entry) = crate::tools::registry::descriptor(name) else {
+        return Err(format!("unknown tool: {name}"));
+    };
+    (entry.handler)(repository, surface, arguments)
 }
 
+/// The reply deadline for one tool, or `None` for work that returns a pollable log id.
 fn deadline_for(name: &str) -> Option<Duration> {
-    use contextpatch_core::process::deadline::{GIT_DEADLINE, READ_DEADLINE, WRITE_DEADLINE};
-
-    if let Some(entry) = crate::tools::registry::descriptor(name) {
-        return entry.deadline;
-    }
-
-    match name {
-        tools::read_command_log::NAME => Some(READ_DEADLINE),
-        tools::fixture_manifest_refresh::NAME => Some(WRITE_DEADLINE),
-        tools::github_fork_prepare::NAME => Some(GIT_DEADLINE),
-
-        _ => None,
-    }
+    crate::tools::registry::descriptor(name).and_then(|entry| entry.deadline)
 }
 
 fn serializes_repository_mutation(name: &str) -> bool {
-    if let Some(entry) = crate::tools::registry::descriptor(name) {
-        return entry.serializes_mutation;
-    }
-
-    matches!(name, tools::create_directory::NAME)
+    crate::tools::registry::descriptor(name).is_some_and(|entry| entry.serializes_mutation)
 }
 
 #[cfg(test)]

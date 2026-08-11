@@ -551,6 +551,116 @@ static REGISTRY: &[ToolDescriptor] = &[
         read_only: false,
         serializes_mutation: true,
     },
+    ToolDescriptor {
+        name: crate::tools::run_guarded_command::NAME,
+        schema: crate::tools::schema::run_guarded_command_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_run_guarded_command(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::read_command_log::NAME,
+        schema: crate::tools::schema::read_command_log_definition,
+        handler: |_repository, _surface, arguments| {
+            crate::tools::process::call_read_command_log(arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::artifact_python_run::NAME,
+        schema: crate::tools::schema::artifact_python_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_artifact_python_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::task_image_python_run::NAME,
+        schema: crate::tools::schema::task_image_python_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_task_image_python_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::IsolatedExecution,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::artifact_build_check_run::NAME,
+        schema: crate::tools::schema::artifact_build_check_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_artifact_build_check_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::compose_stack_run::NAME,
+        schema: crate::tools::schema::compose_stack_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_compose_stack_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::harbor_run_start::NAME,
+        schema: crate::tools::schema::harbor_run_start_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_harbor_run_start(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::image_cleanliness_check_run::NAME,
+        schema: crate::tools::schema::image_cleanliness_check_run_definition,
+        handler: |_repository, _surface, arguments| {
+            crate::tools::process::call_image_cleanliness_check_run(arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::IsolatedExecution,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::docker_image_inspect::NAME,
+        schema: crate::tools::schema::docker_image_inspect_definition,
+        handler: |_repository, _surface, arguments| {
+            crate::tools::process::call_docker_image_inspect(arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::validation_profile_run::NAME,
+        schema: crate::tools::schema::validation_profile_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_validation_profile_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
 ];
 
 pub(crate) fn descriptor(name: &str) -> Option<&'static ToolDescriptor> {
