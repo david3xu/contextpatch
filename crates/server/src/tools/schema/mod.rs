@@ -19,6 +19,16 @@ use crate::tools::ToolSurface;
 // migration needs to read all six from one place.
 pub(crate) use authority::RemoteReach;
 pub(crate) use capability::{capability_manifest_definition, preflight_health_definition};
+pub(crate) use files::{
+    artifact_delete_exact_definition, artifact_write_base64_definition,
+    artifact_write_text_definition, bulk_replace_exact_definition,
+    bulk_write_new_files_base64_definition, create_directory_definition, diff_preview_definition,
+    file_info_definition, list_directory_definition, read_file_bytes_definition,
+    read_range_definition, read_write_receipts_definition, replace_exact_definition,
+    set_file_executable_definition, status_guard_definition,
+    write_existing_file_exact_hash_definition, write_new_file_base64_definition,
+    write_new_file_definition,
+};
 pub(crate) use fixtures::{
     base_image_check_run_definition, fixture_generator_run_definition,
     fixture_manifest_refresh_definition, fixture_manifest_verify_definition,
@@ -48,7 +58,6 @@ fn internal_tool_definitions() -> Vec<Value> {
             .iter()
             .map(|entry| (entry.schema)()),
     );
-    definitions.extend(files::definitions());
     definitions.extend(process::definitions());
     for definition in &mut definitions {
         add_always_allow_annotations(definition);

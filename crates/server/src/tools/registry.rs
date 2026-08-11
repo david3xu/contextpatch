@@ -353,6 +353,204 @@ static REGISTRY: &[ToolDescriptor] = &[
         read_only: false,
         serializes_mutation: true,
     },
+    ToolDescriptor {
+        name: crate::tools::read_range::NAME,
+        schema: crate::tools::schema::read_range_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_read_range(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::artifact_delete_exact::NAME,
+        schema: crate::tools::schema::artifact_delete_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_artifact_delete_exact(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::read_write_receipts::NAME,
+        schema: crate::tools::schema::read_write_receipts_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_read_write_receipts(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::diff_preview::NAME,
+        schema: crate::tools::schema::diff_preview_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_diff_preview(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::replace_exact::NAME,
+        schema: crate::tools::schema::replace_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_replace_exact(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::status_guard::NAME,
+        schema: crate::tools::schema::status_guard_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_status_guard(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::file_info::NAME,
+        schema: crate::tools::schema::file_info_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_file_info(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::set_file_executable::NAME,
+        schema: crate::tools::schema::set_file_executable_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_set_file_executable(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::list_directory::NAME,
+        schema: crate::tools::schema::list_directory_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_list_directory(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::read_file_bytes::NAME,
+        schema: crate::tools::schema::read_file_bytes_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_read_file_bytes(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::write_new_file::NAME,
+        schema: crate::tools::schema::write_new_file_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_write_new_file(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::write_new_file_base64::NAME,
+        schema: crate::tools::schema::write_new_file_base64_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_write_new_file_base64(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::write_existing_file_exact_hash::NAME,
+        schema: crate::tools::schema::write_existing_file_exact_hash_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_write_existing_file_exact_hash(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::artifact_write_text::NAME,
+        schema: crate::tools::schema::artifact_write_text_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_artifact_write_text(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::artifact_write_base64::NAME,
+        schema: crate::tools::schema::artifact_write_base64_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_artifact_write_base64(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::bulk_replace_exact::NAME,
+        schema: crate::tools::schema::bulk_replace_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_bulk_replace_exact(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::bulk_write_new_files_base64::NAME,
+        schema: crate::tools::schema::bulk_write_new_files_base64_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_bulk_write_new_files_base64(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::create_directory::NAME,
+        schema: crate::tools::schema::create_directory_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::files::call_create_directory(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::WRITE_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
 ];
 
 pub(crate) fn descriptor(name: &str) -> Option<&'static ToolDescriptor> {

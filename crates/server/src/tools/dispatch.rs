@@ -252,52 +252,6 @@ fn call_tool(
     }
 
     match name {
-        tools::read_range::NAME => tools::files::call_read_range(repository.root(), arguments),
-        tools::diff_preview::NAME => tools::files::call_diff_preview(repository.root(), arguments),
-        tools::replace_exact::NAME => {
-            tools::files::call_replace_exact(repository.root(), arguments)
-        }
-        tools::bulk_replace_exact::NAME => {
-            tools::files::call_bulk_replace_exact(repository.root(), arguments)
-        }
-        tools::read_write_receipts::NAME => {
-            tools::files::call_read_write_receipts(repository.root(), arguments)
-        }
-        tools::status_guard::NAME => tools::files::call_status_guard(repository.root(), arguments),
-        tools::file_info::NAME => tools::files::call_file_info(repository.root(), arguments),
-        tools::set_file_executable::NAME => {
-            tools::files::call_set_file_executable(repository.root(), arguments)
-        }
-        tools::list_directory::NAME => {
-            tools::files::call_list_directory(repository.root(), arguments)
-        }
-        tools::read_file_bytes::NAME => {
-            tools::files::call_read_file_bytes(repository.root(), arguments)
-        }
-        tools::write_new_file::NAME => {
-            tools::files::call_write_new_file(repository.root(), arguments)
-        }
-        tools::write_new_file_base64::NAME => {
-            tools::files::call_write_new_file_base64(repository.root(), arguments)
-        }
-        tools::write_existing_file_exact_hash::NAME => {
-            tools::files::call_write_existing_file_exact_hash(repository.root(), arguments)
-        }
-        tools::artifact_write_text::NAME => {
-            tools::files::call_artifact_write_text(repository.root(), arguments)
-        }
-        tools::artifact_delete_exact::NAME => {
-            tools::files::call_artifact_delete_exact(repository.root(), arguments)
-        }
-        tools::artifact_write_base64::NAME => {
-            tools::files::call_artifact_write_base64(repository.root(), arguments)
-        }
-        tools::bulk_write_new_files_base64::NAME => {
-            tools::files::call_bulk_write_new_files_base64(repository.root(), arguments)
-        }
-        tools::create_directory::NAME => {
-            tools::files::call_create_directory(repository.root(), arguments)
-        }
         tools::run_guarded_command::NAME => {
             tools::process::call_run_guarded_command(repository.root(), arguments)
         }
@@ -336,27 +290,8 @@ fn deadline_for(name: &str) -> Option<Duration> {
     }
 
     match name {
-        tools::read_range::NAME
-        | tools::read_write_receipts::NAME
-        | tools::diff_preview::NAME
-        | tools::status_guard::NAME
-        | tools::file_info::NAME
-        | tools::list_directory::NAME
-        | tools::read_file_bytes::NAME
-        | tools::read_command_log::NAME => Some(READ_DEADLINE),
-
-        tools::replace_exact::NAME
-        | tools::bulk_replace_exact::NAME
-        | tools::write_new_file::NAME
-        | tools::write_new_file_base64::NAME
-        | tools::write_existing_file_exact_hash::NAME
-        | tools::set_file_executable::NAME
-        | tools::artifact_write_text::NAME
-        | tools::artifact_delete_exact::NAME
-        | tools::artifact_write_base64::NAME
-        | tools::bulk_write_new_files_base64::NAME
-        | tools::create_directory::NAME
-        | tools::fixture_manifest_refresh::NAME => Some(WRITE_DEADLINE),
+        tools::read_command_log::NAME => Some(READ_DEADLINE),
+        tools::fixture_manifest_refresh::NAME => Some(WRITE_DEADLINE),
         tools::github_fork_prepare::NAME => Some(GIT_DEADLINE),
 
         _ => None,
@@ -368,20 +303,7 @@ fn serializes_repository_mutation(name: &str) -> bool {
         return entry.serializes_mutation;
     }
 
-    matches!(
-        name,
-        tools::replace_exact::NAME
-            | tools::bulk_replace_exact::NAME
-            | tools::write_new_file::NAME
-            | tools::write_new_file_base64::NAME
-            | tools::write_existing_file_exact_hash::NAME
-            | tools::set_file_executable::NAME
-            | tools::artifact_write_text::NAME
-            | tools::artifact_delete_exact::NAME
-            | tools::artifact_write_base64::NAME
-            | tools::bulk_write_new_files_base64::NAME
-            | tools::create_directory::NAME
-    )
+    matches!(name, tools::create_directory::NAME)
 }
 
 #[cfg(test)]

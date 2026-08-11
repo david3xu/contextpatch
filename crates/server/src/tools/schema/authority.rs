@@ -10,7 +10,7 @@
 //! documented container isolation. See `docs/execution-threat-model.md`.
 
 use crate::tools::git::names as git_names;
-use crate::tools::{files, process, project};
+use crate::tools::{process, project};
 
 /// How far an advertised action can reach beyond the local host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,14 +97,7 @@ pub fn is_read_only(name: &str) -> bool {
         return entry.read_only;
     }
 
-    name == files::read_range::NAME
-        || name == files::read_write_receipts::NAME
-        || name == files::diff_preview::NAME
-        || name == files::status_guard::NAME
-        || name == files::file_info::NAME
-        || name == files::list_directory::NAME
-        || name == files::read_file_bytes::NAME
-        || name == process::read_command_log::NAME
+    name == process::read_command_log::NAME
 }
 
 #[cfg(test)]
@@ -158,10 +151,10 @@ mod tests {
     #[test]
     fn local_writes_stay_closed_world() {
         assert_eq!(
-            remote_reach(files::write_new_file::NAME),
+            remote_reach(crate::tools::files::write_new_file::NAME),
             RemoteReach::Local
         );
-        assert!(!remote_reach(files::write_new_file::NAME).is_open_world());
+        assert!(!remote_reach(crate::tools::files::write_new_file::NAME).is_open_world());
     }
 
     #[test]
