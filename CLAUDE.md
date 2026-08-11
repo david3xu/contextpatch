@@ -56,6 +56,14 @@ Operations do **not** take a repository path. They take `core::git::root::Reposi
 
 Most of the recent commit history is the migration of individual tools onto this model; a few handlers still take the logical path. Move them onto typed authority rather than adding new path-taking handlers.
 
+### Module size
+
+There is no enforced line limit, and any figure quoted as one has been fitted to a measurement rather than chosen. What matters is whether a file holds more than one concern.
+
+`registry.rs` is the largest file under `tools/` at ~720 lines and is deliberately exempt: it is a declarative table of one entry per tool, roughly twelve lines each, growing linearly with the tool count. That is not the coupling the module split was addressing, and breaking it up would scatter the single source of truth it exists to be. `harbor.rs` and `capability.rs` are larger still and are genuine candidates, the latter because its manifest prose grows with every tool.
+
+Split when a file holds unrelated concerns — which is what `process.rs` did, with job machinery, a log store, guarded execution, and container tools in one place — not when it crosses a number.
+
 ### The tool registry (`crates/server/src/tools/registry.rs`)
 
 One `ToolDescriptor` per tool carries all six per-tool facts. `dispatch.rs` is a table lookup, `deadline_for` and `serializes_repository_mutation` are one-line field reads, and `schema/authority.rs` classifies from the descriptor. Before this existed those facts lived in five files with nothing checking they agreed, which produced four separate staleness defects in one week.

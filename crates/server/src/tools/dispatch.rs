@@ -62,10 +62,11 @@ pub(crate) fn handle_tool_call(
 /// The repository one call operates on.
 ///
 /// Owning, because a selection holds the directory descriptor that anchors it and that descriptor has to
-/// stay open for as long as the call can still run. Only two accessors are exposed: the logical path, for
-/// messages and for tools not yet migrated, and the typed target, which carries the descriptor when there
-/// is one. Nothing here hands out an optional descriptor, so a caller cannot accidentally treat an
-/// anchored repository as a path-backed one, and nothing here reopens a selected root.
+/// stay open for as long as the call can still run. Both exposed accessors are typed: [`Self::root`]
+/// carries whichever authority the call has, and [`Self::git_repository`] narrows it to the Git
+/// projection. Nothing here hands out an optional descriptor or a bare path, so a caller cannot
+/// accidentally treat an anchored repository as a path-backed one, and nothing here reopens a
+/// selected root.
 pub(crate) enum EffectiveRepository {
     /// No selector was supplied, so the configured root is the target.
     Configured(std::path::PathBuf),

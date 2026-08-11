@@ -8,7 +8,7 @@ Three deviations from the plan as written, each recorded in the commit that made
 - `EXPECTED_OPEN_WORLD_ACTIONS` was **not** derived from `reach`. Annotations are already computed from `reach`, so deriving the expectation would assert a tautology and discard the audit. It belongs in the guard category with the safety-contract prose.
 - The registry scaffolding migrated one tool rather than landing empty. An empty table compiles and proves nothing about whether the schema merge, handler adaptation, deadline lookup, lock lookup, and both classifiers resolve through a descriptor.
 
-A fourth staleness defect surfaced during the inventory and was fixed in `cde66bf`: `guidance::permitted_summary` told a refused `bash` caller that only the base-image script was permitted, three commits after the fixed list replaced it.
+A fourth staleness defect surfaced during the inventory and was fixed in `cde66bf`, in `core` rather than in the server: `guidance::permitted_summary` told a refused `bash` caller that only the base-image script was permitted, three commits after the fixed list replaced it.
 
 Collapsing per-tool fan-out in the MCP server.
 
@@ -24,7 +24,7 @@ Three defects reached committed code on this branch. All three are the same clas
 | --- | --- | --- |
 | `capability.rs` `typed_workflows` | Omitted `compose_stack_run` and `artifact_build_check_run` entirely | Fixed in `7de5b1d` |
 | `capability.rs` `programs.bash` | Advertised only the base-image script, three commits after the fixed validation-script list replaced it | Fixed; now derived from the allowlist |
-| `protocol/instructions.rs` | Client instructions name three `log_id` tools; there are five | Open |
+| `protocol/instructions.rs` | Client instructions name three `log_id` tools; there are five | Fixed in `cde66bf` |
 
 The manifest is the worst possible landing place for this drift. `capability_manifest` exists so a client can tell a missing capability from a stale binary, so a tool it never mentions reads as a tool that does not exist. The agent report in `docs/gaps.md` was about exactly that failure mode, and its prescribed remedy — call `capability_manifest` before asserting a limit — would have answered wrongly here.
 
@@ -180,6 +180,6 @@ The requirement is that nothing is lost. Inspection cannot establish that across
 
 ## Scope boundaries
 
-Not in scope. The `core` crate is not touched: its large files are cohesive, roughly 40% inline tests, and show none of this coupling. The 2,576-line `tests/stage1_mcp/project.rs` stays as it is, because size costs little in a test file. Safety-contract and threat-model prose stays hand-written, because it records guarantees rather than names, and generating it would strip the reasoning that makes it worth having.
+Not in scope. The `core` crate is left alone as a matter of structure: its large files are cohesive, roughly 40% inline tests, and show none of this coupling. One exception was unavoidable — `cde66bf` changed `core/src/process/guidance.rs` by seven lines, because the fourth staleness defect lived in that function. The boundary holds for the refactor; it does not hold as an unqualified claim about the branch. The 2,576-line `tests/stage1_mcp/project.rs` stays as it is, because size costs little in a test file. Safety-contract and threat-model prose stays hand-written, because it records guarantees rather than names, and generating it would strip the reasoning that makes it worth having.
 
 Risk. The registry touches the dispatch path for every tool, which is the highest-traffic code in the server. That is why migration is per-tool with both paths live, and why the golden snapshot is captured first. The realistic failure is a silently changed schema description, which the snapshot catches by construction.
