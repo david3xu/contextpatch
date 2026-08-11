@@ -63,6 +63,16 @@ This document is normative. If implementation behavior conflicts with this file,
     program reads options from a file must be removed from its children, since confining argv does
     not confine a config file.
 
+34. An advertised input schema is a promise about argument *names* and nothing else. Runtime
+    validation closes the schema and rejects a name that is not a declared property; it does not
+    check `type`, `enum`, `minimum`, `maximum`, `pattern`, `maxItems`, or any other keyword. Every
+    such constraint is therefore advisory at the surface and must have a guard in `core` that
+    enforces the same rule, which is where it is actually enforced. A constraint advertised with no
+    counterpart is unenforced with nothing to catch it, and a counterpart whose limit differs from
+    the advertised one is worse, because a caller that trusts the document is wrong in a direction
+    the document cannot reveal. Where the guard holds the limit as a named constant, the schema must
+    derive from it rather than restate it.
+
 ## Required refusal cases
 
 Write tools must refuse the operation when:
