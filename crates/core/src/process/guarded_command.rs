@@ -545,11 +545,6 @@ mod tests {
         );
     }
 
-    /// The options that make `rg` a program launcher rather than a search tool.
-    ///
-    /// `--pre sh --pre-glob '*'` was demonstrated executing a shell over repository files and
-    /// writing outside the repository root, which defeated the fixed shell-script list, the
-    /// repository-relative Python rule, and the pytest hardening at once.
     /// Formatting is a mutation; checking is not. Only the second is admitted.
     #[test]
     fn permits_cargo_fmt_only_as_a_check() {
@@ -585,6 +580,11 @@ mod tests {
         }
     }
 
+    /// The options that make `rg` a program launcher rather than a search tool.
+    ///
+    /// `--pre sh --pre-glob '*'` was demonstrated executing a shell over repository files and
+    /// writing outside the repository root, which defeated the fixed shell-script list, the
+    /// repository-relative Python rule, and the pytest hardening at once.
     #[test]
     fn refuses_rg_options_that_start_programs() {
         for values in [
