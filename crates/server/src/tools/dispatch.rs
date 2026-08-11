@@ -372,4 +372,72 @@ mod tests {
 
         crate::tools::snapshot_fixture::assert_matches("tool-matrix.tsv", &rendered);
     }
+
+    /// Pin which files read `logical_path()`, and how many times each does.
+    ///
+    /// Operations derive authority from a retained directory descriptor, not from a pathname. Three
+    /// sites still read the logical path, all deliberately and none to reach a file: `github.rs`
+    /// reports `cwd` back to a caller twice, because a caller asking which directory was used cannot
+    /// be handed a descriptor, and `restore.rs` uses it once as receipt identity, which is
+    /// path-derived by design and is an acknowledged deferred boundary.
+    ///
+    /// Those three were previously recorded as line numbers in two documents, which is the staleness
+    /// this whole exercise removed elsewhere: the numbers are wrong after any edit above them. A map
+    /// of file to count survives edits within a file, which is the point, and is compared whole
+    /// rather than summed so that relocating a reader between files fails here and has to be argued
+    /// for rather than absorbed into an unchanged total.
+    #[test]
+    fn the_files_that_read_a_logical_path_are_the_known_ones() {
+        // Assembled rather than written whole so this file does not match its own scan. Writing the
+        // literal here would add `dispatch.rs` to the observed set and quietly make the recorded map
+        // describe the test instead of the code it is pinning.
+        const READER: &str = concat!(".logical_", "path()");
+        const KNOWN_READERS: &[(&str, usize)] = &[
+            ("tools/git/handlers/restore.rs", 1),
+            ("tools/github.rs", 2),
+        ];
+
+        // A unit test in this binary runs with `CARGO_MANIFEST_DIR` at `crates/server`, so the scan
+        // root is this crate's own sources. `canonical_label` reads the logical path inside `core`,
+        // which is a different crate and is not in scope here.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut observed: Vec<(String, usize)> = Vec::new();
+        let mut pending = vec![root.clone()];
+        while let Some(directory) = pending.pop() {
+            let entries = std::fs::read_dir(&directory).expect("the source tree must be readable");
+            for entry in entries {
+                let path = entry.expect("a source entry must be readable").path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("a source file must be readable");
+                let count = source.matches(READER).count();
+                if count > 0 {
+                    let relative = path
+                        .strip_prefix(&root)
+                        .expect("every scanned file is under the scan root")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    observed.push((relative, count));
+                }
+            }
+        }
+        observed.sort();
+
+        let known: Vec<(String, usize)> = KNOWN_READERS
+            .iter()
+            .map(|(file, count)| ((*file).to_string(), *count))
+            .collect();
+
+        assert_eq!(
+            observed, known,
+            "the set of files reading a logical path has changed; a new reader for reporting or \
+             receipt identity needs the same justification the existing three carry, and a reader \
+             added to gain access to a file is a regression"
+        );
+    }
 }
