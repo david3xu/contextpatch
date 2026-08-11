@@ -26,8 +26,8 @@ pub(crate) fn capability_manifest_definition() -> Value {
     )
 }
 
-pub(crate) fn definitions() -> Vec<Value> {
-    vec![json!({
+pub(crate) fn preflight_health_definition() -> Value {
+    json!({
                 "name": tools::preflight_health::NAME,
                 "description": "Check repository and local tool readiness for Claude Desktop workflows without mutating the repository. Dirty-path evidence is sampled within fixed entry and byte limits; use response_mode compact or minimal when full probe details are unnecessary.",
                 "inputSchema": {
@@ -43,5 +43,5 @@ pub(crate) fn definitions() -> Vec<Value> {
                     "additionalProperties": false
                 }
             }
-    )]
+    )
 }

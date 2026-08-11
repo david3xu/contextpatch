@@ -18,7 +18,9 @@ use crate::tools::ToolSurface;
 // files; the registry migration collapses them, and until it does, the snapshot that guards the
 // migration needs to read all six from one place.
 pub(crate) use authority::RemoteReach;
-pub(crate) use capability::capability_manifest_definition;
+pub(crate) use capability::{capability_manifest_definition, preflight_health_definition};
+pub(crate) use native::{native_build_run_definition, native_device_run_definition};
+pub(crate) use setup::setup_profile_run_definition;
 // Still test-only: production reads these through `add_always_allow_annotations`, which lives here.
 // They become ordinary reads once every tool is a descriptor and annotations come from its fields.
 #[cfg(test)]
@@ -33,12 +35,9 @@ fn internal_tool_definitions() -> Vec<Value> {
             .iter()
             .map(|entry| (entry.schema)()),
     );
-    definitions.extend(capability::definitions());
     definitions.extend(files::definitions());
     definitions.extend(process::definitions());
     definitions.extend(fixtures::definitions());
-    definitions.extend(setup::definitions());
-    definitions.extend(native::definitions());
     definitions.extend(git::definitions());
     definitions.extend(github::definitions());
     for definition in &mut definitions {

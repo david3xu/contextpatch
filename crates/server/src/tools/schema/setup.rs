@@ -2,8 +2,8 @@ use serde_json::{json, Value};
 
 use crate::tools;
 
-pub(crate) fn definitions() -> Vec<Value> {
-    vec![json!({
+pub(crate) fn setup_profile_run_definition() -> Value {
+    json!({
                 "name": tools::setup_profile_run::NAME,
                 "description": "Plan or run a predefined repository setup action from a typed profile. Callers do not provide raw commands.",
                 "inputSchema": {
@@ -44,5 +44,5 @@ pub(crate) fn definitions() -> Vec<Value> {
                     "additionalProperties": false
                 }
             }
-    )]
+    )
 }

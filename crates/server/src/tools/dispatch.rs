@@ -252,9 +252,6 @@ fn call_tool(
     }
 
     match name {
-        tools::preflight_health::NAME => {
-            tools::capability::call_preflight_health(repository.root(), arguments)
-        }
         tools::read_range::NAME => tools::files::call_read_range(repository.root(), arguments),
         tools::diff_preview::NAME => tools::files::call_diff_preview(repository.root(), arguments),
         tools::replace_exact::NAME => {
@@ -339,15 +336,6 @@ fn call_tool(
         tools::validation_profile_run::NAME => {
             tools::process::call_validation_profile_run(repository.root(), arguments)
         }
-        tools::setup_profile_run::NAME => {
-            tools::setup::call_setup_profile_run(repository.root(), arguments)
-        }
-        tools::native_build_run::NAME => {
-            tools::native::call_native_build_run(repository.root(), arguments)
-        }
-        tools::native_device_run::NAME => {
-            tools::native::call_native_device_run(repository.root(), arguments)
-        }
         tools::git_commit_exact::NAME => {
             tools::git::handlers::call_git_commit_exact(repository.root(), arguments)
         }
@@ -411,8 +399,7 @@ fn deadline_for(name: &str) -> Option<Duration> {
     }
 
     match name {
-        tools::preflight_health::NAME
-        | tools::read_range::NAME
+        tools::read_range::NAME
         | tools::read_write_receipts::NAME
         | tools::diff_preview::NAME
         | tools::status_guard::NAME
@@ -477,9 +464,6 @@ fn serializes_repository_mutation(name: &str) -> bool {
             | tools::create_directory::NAME
             | tools::fixture_generator_run::NAME
             | tools::fixture_manifest_refresh::NAME
-            | tools::setup_profile_run::NAME
-            | tools::native_build_run::NAME
-            | tools::native_device_run::NAME
             | tools::git_commit_exact::NAME
             | tools::git_commit_scoped::NAME
             | tools::git_commit_prefix::NAME

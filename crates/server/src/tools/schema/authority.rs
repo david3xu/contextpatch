@@ -10,7 +10,7 @@
 //! documented container isolation. See `docs/execution-threat-model.md`.
 
 use crate::tools::git::names as git_names;
-use crate::tools::{capability, files, fixtures, github, native, process, project, setup};
+use crate::tools::{files, fixtures, github, process, project};
 
 /// How far an advertised action can reach beyond the local host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,9 +94,6 @@ fn executes_repository_code(name: &str) -> bool {
         // The build half has the network and runs repository-authored Dockerfile steps, even
         // though the smoke half is pinned to `--network none`.
         || name == process::artifact_build_check_run::NAME
-        || name == setup::setup_profile_run::NAME
-        || name == native::native_build_run::NAME
-        || name == native::native_device_run::NAME
         || name == fixtures::fixture_generator_run::NAME
         || name == fixtures::base_image_check_run::NAME
 }
@@ -107,8 +104,7 @@ pub fn is_read_only(name: &str) -> bool {
         return entry.read_only;
     }
 
-    name == capability::preflight_health::NAME
-        || name == files::read_range::NAME
+    name == files::read_range::NAME
         || name == files::read_write_receipts::NAME
         || name == files::diff_preview::NAME
         || name == files::status_guard::NAME

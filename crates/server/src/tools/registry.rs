@@ -56,17 +56,67 @@ pub(crate) struct ToolDescriptor {
 }
 
 /// Every migrated tool. Tools absent from this table still run through the original dispatch.
-static REGISTRY: &[ToolDescriptor] = &[ToolDescriptor {
-    name: crate::tools::capability_manifest::NAME,
-    schema: crate::tools::schema::capability_manifest_definition,
-    handler: |repository, surface, arguments| {
-        crate::tools::capability::call_capability_manifest(repository.root(), arguments, surface)
+static REGISTRY: &[ToolDescriptor] = &[
+    ToolDescriptor {
+        name: crate::tools::capability_manifest::NAME,
+        schema: crate::tools::schema::capability_manifest_definition,
+        handler: |repository, surface, arguments| {
+            crate::tools::capability::call_capability_manifest(
+                repository.root(),
+                arguments,
+                surface,
+            )
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
     },
-    deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
-    reach: RemoteReach::Local,
-    read_only: true,
-    serializes_mutation: false,
-}];
+    ToolDescriptor {
+        name: crate::tools::preflight_health::NAME,
+        schema: crate::tools::schema::preflight_health_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::capability::call_preflight_health(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::READ_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::setup_profile_run::NAME,
+        schema: crate::tools::schema::setup_profile_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::setup::call_setup_profile_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::native_build_run::NAME,
+        schema: crate::tools::schema::native_build_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::native::call_native_build_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::native_device_run::NAME,
+        schema: crate::tools::schema::native_device_run_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::native::call_native_device_run(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: true,
+    },
+];
 
 pub(crate) fn descriptor(name: &str) -> Option<&'static ToolDescriptor> {
     REGISTRY.iter().find(|entry| entry.name == name)
