@@ -182,6 +182,177 @@ static REGISTRY: &[ToolDescriptor] = &[
         read_only: false,
         serializes_mutation: true,
     },
+    ToolDescriptor {
+        name: crate::tools::move_tracked::NAME,
+        schema: crate::tools::schema::move_tracked_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_move_tracked(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::delete_guarded::NAME,
+        schema: crate::tools::schema::delete_guarded_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_delete_guarded(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_commit_exact::NAME,
+        schema: crate::tools::schema::git_commit_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_commit_exact(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_commit_scoped::NAME,
+        schema: crate::tools::schema::git_commit_scoped_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_commit_scoped(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_commit_prefix::NAME,
+        schema: crate::tools::schema::git_commit_prefix_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_commit_prefix(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_stage_exact::NAME,
+        schema: crate::tools::schema::git_stage_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_stage_exact(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_staged_scope_check::NAME,
+        schema: crate::tools::schema::git_staged_scope_check_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_staged_scope_check(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_restore_exact::NAME,
+        schema: crate::tools::schema::git_restore_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_restore_exact(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::delete_untracked_exact::NAME,
+        schema: crate::tools::schema::delete_untracked_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_delete_untracked_exact(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::delete_generated_prefix::NAME,
+        schema: crate::tools::schema::delete_generated_prefix_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_delete_generated_prefix(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_remote_list::NAME,
+        schema: crate::tools::schema::git_remote_list_definition,
+        handler: |repository, _surface, _arguments| {
+            crate::tools::git::handlers::call_git_remote_list(repository.git_repository())
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::Local,
+        read_only: true,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_remote_check::NAME,
+        schema: crate::tools::schema::git_remote_check_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_remote_check(
+                repository.git_repository(),
+                arguments,
+            )
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::DirectRemote,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_branch_prepare::NAME,
+        schema: crate::tools::schema::git_branch_prepare_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_branch_prepare(repository.root(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::DirectRemote,
+        read_only: false,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_merge_readiness::NAME,
+        schema: crate::tools::schema::git_merge_readiness_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_merge_readiness(
+                repository.git_repository(),
+                arguments,
+            )
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::DirectRemote,
+        read_only: true,
+        serializes_mutation: true,
+    },
+    ToolDescriptor {
+        name: crate::tools::git_push_exact::NAME,
+        schema: crate::tools::schema::git_push_exact_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::git::handlers::call_git_push_exact(repository.git_repository(), arguments)
+        },
+        deadline: Some(contextpatch_core::process::deadline::GIT_DEADLINE),
+        reach: RemoteReach::DirectRemote,
+        read_only: false,
+        serializes_mutation: true,
+    },
 ];
 
 pub(crate) fn descriptor(name: &str) -> Option<&'static ToolDescriptor> {

@@ -324,51 +324,6 @@ fn call_tool(
         tools::validation_profile_run::NAME => {
             tools::process::call_validation_profile_run(repository.root(), arguments)
         }
-        tools::git_commit_exact::NAME => {
-            tools::git::handlers::call_git_commit_exact(repository.root(), arguments)
-        }
-        tools::git_commit_scoped::NAME => {
-            tools::git::handlers::call_git_commit_scoped(repository.root(), arguments)
-        }
-        tools::git_commit_prefix::NAME => {
-            tools::git::handlers::call_git_commit_prefix(repository.root(), arguments)
-        }
-        tools::git_stage_exact::NAME => {
-            tools::git::handlers::call_git_stage_exact(repository.root(), arguments)
-        }
-        tools::git_staged_scope_check::NAME => {
-            tools::git::handlers::call_git_staged_scope_check(repository.root(), arguments)
-        }
-        tools::git_restore_exact::NAME => {
-            tools::git::handlers::call_git_restore_exact(repository.root(), arguments)
-        }
-        tools::move_tracked::NAME => {
-            tools::git::handlers::call_move_tracked(repository.root(), arguments)
-        }
-        tools::delete_guarded::NAME => {
-            tools::git::handlers::call_delete_guarded(repository.root(), arguments)
-        }
-        tools::delete_untracked_exact::NAME => {
-            tools::git::handlers::call_delete_untracked_exact(repository.root(), arguments)
-        }
-        tools::delete_generated_prefix::NAME => {
-            tools::git::handlers::call_delete_generated_prefix(repository.root(), arguments)
-        }
-        tools::git_remote_list::NAME => {
-            tools::git::handlers::call_git_remote_list(repository.git_repository())
-        }
-        tools::git_remote_check::NAME => {
-            tools::git::handlers::call_git_remote_check(repository.git_repository(), arguments)
-        }
-        tools::git_branch_prepare::NAME => {
-            tools::git::handlers::call_git_branch_prepare(repository.root(), arguments)
-        }
-        tools::git_merge_readiness::NAME => {
-            tools::git::handlers::call_git_merge_readiness(repository.git_repository(), arguments)
-        }
-        tools::git_push_exact::NAME => {
-            tools::git::handlers::call_git_push_exact(repository.git_repository(), arguments)
-        }
         unknown => Err(format!("unknown tool: {unknown}")),
     }
 }
@@ -402,23 +357,7 @@ fn deadline_for(name: &str) -> Option<Duration> {
         | tools::bulk_write_new_files_base64::NAME
         | tools::create_directory::NAME
         | tools::fixture_manifest_refresh::NAME => Some(WRITE_DEADLINE),
-
-        tools::git_commit_exact::NAME
-        | tools::git_commit_scoped::NAME
-        | tools::git_commit_prefix::NAME
-        | tools::git_stage_exact::NAME
-        | tools::git_staged_scope_check::NAME
-        | tools::git_restore_exact::NAME
-        | tools::move_tracked::NAME
-        | tools::delete_guarded::NAME
-        | tools::delete_untracked_exact::NAME
-        | tools::delete_generated_prefix::NAME
-        | tools::git_remote_list::NAME
-        | tools::git_remote_check::NAME
-        | tools::git_branch_prepare::NAME
-        | tools::git_merge_readiness::NAME
-        | tools::git_push_exact::NAME
-        | tools::github_fork_prepare::NAME => Some(GIT_DEADLINE),
+        tools::github_fork_prepare::NAME => Some(GIT_DEADLINE),
 
         _ => None,
     }
@@ -442,19 +381,6 @@ fn serializes_repository_mutation(name: &str) -> bool {
             | tools::artifact_write_base64::NAME
             | tools::bulk_write_new_files_base64::NAME
             | tools::create_directory::NAME
-            | tools::git_commit_exact::NAME
-            | tools::git_commit_scoped::NAME
-            | tools::git_commit_prefix::NAME
-            | tools::git_stage_exact::NAME
-            | tools::git_restore_exact::NAME
-            | tools::move_tracked::NAME
-            | tools::delete_guarded::NAME
-            | tools::delete_untracked_exact::NAME
-            | tools::delete_generated_prefix::NAME
-            | tools::git_remote_check::NAME
-            | tools::git_branch_prepare::NAME
-            | tools::git_merge_readiness::NAME
-            | tools::git_push_exact::NAME
     )
 }
 

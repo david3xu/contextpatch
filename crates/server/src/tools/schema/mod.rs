@@ -23,6 +23,14 @@ pub(crate) use fixtures::{
     base_image_check_run_definition, fixture_generator_run_definition,
     fixture_manifest_refresh_definition, fixture_manifest_verify_definition,
 };
+pub(crate) use git::{
+    delete_generated_prefix_definition, delete_guarded_definition,
+    delete_untracked_exact_definition, git_branch_prepare_definition, git_commit_exact_definition,
+    git_commit_prefix_definition, git_commit_scoped_definition, git_merge_readiness_definition,
+    git_push_exact_definition, git_remote_check_definition, git_remote_list_definition,
+    git_restore_exact_definition, git_stage_exact_definition, git_staged_scope_check_definition,
+    move_tracked_definition,
+};
 pub(crate) use github::{github_fork_prepare_definition, github_pr_run_definition};
 pub(crate) use native::{native_build_run_definition, native_device_run_definition};
 pub(crate) use setup::setup_profile_run_definition;
@@ -42,7 +50,6 @@ fn internal_tool_definitions() -> Vec<Value> {
     );
     definitions.extend(files::definitions());
     definitions.extend(process::definitions());
-    definitions.extend(git::definitions());
     for definition in &mut definitions {
         add_always_allow_annotations(definition);
     }

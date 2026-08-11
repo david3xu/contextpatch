@@ -68,10 +68,7 @@ pub fn remote_reach(name: &str) -> RemoteReach {
 
 /// Actions that contact a remote system directly.
 fn is_direct_remote(name: &str) -> bool {
-    name == git_names::git_remote_check::NAME
-        || name == git_names::git_push_exact::NAME
-        || name == git_names::git_branch_prepare::NAME
-        || name == git_names::git_merge_readiness::NAME
+    name == git_names::git_push_exact::NAME
 }
 
 /// Actions whose execution happens under the documented container isolation with networking off.
@@ -108,9 +105,6 @@ pub fn is_read_only(name: &str) -> bool {
         || name == files::list_directory::NAME
         || name == files::read_file_bytes::NAME
         || name == process::read_command_log::NAME
-        || name == git_names::git_remote_list::NAME
-        || name == git_names::git_merge_readiness::NAME
-        || name == git_names::git_staged_scope_check::NAME
 }
 
 #[cfg(test)]
