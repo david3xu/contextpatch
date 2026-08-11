@@ -261,9 +261,20 @@ const REFUSAL_MARKER: &str = " refused:";
 /// The shared argument helpers cannot do this themselves: `required_string` is handed a key and no
 /// tool name, so it can only say `missing or invalid string argument: path`. Without attribution a
 /// caller that mis-invoked most of the server learned neither which tool refused nor, in a batch,
-/// which call the refusal belonged to. Measured by calling every registered tool through the server
-/// with empty arguments and searching each reply for the tool's own name: of the twenty tools that
-/// refuse empty arguments, all twenty name themselves and all twenty replies are distinct.
+/// which call the refusal belonged to.
+///
+/// Measured by calling every advertised tool with empty arguments and checking each reply against
+/// the calling tool's own name: every tool that refuses names itself, and every one of those
+/// refusals is distinct. The count is deliberately not recorded, because it is not a property of
+/// this code. `status_guard` refuses a dirty worktree and succeeds on a clean one, so the same probe
+/// against the same binary reports 46 refusals or 47 depending on the tree. The ratio is the
+/// invariant, and the ratio is what a caller relies on.
+///
+/// A probe must keep one request outstanding. The server caps concurrent calls, and a saturation
+/// refusal arrives as a JSON-RPC error carrying no `result`, so a harness that reads
+/// `result.isError` scores it as a success and inflates the success count by however many calls
+/// overlapped the cap. Every figure previously recorded here was produced that way, and none of
+/// them reproduced.
 ///
 /// Attributing here rather than at each call site fixes every tool at once and cannot be forgotten
 /// by a new one. Handlers that already name themselves are left exactly as they are, so no existing
