@@ -259,8 +259,8 @@ pub(crate) fn harbor_run_start_definition() -> Value {
                         "timeout_secs": {
                             "type": "integer",
                             "minimum": 1,
-                            "maximum": crate::tools::process::MAX_HARBOR_TIMEOUT_SECS,
-                            "description": format!("Run timeout in seconds. Defaults to {}.", crate::tools::process::MAX_HARBOR_TIMEOUT_SECS)
+                            "maximum": contextpatch_core::process::guarded_command::HARBOR_RUN_MAX_TIMEOUT_SECS,
+                            "description": format!("Run timeout in seconds. Defaults to {}.", contextpatch_core::process::guarded_command::HARBOR_RUN_MAX_TIMEOUT_SECS)
                         }
                     },
                     "required": ["agent"],

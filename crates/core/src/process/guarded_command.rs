@@ -7,7 +7,10 @@ use crate::process::runner::{
 };
 
 const DEFAULT_MAX_TIMEOUT_SECS: u64 = 600;
-const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
+/// The longest a Harbor run may be given, whether reached through a guarded `harbor run` command or
+/// through `harbor_run_start`. Public because the advertised bound must read it rather than restate
+/// it, and both paths bound the same operation.
+pub const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
 
 /// pytest's plugin-loading option, in both its separated and combined short forms.
 const PYTEST_PLUGIN_OPTION: &str = "-p";

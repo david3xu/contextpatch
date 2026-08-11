@@ -52,7 +52,7 @@ pub(crate) use jobs::MAX_ACTIVE_BACKGROUND_JOBS;
 use jobs::{start_background_job, BackgroundJobOutcome};
 pub(crate) use runs::{
     call_artifact_python_run, call_harbor_run_start, call_validation_profile_run,
-    MAX_HARBOR_AGENT_LEN, MAX_HARBOR_TIMEOUT_SECS, VALIDATION_PROFILE_NAMES,
+    MAX_HARBOR_AGENT_LEN, VALIDATION_PROFILE_NAMES,
 };
 
 use std::fs;
