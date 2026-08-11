@@ -349,7 +349,8 @@ pub(crate) fn validation_profile_run_definition() -> Value {
                     "properties": {
                         "profile": {
                             "type": "string",
-                            "description": format!("Validation profile name, one of: {}.", crate::tools::process::VALIDATION_PROFILE_NAMES.join(", "))
+                            "enum": crate::tools::process::VALIDATION_PROFILE_NAMES,
+                            "description": "Validation profile name."
                         },
                         "timeout_secs": {
                             "type": "integer",
