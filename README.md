@@ -197,6 +197,7 @@ Public docs:
 - [Claude Desktop usage](docs/claude-desktop.md)
 - [Implementation roadmap](docs/implementation-roadmap.md)
 - [Server refactor plan](docs/server-refactor-plan.md)
+- [Tool registry plan](docs/tool-registry-plan.md)
 - [Native background implementation](docs/native-background-implementation.md)
 - [Copilot repository instructions](.github/copilot-instructions.md)
 
