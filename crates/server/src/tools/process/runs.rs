@@ -422,6 +422,27 @@ impl ProfileCommand {
     }
 }
 
+/// The validation profiles this server knows, as one declared list.
+///
+/// The five names were written out in five places: these arms, the refusal below, the capability
+/// manifest's list, the preflight document's keys, and the advertised description of the `profile`
+/// argument. Three of those now derive from here.
+///
+/// Two do not, for different reasons. The arms cannot, because each carries its own commands, so the
+/// tie between this list and them is asserted by test instead: every name here must resolve, and a
+/// name absent from here must not. The preflight document's keys stay hand-written because each entry
+/// also carries that profile's availability and required tools, which is a different fact from the
+/// name and wants its own change rather than being folded into this one.
+///
+/// Without the assertion this const would be the sixth copy rather than the single source.
+pub(crate) const VALIDATION_PROFILE_NAMES: &[&str] = &[
+    "repo-basic",
+    "rust-workspace",
+    "datacore-vscode",
+    "datacore-m6-vscode",
+    "dynamo-harbor-task",
+];
+
 pub(super) fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, String> {
     match profile {
         "repo-basic" => Ok(vec![
@@ -519,7 +540,8 @@ pub(super) fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, S
             },
         ]),
         _ => Err(format!(
-            "validation_profile_run refused: unknown profile `{profile}`; expected repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task"
+            "validation_profile_run refused: unknown profile `{profile}`; expected one of: {}",
+            VALIDATION_PROFILE_NAMES.join(", ")
         )),
     }
 }

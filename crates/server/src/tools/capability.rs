@@ -319,7 +319,7 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "compose_stack_run": "Plans or asynchronously starts one named Docker Compose stack proof, with the compose file pinned per action, every Docker argument server-derived, networking enabled, and a teardown scoped to this server's own Compose project.",
                 "artifact_build_check_run": "Plans or asynchronously builds a repository Dockerfile and then runs the built image as an import smoke check, with the build networked, the smoke run pinned to --network none, and the uniquely tagged image always removed."
             },
-            "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode", "dynamo-harbor-task"],
+            "validation_profiles": crate::tools::process::VALIDATION_PROFILE_NAMES,
             "guards": [
                 "repo-root-confined cwd",
                 "no shell interpolation",

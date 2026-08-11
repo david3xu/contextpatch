@@ -2085,7 +2085,7 @@
       "additionalProperties": false,
       "properties": {
         "profile": {
-          "description": "Validation profile name: repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task.",
+          "description": "Validation profile name, one of: repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, dynamo-harbor-task.",
           "type": "string"
         },
         "stop_on_failure": {
