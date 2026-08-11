@@ -68,7 +68,8 @@ pub fn permitted_summary(program: &str) -> Option<&'static str> {
             "a script on the fixed validation-script list; references/check-base-image.sh \
              additionally accepts the exact argument `task`"
         }
-        "rg" => "any search invocation with at least one argument",
+        "rg" => "search options only, from a positive allowlist; options that start a program \
+                 (--pre, --pre-glob, --hostname-bin, -z) or leave the repository (--follow) are refused",
         _ => return None,
     })
 }

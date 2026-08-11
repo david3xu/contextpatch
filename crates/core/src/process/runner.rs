@@ -22,6 +22,11 @@ const STREAM_CANCEL_DRAIN_LIMIT: Duration = Duration::from_millis(100);
 /// Allowlisted program names referenced by policy and by child-process hardening.
 pub const PROGRAM_GIT: &str = "git";
 pub const PROGRAM_PYTEST: &str = "pytest";
+pub const PROGRAM_RG: &str = "rg";
+
+/// ripgrep's config-file variable. Removed for `rg` children because such a file may carry `--pre`,
+/// which the argument allowlist refuses in argv but cannot see here.
+const RIPGREP_CONFIG_PATH: &str = "RIPGREP_CONFIG_PATH";
 
 /// Set for pytest children so ambient third-party plugins are not autoloaded. Repository-local
 /// `conftest.py` is still collected, which is deliberate: it is reviewed repository content and
@@ -237,6 +242,13 @@ fn run_bounded_command_with_wait(
         for variable in PYTEST_INHERITED_INJECTION_VARS {
             command.env_remove(variable);
         }
+    }
+    if program == PROGRAM_RG {
+        // ripgrep reads options from the file named by this variable, including `--pre`, which runs
+        // an arbitrary program per file. Confining argv is therefore not sufficient on its own: an
+        // ambient config would reintroduce exactly the execution the argument allowlist refuses.
+        // Same vector, and same fix, as the pytest injection variables above.
+        command.env_remove(RIPGREP_CONFIG_PATH);
     }
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());

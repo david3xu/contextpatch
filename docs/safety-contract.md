@@ -56,6 +56,12 @@ This document is normative. If implementation behavior conflicts with this file,
 32. Regular-file metadata and bounded byte reads must derive size, digest, line count, and returned
     bytes from one fixed-extent streamed snapshot. They must use bounded memory, refuse metadata or
     path-identity changes, and never chase a concurrently growing end-of-file.
+33. A search program must be admitted by a positive option allowlist, never by accepting any
+    argument. Options that start another program, shell out to a decompressor, or follow symlinks
+    out of the repository must be excluded by construction rather than by enumeration, because the
+    dangerous set is whatever the next release adds. Any environment variable through which the
+    program reads options from a file must be removed from its children, since confining argv does
+    not confine a config file.
 
 ## Required refusal cases
 
