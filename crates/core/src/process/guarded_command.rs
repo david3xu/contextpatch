@@ -193,6 +193,15 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
 ///
 /// Only the base-image check takes an argument. The doc gates are argument-free, and keeping them
 /// that way means a caller cannot reach a script's own option surface through this exception.
+/// The fixed shell-script list, for surfaces that must report it rather than restate it.
+///
+/// The capability manifest previously carried its own hand-written copy of this list and fell
+/// behind the moment the list changed, which is the worst possible staleness: the manifest exists so
+/// a client can tell a missing capability from a stale binary.
+pub fn allowed_shell_scripts() -> &'static [&'static str] {
+    ALLOWED_SHELL_SCRIPTS
+}
+
 fn is_allowed_shell_script(args: &[String]) -> bool {
     let Some(first) = args.first() else {
         return false;

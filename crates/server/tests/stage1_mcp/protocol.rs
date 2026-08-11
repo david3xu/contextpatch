@@ -83,6 +83,36 @@ fn stage2_open_world_annotations_match_the_documented_execution_authority() {
     );
 }
 
+/// The manifest is what a client calls to tell a missing capability from a stale binary, so a tool
+/// it never mentions is worse than an undocumented one: an agent concludes the capability does not
+/// exist. Two tools were added and their manifest prose was missed while seventeen other files were
+/// updated, which is exactly the drift this pins.
+#[test]
+fn stage2_capability_manifest_mentions_every_registered_tool() {
+    let root = git_repo("stage2_capability_manifest_mentions_every_tool");
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capability_manifest","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+        ],
+    );
+
+    let manifest = response_text(&responses[0]);
+    let missing: Vec<String> = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools/list array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name").to_string())
+        .filter(|name| !manifest.contains(name.as_str()))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "capability_manifest omits registered tools, so a client cannot discover them: {missing:?}"
+    );
+}
+
 #[test]
 fn stage2_capability_manifest_projects_cheaply_without_losing_the_build_stamp() {
     // The full manifest runs to hundreds of lines, which made the orientation tool expensive enough to
