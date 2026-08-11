@@ -84,13 +84,12 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
 
     let discovery: Value = serde_json::from_str(response_text(&responses[2])).unwrap();
     assert_eq!(discovery["tool_surface"], "project");
-    // One more than the registered tool count, because the meta action is dispatchable too and a client
-    // that enumerates actions must be able to find it.
-    assert_eq!(discovery["action_count"], 55);
-    assert_eq!(
-        discovery["action_definitions"].as_array().unwrap().len(),
-        54
-    );
+    // Stated as the relationship rather than as two integers, so adding a tool does not require
+    // editing this test: the count is exactly the registered actions plus the meta action, which is
+    // dispatchable and must be discoverable by a client that enumerates.
+    let defined = discovery["action_definitions"].as_array().unwrap().len();
+    assert_eq!(discovery["action_count"], defined + 1);
+    assert!(defined > 0, "the wrapper must describe some actions");
     let discovered: Vec<&str> = discovery["action_names"]
         .as_array()
         .unwrap()
@@ -117,7 +116,11 @@ fn project_surface_wraps_existing_actions_without_changing_their_policy_identity
         capabilities["tool_names"],
         serde_json::json!(["project_execute"])
     );
-    assert_eq!(capabilities["action_names"].as_array().unwrap().len(), 55);
+    assert_eq!(
+        capabilities["action_names"].as_array().unwrap().len(),
+        discovery["action_count"].as_u64().unwrap() as usize,
+        "the cheap projection must advertise the same action set as describe"
+    );
     assert!(
         capabilities["action_names"]
             .as_array()
