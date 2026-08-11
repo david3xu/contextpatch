@@ -26,7 +26,7 @@ This document is normative. If implementation behavior conflicts with this file,
 16. If GitHub PR or fork support is exposed, it must use narrow typed workflows with dry-run/confirmation for mutations, not arbitrary `gh` passthrough.
 17. If fixture-generator execution is exposed, it must be a typed repo-relative script workflow with dry-run, confirmation, pre-existing dirty-path gates, timeout, and post-run changed-path verification.
 18. If bulk fixture import is exposed, it must be create-only, repo-root-confined, file-count and byte-count bounded, and must refuse overwrites and traversal.
-19. If a shell-script validation exception is exposed, it must be fixed to a specific repository script such as `references/check-base-image.sh`, not arbitrary shell authority.
+19. If a shell-script validation exception is exposed, it must be fixed to an exact enumeration of named repository scripts, such as `references/check-base-image.sh` and the named documentation gates, never a directory glob and never arbitrary shell authority. A script on that list may take only the arguments the list itself documents, so its own option surface stays out of reach.
 20. If tracked-file moves are exposed, they must require a clean tracked regular source, absent destination, clean index, dry-run, exact confirmation, and post-move hash verification.
 21. If tracked-file deletion is exposed, it must require a clean tracked regular file, exact current SHA-256, dry-run, exact confirmation, and leave a reviewable unstaged deletion.
 22. Exact replacement should accept an optional complete-file SHA-256 so shared-worktree callers can reject stale reads in addition to validating the text anchor.

@@ -793,7 +793,7 @@ Rules:
   - `pnpm`: `run`, `test`
   - `python`/`python3`: a repo-relative `.py` script path as the first argument
   - `pytest`: validation invocation
-  - `bash`: exactly `references/check-base-image.sh` or `references/check-base-image.sh task`
+  - `bash`: only a script on the fixed validation-script list, with an optional leading `./` — `references/check-base-image.sh` (optionally with the exact `task` argument), `scripts/check-doc-commands.sh`, `scripts/check-docs.sh`, `scripts/check-endpoint-literals.sh`, `scripts/check-hosted-target-readiness.sh`, `scripts/docs-audit.sh` (each argument-free)
   - `rg`: search invocation
 - The default timeout is 120 seconds and the maximum is 600 seconds.
 - Arguments that directly reference paths outside the repository root must be refused, except for the server-owned `{scratch}` token.
@@ -802,7 +802,7 @@ Rules:
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
 - Program resolution may include server-host configuration through `CONTEXTPATCH_VALIDATION_PATHS` in addition to the process `PATH`; callers still supply only executable names, never paths or environment variables.
-- The tool must refuse direct `harbor run` and direct callers to `harbor_run_start`. It must also refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh` with its optional exact `task` argument, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
+- The tool must refuse direct `harbor run` and direct callers to `harbor_run_start`. It must also refuse arbitrary shell, shell snippets, shell scripts outside the fixed validation-script list, arguments to the argument-free scripts on that list, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
 
 ### `fixture_generator_run`
 

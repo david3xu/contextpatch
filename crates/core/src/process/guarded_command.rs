@@ -13,6 +13,30 @@ const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
 const PYTEST_PLUGIN_OPTION: &str = "-p";
 const LONG_OPTION_PREFIX: &str = "--";
 
+/// The base-image check, which is the one script carrying a documented optional argument.
+const BASE_IMAGE_SCRIPT: &str = "references/check-base-image.sh";
+
+/// Repository shell scripts the guarded runner may execute.
+///
+/// Safety-contract clause 19 permits a shell-script exception only when it is fixed to specific
+/// repository scripts rather than granting arbitrary shell authority, so this is an exact
+/// enumeration and deliberately not a `scripts/*.sh` pattern. A glob would execute any file later
+/// dropped into that directory, which is precisely the authority the clause refuses; adding a gate
+/// is instead a reviewed one-line change here.
+///
+/// This is an entry-point restriction, not isolation. Every entry is reviewed repository code that
+/// runs with the server user's permissions and network access, and the same code is already
+/// reachable through an allowlisted `bun`/`npm` test that spawns it. See
+/// `docs/execution-threat-model.md`.
+const ALLOWED_SHELL_SCRIPTS: &[&str] = &[
+    BASE_IMAGE_SCRIPT,
+    "scripts/check-doc-commands.sh",
+    "scripts/check-docs.sh",
+    "scripts/check-endpoint-literals.sh",
+    "scripts/check-hosted-target-readiness.sh",
+    "scripts/docs-audit.sh",
+];
+
 /// Run one allowlisted command inside the repository, through the repository's own authority.
 ///
 /// The working directory is opened relative to the root descriptor and held open until the child has been
@@ -144,10 +168,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         }
         "pytest" => true,
         "harbor" => matches!(subcommand, Some("run")),
-        "bash" => {
-            args == ["references/check-base-image.sh"]
-                || args == ["references/check-base-image.sh", "task"]
-        }
+        "bash" => is_allowed_shell_script(args),
         "rg" => subcommand.is_some(),
         _ => false,
     };
@@ -161,6 +182,31 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     }
 
     Ok(())
+}
+
+/// Whether one `bash` invocation names a script on the fixed list.
+///
+/// A leading `./` is accepted because it names the identical file, and refusing it is a usability
+/// trap with no security value. Traversal, absolute paths, and `..` are already refused by
+/// `validate_common_command_shape` before this runs, so this function only has to decide
+/// membership and argument shape.
+///
+/// Only the base-image check takes an argument. The doc gates are argument-free, and keeping them
+/// that way means a caller cannot reach a script's own option surface through this exception.
+fn is_allowed_shell_script(args: &[String]) -> bool {
+    let Some(first) = args.first() else {
+        return false;
+    };
+    let script = first.strip_prefix("./").unwrap_or(first);
+
+    if !ALLOWED_SHELL_SCRIPTS.contains(&script) {
+        return false;
+    }
+
+    if script == BASE_IMAGE_SCRIPT {
+        return args.len() == 1 || (args.len() == 2 && args[1] == "task");
+    }
+    args.len() == 1
 }
 
 /// pytest accepts node ids and options freely, so refuse the options that load a caller-named
@@ -272,6 +318,65 @@ mod tests {
         ] {
             assert!(refusal(program, &values).contains("not allowlisted"));
         }
+    }
+
+    #[test]
+    fn permits_the_fixed_repository_validation_scripts() {
+        for values in [
+            vec!["scripts/check-docs.sh"],
+            vec!["./scripts/check-docs.sh"],
+            vec!["scripts/check-doc-commands.sh"],
+            vec!["scripts/docs-audit.sh"],
+            vec!["scripts/check-endpoint-literals.sh"],
+            vec!["scripts/check-hosted-target-readiness.sh"],
+        ] {
+            validate_command("bash", &args(&values))
+                .unwrap_or_else(|error| panic!("{values:?} must be permitted: {error}"));
+        }
+    }
+
+    /// The exception is fixed to named scripts, so neighbouring paths and argument surfaces stay
+    /// refused. A glob over `scripts/` would admit every case below.
+    #[test]
+    fn refuses_shell_scripts_outside_the_fixed_set() {
+        for values in [
+            // Not on the list, though it sits in the same directory.
+            vec!["scripts/unlisted.sh"],
+            // Right basename, wrong directory.
+            vec!["tools/check-docs.sh"],
+            vec!["scripts/check-docs.sh.bak"],
+            // The doc gates take no arguments, so their own option surface stays out of reach.
+            vec!["scripts/check-docs.sh", "--fix"],
+            // `task` belongs to the base-image check alone.
+            vec!["scripts/docs-audit.sh", "task"],
+            vec!["-c", "scripts/check-docs.sh"],
+        ] {
+            let message = refusal("bash", &values);
+            assert!(
+                message.contains("not allowlisted"),
+                "unexpected refusal for {values:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_traversal_through_an_allowlisted_script_name() {
+        let message = refusal("bash", &["scripts/../../etc/check-docs.sh"]);
+        assert!(
+            message.contains("outside the repository root"),
+            "unexpected refusal: {message}"
+        );
+    }
+
+    #[test]
+    fn names_the_fixed_script_list_when_refusing_a_shell_gate() {
+        // The old message sent an unlisted gate to `validation_profile_run`, which a caller cannot
+        // extend, so the advice could never resolve the refusal.
+        let message = refusal("bash", &["scripts/unlisted.sh"]);
+        assert!(
+            message.contains("fixed validation-script list"),
+            "refusal must name the list: {message}"
+        );
     }
 
     #[test]

@@ -23,7 +23,7 @@ the program itself decides what to do with it.
 | `python`, `python3` | any repo-relative path ending `.py` | Yes: the whole script | Yes |
 | `pytest` | node ids and options, minus plugin-loading `-p` | Yes: `conftest.py`, collected tests | Yes |
 | `rg` | any argument | No | No |
-| `bash` | exactly `references/check-base-image.sh`, optionally `task` | Yes: whatever that tracked script contains | Depends on script |
+| `bash` | only a script on the fixed validation-script list; `references/check-base-image.sh` optionally takes `task`, the rest take no arguments | Yes: whatever those tracked scripts contain | Depends on script |
 | `harbor` | `run` | Yes: agent workload | Yes |
 
 ## Authority axes
@@ -146,7 +146,8 @@ Probe-confirmed and source-confirmed refusals, which the corrections must not we
 - arbitrary `python -m`: the first argument must end in `.py` and must not start with `-`
 - Python outside the repository: a scratch-token script path is refused and redirected to
   `artifact_python_run`
-- caller-supplied shell strings: no program accepts one; `bash` is pinned to one tracked script
+- caller-supplied shell strings: no program accepts one; `bash` is pinned to an exact list of
+  tracked scripts, and a glob over a scripts directory is deliberately not used
 - argv paths outside the repository root
 - direct `harbor run`, redirected to `harbor_run_start`
 
