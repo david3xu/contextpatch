@@ -55,7 +55,7 @@ impl Guidance {
 /// incomplete change.
 pub fn permitted_summary(program: &str) -> Option<&'static str> {
     Some(match program {
-        "git" => "status, diff, log, show, rev-parse, ls-tree (read-only inspection only)",
+        "git" => "status, diff, log, show, rev-parse, rev-list, shortlog, ls-tree (read-only inspection only)",
         "cargo" => "check, test, build, clippy, and fmt only with --check",
         "bun" | "npm" | "pnpm" => "run, test",
         "python" | "python3" => "a repository-relative .py script path",
