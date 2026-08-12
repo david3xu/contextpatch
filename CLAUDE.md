@@ -56,6 +56,14 @@ Operations do **not** take a repository path. They take `core::git::root::Reposi
 
 Most of the recent commit history is the migration of individual tools onto this model; a few handlers still take the logical path. Move them onto typed authority rather than adding new path-taking handlers.
 
+### The tool registry (`crates/server/src/tools/registry.rs`)
+
+One `ToolDescriptor` per tool carries all six per-tool facts. `dispatch.rs` is a table lookup, `deadline_for` and `serializes_repository_mutation` are one-line field reads, and `schema/authority.rs` classifies from the descriptor. Before this existed those facts lived in five files with nothing checking they agreed, which produced four separate staleness defects in one week.
+
+`project_execute` is deliberately *not* in the registry. It is the surface wrapper, not an internal action: resolved in `handle_tool_call` before the repository is determined, advertised only on the project surface, and classified as the widest reach of everything it dispatches.
+
+Two snapshots in `crates/server/tests/fixtures/` guard the whole surface: `tools-surface.json` (every advertised definition) and `tool-matrix.tsv` (every tool against the four behavioural axes). Regenerate with `CONTEXTPATCH_UPDATE_FIXTURES=1`.
+
 ### Request pipeline (`crates/server/src/tools/dispatch.rs`)
 
 `handle_tool_call` → resolve the tool surface → `effective_repository` → `execute_tool` → per-name reply deadline (`core::process::deadline`, 30s read / 60s write / 120s Git, max 16 active workers) → cooperative per-repository mutation lock for mutating tools → `call_tool` match arm → bounded 900 KiB response envelope.
@@ -70,14 +78,18 @@ Long calls run concurrently, so MCP replies may arrive out of request order — 
 
 ## Adding or changing an MCP tool
 
-1. Define `pub const NAME` in a module inside `crates/server/src/tools/<domain>.rs` (see the `pub mod name { pub const NAME: ... }` blocks in `files.rs`, `git/`, etc.). Schemas and dispatch must reuse that constant, never a string literal.
-2. Add the JSON schema in the matching `crates/server/src/tools/schema/<domain>.rs` and register it in `schema/mod.rs::internal_tool_definitions`. Annotations come from the central helper; `openWorldHint` is derived in `schema/authority.rs`.
-3. Add the dispatch arm in `tools/dispatch.rs::call_tool`, plus the deadline class and mutation-lock membership.
+Every per-tool fact lives on one `ToolDescriptor` in `crates/server/src/tools/registry.rs`: name, schema, handler, deadline class, mutation-lock membership, advertised reach, and read-only status. There is no second place to remember.
+
+1. Define `pub const NAME` in a module inside `crates/server/src/tools/<domain>.rs` (the `pub mod name { pub const NAME: ... }` blocks). The registry reuses that constant, never a string literal.
+2. Write the schema as `pub(crate) fn <name>_definition() -> Value` in `crates/server/src/tools/schema/<domain>.rs` and re-export it from `schema/mod.rs`. Annotations are added centrally from the descriptor's `reach` and `read_only`, so a tool cannot advertise an authority it is not classified under.
+3. Write the handler in `tools/<domain>.rs`, then add one `ToolDescriptor` to `registry.rs`. Handlers keep whatever argument shape suits them; the table adapts them with a non-capturing closure.
 4. Put behavior in `core`. Add the test in `crates/core` first.
-5. `crates/server/tests/stage1_mcp/protocol.rs` asserts `openWorldHint` against the documented execution authority — a new open-world or isolated action must be listed there, and classified in `schema/authority.rs`.
-6. Update `docs/tool-spec.md` — both the summary table row and a `### \`tool_name\`` contract section. This is enforced by test, not convention.
-7. Three tool-count assertions will fail until updated: `tests/stage1_mcp/files.rs` (`tools/list` length) and two in `tests/stage1_mcp/project.rs` (`action_count`, which is one higher because `describe` is dispatchable, and `action_definitions`).
+5. Update `docs/tool-spec.md` — both the summary table row and a `### \`tool_name\`` contract section. Enforced by test in both directions.
+6. Regenerate the recorded surface: `CONTEXTPATCH_UPDATE_FIXTURES=1 cargo test -p server`. The diff to `tests/fixtures/tools-surface.json` and `tool-matrix.tsv` is the review artifact — it shows exactly what the advertised contract gained. A regeneration you did not intend is a bug.
+7. If the action is open-world or isolated, add it to `EXPECTED_OPEN_WORLD_ACTIONS` or `EXPECTED_ISOLATED_ACTIONS` in `tests/stage1_mcp/protocol.rs`. That list is deliberately hand-maintained: it audits the classification rather than restating it.
 8. Update the other matching docs in the same commit (see Documentation contract).
+
+No test carries a tool count, and the README does not list tools. Both used to, and both went stale.
 
 ## Conventions
 

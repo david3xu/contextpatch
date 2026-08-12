@@ -245,248 +245,19 @@ fn call_tool(
     name: &str,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
-    // Tools not yet migrated still take a path, and receive the logical path until each one moves to the
-    // typed target. That is what lets this proceed one tool at a time instead of all at once.
-    match name {
-        tools::capability_manifest::NAME => {
-            tools::capability::call_capability_manifest(repository.root(), arguments, surface)
-        }
-        tools::preflight_health::NAME => {
-            tools::capability::call_preflight_health(repository.root(), arguments)
-        }
-        tools::read_range::NAME => tools::files::call_read_range(repository.root(), arguments),
-        tools::diff_preview::NAME => tools::files::call_diff_preview(repository.root(), arguments),
-        tools::replace_exact::NAME => {
-            tools::files::call_replace_exact(repository.root(), arguments)
-        }
-        tools::bulk_replace_exact::NAME => {
-            tools::files::call_bulk_replace_exact(repository.root(), arguments)
-        }
-        tools::read_write_receipts::NAME => {
-            tools::files::call_read_write_receipts(repository.root(), arguments)
-        }
-        tools::status_guard::NAME => tools::files::call_status_guard(repository.root(), arguments),
-        tools::file_info::NAME => tools::files::call_file_info(repository.root(), arguments),
-        tools::set_file_executable::NAME => {
-            tools::files::call_set_file_executable(repository.root(), arguments)
-        }
-        tools::list_directory::NAME => {
-            tools::files::call_list_directory(repository.root(), arguments)
-        }
-        tools::read_file_bytes::NAME => {
-            tools::files::call_read_file_bytes(repository.root(), arguments)
-        }
-        tools::write_new_file::NAME => {
-            tools::files::call_write_new_file(repository.root(), arguments)
-        }
-        tools::write_new_file_base64::NAME => {
-            tools::files::call_write_new_file_base64(repository.root(), arguments)
-        }
-        tools::write_existing_file_exact_hash::NAME => {
-            tools::files::call_write_existing_file_exact_hash(repository.root(), arguments)
-        }
-        tools::artifact_write_text::NAME => {
-            tools::files::call_artifact_write_text(repository.root(), arguments)
-        }
-        tools::artifact_delete_exact::NAME => {
-            tools::files::call_artifact_delete_exact(repository.root(), arguments)
-        }
-        tools::artifact_write_base64::NAME => {
-            tools::files::call_artifact_write_base64(repository.root(), arguments)
-        }
-        tools::bulk_write_new_files_base64::NAME => {
-            tools::files::call_bulk_write_new_files_base64(repository.root(), arguments)
-        }
-        tools::create_directory::NAME => {
-            tools::files::call_create_directory(repository.root(), arguments)
-        }
-        tools::run_guarded_command::NAME => {
-            tools::process::call_run_guarded_command(repository.root(), arguments)
-        }
-        tools::fixture_generator_run::NAME => {
-            tools::fixtures::call_fixture_generator_run(repository.root(), arguments)
-        }
-        tools::base_image_check_run::NAME => {
-            tools::fixtures::call_base_image_check_run(repository.root(), arguments)
-        }
-        tools::fixture_manifest_verify::NAME => {
-            tools::fixtures::call_fixture_manifest_verify(repository.root(), arguments)
-        }
-        tools::fixture_manifest_refresh::NAME => {
-            tools::fixtures::call_fixture_manifest_refresh(repository.root(), arguments)
-        }
-        tools::read_command_log::NAME => tools::process::call_read_command_log(arguments),
-        tools::image_cleanliness_check_run::NAME => {
-            tools::process::call_image_cleanliness_check_run(arguments)
-        }
-        tools::docker_image_inspect::NAME => tools::process::call_docker_image_inspect(arguments),
-        tools::artifact_python_run::NAME => {
-            tools::process::call_artifact_python_run(repository.root(), arguments)
-        }
-        tools::task_image_python_run::NAME => {
-            tools::process::call_task_image_python_run(repository.root(), arguments)
-        }
-        tools::harbor_run_start::NAME => {
-            tools::process::call_harbor_run_start(repository.root(), arguments)
-        }
-        tools::compose_stack_run::NAME => {
-            tools::process::call_compose_stack_run(repository.root(), arguments)
-        }
-        tools::artifact_build_check_run::NAME => {
-            tools::process::call_artifact_build_check_run(repository.root(), arguments)
-        }
-        tools::validation_profile_run::NAME => {
-            tools::process::call_validation_profile_run(repository.root(), arguments)
-        }
-        tools::setup_profile_run::NAME => {
-            tools::setup::call_setup_profile_run(repository.root(), arguments)
-        }
-        tools::native_build_run::NAME => {
-            tools::native::call_native_build_run(repository.root(), arguments)
-        }
-        tools::native_device_run::NAME => {
-            tools::native::call_native_device_run(repository.root(), arguments)
-        }
-        tools::git_commit_exact::NAME => {
-            tools::git::handlers::call_git_commit_exact(repository.root(), arguments)
-        }
-        tools::git_commit_scoped::NAME => {
-            tools::git::handlers::call_git_commit_scoped(repository.root(), arguments)
-        }
-        tools::git_commit_prefix::NAME => {
-            tools::git::handlers::call_git_commit_prefix(repository.root(), arguments)
-        }
-        tools::git_stage_exact::NAME => {
-            tools::git::handlers::call_git_stage_exact(repository.root(), arguments)
-        }
-        tools::git_staged_scope_check::NAME => {
-            tools::git::handlers::call_git_staged_scope_check(repository.root(), arguments)
-        }
-        tools::git_restore_exact::NAME => {
-            tools::git::handlers::call_git_restore_exact(repository.root(), arguments)
-        }
-        tools::move_tracked::NAME => {
-            tools::git::handlers::call_move_tracked(repository.root(), arguments)
-        }
-        tools::delete_guarded::NAME => {
-            tools::git::handlers::call_delete_guarded(repository.root(), arguments)
-        }
-        tools::delete_untracked_exact::NAME => {
-            tools::git::handlers::call_delete_untracked_exact(repository.root(), arguments)
-        }
-        tools::delete_generated_prefix::NAME => {
-            tools::git::handlers::call_delete_generated_prefix(repository.root(), arguments)
-        }
-        tools::git_remote_list::NAME => {
-            tools::git::handlers::call_git_remote_list(repository.git_repository())
-        }
-        tools::git_remote_check::NAME => {
-            tools::git::handlers::call_git_remote_check(repository.git_repository(), arguments)
-        }
-        tools::git_branch_prepare::NAME => {
-            tools::git::handlers::call_git_branch_prepare(repository.root(), arguments)
-        }
-        tools::git_merge_readiness::NAME => {
-            tools::git::handlers::call_git_merge_readiness(repository.git_repository(), arguments)
-        }
-        tools::git_push_exact::NAME => {
-            tools::git::handlers::call_git_push_exact(repository.git_repository(), arguments)
-        }
-        tools::github_pr_run::NAME => {
-            tools::github::call_github_pr_run(repository.root(), arguments)
-        }
-        tools::github_fork_prepare::NAME => {
-            tools::github::call_github_fork_prepare(repository.root(), arguments)
-        }
-        unknown => Err(format!("unknown tool: {unknown}")),
-    }
+    let Some(entry) = crate::tools::registry::descriptor(name) else {
+        return Err(format!("unknown tool: {name}"));
+    };
+    (entry.handler)(repository, surface, arguments)
 }
 
+/// The reply deadline for one tool, or `None` for work that returns a pollable log id.
 fn deadline_for(name: &str) -> Option<Duration> {
-    use contextpatch_core::process::deadline::{GIT_DEADLINE, READ_DEADLINE, WRITE_DEADLINE};
-
-    match name {
-        tools::capability_manifest::NAME
-        | tools::preflight_health::NAME
-        | tools::read_range::NAME
-        | tools::read_write_receipts::NAME
-        | tools::diff_preview::NAME
-        | tools::status_guard::NAME
-        | tools::file_info::NAME
-        | tools::list_directory::NAME
-        | tools::read_file_bytes::NAME
-        | tools::fixture_manifest_verify::NAME
-        | tools::read_command_log::NAME => Some(READ_DEADLINE),
-
-        tools::replace_exact::NAME
-        | tools::bulk_replace_exact::NAME
-        | tools::write_new_file::NAME
-        | tools::write_new_file_base64::NAME
-        | tools::write_existing_file_exact_hash::NAME
-        | tools::set_file_executable::NAME
-        | tools::artifact_write_text::NAME
-        | tools::artifact_delete_exact::NAME
-        | tools::artifact_write_base64::NAME
-        | tools::bulk_write_new_files_base64::NAME
-        | tools::create_directory::NAME
-        | tools::fixture_manifest_refresh::NAME => Some(WRITE_DEADLINE),
-
-        tools::git_commit_exact::NAME
-        | tools::git_commit_scoped::NAME
-        | tools::git_commit_prefix::NAME
-        | tools::git_stage_exact::NAME
-        | tools::git_staged_scope_check::NAME
-        | tools::git_restore_exact::NAME
-        | tools::move_tracked::NAME
-        | tools::delete_guarded::NAME
-        | tools::delete_untracked_exact::NAME
-        | tools::delete_generated_prefix::NAME
-        | tools::git_remote_list::NAME
-        | tools::git_remote_check::NAME
-        | tools::git_branch_prepare::NAME
-        | tools::git_merge_readiness::NAME
-        | tools::git_push_exact::NAME
-        | tools::github_pr_run::NAME
-        | tools::github_fork_prepare::NAME => Some(GIT_DEADLINE),
-
-        _ => None,
-    }
+    crate::tools::registry::descriptor(name).and_then(|entry| entry.deadline)
 }
 
 fn serializes_repository_mutation(name: &str) -> bool {
-    matches!(
-        name,
-        tools::replace_exact::NAME
-            | tools::bulk_replace_exact::NAME
-            | tools::write_new_file::NAME
-            | tools::write_new_file_base64::NAME
-            | tools::write_existing_file_exact_hash::NAME
-            | tools::set_file_executable::NAME
-            | tools::artifact_write_text::NAME
-            | tools::artifact_delete_exact::NAME
-            | tools::artifact_write_base64::NAME
-            | tools::bulk_write_new_files_base64::NAME
-            | tools::create_directory::NAME
-            | tools::fixture_generator_run::NAME
-            | tools::fixture_manifest_refresh::NAME
-            | tools::setup_profile_run::NAME
-            | tools::native_build_run::NAME
-            | tools::native_device_run::NAME
-            | tools::git_commit_exact::NAME
-            | tools::git_commit_scoped::NAME
-            | tools::git_commit_prefix::NAME
-            | tools::git_stage_exact::NAME
-            | tools::git_restore_exact::NAME
-            | tools::move_tracked::NAME
-            | tools::delete_guarded::NAME
-            | tools::delete_untracked_exact::NAME
-            | tools::delete_generated_prefix::NAME
-            | tools::git_remote_check::NAME
-            | tools::git_branch_prepare::NAME
-            | tools::git_merge_readiness::NAME
-            | tools::git_push_exact::NAME
-            | tools::github_fork_prepare::NAME
-    )
+    crate::tools::registry::descriptor(name).is_some_and(|entry| entry.serializes_mutation)
 }
 
 #[cfg(test)]
@@ -523,5 +294,52 @@ mod tests {
         assert_eq!(deadline_for(tools::run_guarded_command::NAME), None);
         assert_eq!(deadline_for(tools::validation_profile_run::NAME), None);
         assert_eq!(deadline_for(tools::native_build_run::NAME), None);
+    }
+
+    /// Every tool against every behavioural axis, recorded before the registry migration.
+    ///
+    /// These four facts are decided in four different functions across two files today, and the
+    /// registry collapses them into fields on one descriptor. Nothing else checks that they survive
+    /// that move: a tool that silently loses its mutation lock or its deadline still passes every
+    /// behavioural test, because the tests exercise tools one at a time and none of them asserts the
+    /// classification itself.
+    ///
+    /// File locations are deliberately excluded. Which module owns a handler is organisation, not
+    /// contract, and it changes on purpose when the oversized modules are split.
+    #[test]
+    fn the_per_tool_classification_matrix_matches_its_recorded_snapshot() {
+        use contextpatch_core::process::deadline::{GIT_DEADLINE, READ_DEADLINE, WRITE_DEADLINE};
+
+        let mut names = crate::tools::schema::internal_action_names();
+        names.push(tools::project_execute::NAME.to_string());
+        names.sort();
+        names.dedup();
+
+        let mut rendered = String::from("tool\tdeadline\tlock\treach\tread_only\n");
+        for name in &names {
+            let deadline = match deadline_for(name) {
+                Some(limit) if limit == READ_DEADLINE => "read",
+                Some(limit) if limit == WRITE_DEADLINE => "write",
+                Some(limit) if limit == GIT_DEADLINE => "git",
+                Some(_) => "other",
+                None => "none",
+            };
+            rendered.push_str(&format!(
+                "{name}\t{deadline}\t{}\t{:?}\t{}\n",
+                if serializes_repository_mutation(name) {
+                    "yes"
+                } else {
+                    "no"
+                },
+                crate::tools::schema::remote_reach(name),
+                if crate::tools::schema::is_read_only(name) {
+                    "yes"
+                } else {
+                    "no"
+                }
+            ));
+        }
+
+        crate::tools::snapshot_fixture::assert_matches("tool-matrix.tsv", &rendered);
     }
 }

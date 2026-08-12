@@ -1,0 +1,2212 @@
+[
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or start one artifact packaging gate: docker build of a repository Dockerfile, then an import smoke run of the image that was built. Catches packaging failures and dead exports that reading source cannot. The caller names the Dockerfile, build context, and the arguments passed to the built image; this server derives every Docker flag, the unique image tag, and the cleanup. Smoke arguments are placed after the image name, so they are the container command and can never be reinterpreted as Docker options. The smoke run is pinned to --network none so a dead export cannot be masked by a successful download; the build itself has the network. With dry_run=false, run in the background and return a log_id to poll with read_command_log. The built image is always removed afterwards. Shares the two-job background cap.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "build_timeout_secs": {
+          "description": "Build timeout in seconds. Defaults to 1800.",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "confirm": {
+          "description": "Execution requires the exact phrase: run artifact build check",
+          "type": "string"
+        },
+        "context": {
+          "description": "Normalized repository-relative build context directory. Defaults to the repository root.",
+          "type": "string"
+        },
+        "dockerfile": {
+          "description": "Existing normalized repository-relative Dockerfile; symlinked and traversing paths are refused.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Return the exact build, smoke, and cleanup plan without invoking Docker. Defaults to true.",
+          "type": "boolean"
+        },
+        "smoke_args": {
+          "description": "Command and arguments run inside the built image, for example [\"node\",\"-e\",\"require('.')\"]. Empty runs the image's own default command.",
+          "items": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "smoke_timeout_secs": {
+          "description": "Import smoke timeout in seconds. Defaults to 300.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dockerfile"
+      ],
+      "type": "object"
+    },
+    "name": "artifact_build_check_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Delete one exact regular artifact file outside the repository after a hash-reporting dry run and explicit confirmation.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `delete artifact exact` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Inspect and report the current digest without deleting. Defaults to true.",
+          "type": "boolean"
+        },
+        "expected_sha256": {
+          "description": "Current lowercase SHA-256 reported by a dry run. Required when dry_run is false.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "path": {
+          "description": "Artifact path relative to the fixed artifact root. Must be an existing regular file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "artifact_delete_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Run a Python script previously written under the fixed artifact root, without a shell and without placing scratch code in the repository.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "description": "Optional script arguments, passed without a shell.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "program": {
+          "description": "Python executable name. Defaults to python3.",
+          "enum": [
+            "python3",
+            "python"
+          ],
+          "type": "string"
+        },
+        "script": {
+          "description": "Artifact-root-relative Python script path.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Optional timeout in seconds. Defaults to 120.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "script"
+      ],
+      "type": "object"
+    },
+    "name": "artifact_python_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a new binary artifact outside the repository under the fixed contextpatch artifact directory.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "content_base64": {
+          "description": "Base64-encoded artifact content to write.",
+          "type": "string"
+        },
+        "expected_bytes": {
+          "description": "Optional decoded byte count guard.",
+          "maximum": 20971520,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parents": {
+          "description": "When true, create missing parent directories under the artifact root. Defaults to false.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Artifact path relative to the fixed artifact root. Parent directory must already exist unless parents is true.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content_base64"
+      ],
+      "type": "object"
+    },
+    "name": "artifact_write_base64"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a new UTF-8 text artifact outside the repository under the fixed contextpatch artifact directory.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "description": "Full artifact content to write.",
+          "type": "string"
+        },
+        "parents": {
+          "description": "When true, create missing parent directories under the artifact root. Defaults to false.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Artifact path relative to the fixed artifact root. Parent directory must already exist unless parents is true.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "artifact_write_text"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run the exact repository base-image check script references/check-base-image.sh without enabling arbitrary shell access.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `run base image check` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Plan only without running the script. Defaults to true.",
+          "type": "boolean"
+        },
+        "project_path": {
+          "description": "Optional repository-relative project directory argument. For Dynamo/Harbor tasks this is exactly `task`.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Optional timeout in seconds. Defaults to 120, maximum 600.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "base_image_check_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Validate every exact replacement before the first write, then apply one atomic write per file. Several entries may target the same file; those hunks resolve against a single snapshot of it and land in its single write. Validation refusals leave all files unchanged; interruption or apply failure can leave a prefix of files applied, recoverable through per-file receipts.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "description": "Replacements to validate together. Repeating one path adds another hunk to that file; two different paths that resolve to the same filesystem file, including hard-link and case aliases, are refused. Hunks in one file must not resolve to the same or intersecting byte ranges, and must not demand different expected_sha256 values.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_sha256": {
+                "description": "Optional lowercase SHA-256 digest checked during validation. Apply also revalidates the exact bytes captured during planning.",
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "new": {
+                "description": "Replacement text.",
+                "type": "string"
+              },
+              "old": {
+                "description": "Text to replace. Must occur exactly once in the file.",
+                "type": "string"
+              },
+              "path": {
+                "description": "Repository relative path to an existing UTF-8 text file.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "old",
+              "new"
+            ],
+            "type": "object"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "name": "bulk_replace_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create many new repository files from base64 entries in one bounded, create-only fixture import.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "description": "Files to create. Total decoded size is limited to 20 MiB.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content_base64": {
+                "description": "Base64-encoded file content.",
+                "type": "string"
+              },
+              "expected_bytes": {
+                "description": "Optional decoded byte count guard for this entry.",
+                "maximum": 20971520,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "description": "Repository-relative destination path. Existing files are refused.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content_base64"
+            ],
+            "type": "object"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "type": "array"
+        },
+        "parents": {
+          "description": "When true, create missing parent directories inside the repository root. Defaults to false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "name": "bulk_write_new_files_base64"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Report the contextpatch server capability contract: available tools, allowlisted programs, guards, and the build stamp. Call this first. Pass names_only for a cheap tool list, or section for one part of the contract; both always include the build stamp so staleness stays checkable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "names_only": {
+          "description": "Return just the sorted tool names plus the build stamp. Cheapest way to check whether a tool exists.",
+          "type": "boolean"
+        },
+        "section": {
+          "description": "Return only this part of the contract. Ignored when names_only is true.",
+          "enum": [
+            "build",
+            "tool_surface",
+            "scratch",
+            "deadlines_seconds",
+            "mutation_coordination",
+            "write_receipts",
+            "file_tools",
+            "git_workflows",
+            "github_workflows",
+            "process_execution",
+            "setup_profiles",
+            "native_build",
+            "native_device"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "capability_manifest"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or start one named Docker Compose stack proof. The compose file and every Docker argument are derived by this server from the action name; no caller-supplied Docker arguments are accepted. With dry_run=false, start the stack in the background, return a log_id immediately, and poll with read_command_log. Teardown is scoped to this server's own Compose project name and is always attempted, so a proof cannot stop an operator's own stack and cannot leave containers running. Unlike task_image_python_run, this path runs with networking enabled because a stack proof exercises service-to-service traffic. Compose, task-image, Harbor, and validation-profile jobs share a two-job cap.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Named stack proof. Each action is pinned to one reviewed compose file.",
+          "enum": [
+            "auto-workflow",
+            "dispatch-preflight",
+            "front-door",
+            "full-platform",
+            "human-ai-team-flow",
+            "local-edition"
+          ],
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Execution requires the exact phrase: run compose stack",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Return the exact up and teardown plan without invoking Docker. Defaults to true.",
+          "type": "boolean"
+        },
+        "timeout_secs": {
+          "description": "Stack timeout in seconds. Defaults to 1800.",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "compose_stack_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a new directory only when the destination does not already exist.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "parents": {
+          "description": "When true, create missing parent directories inside the repository root. Defaults to false.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Directory path relative to the configured repository root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "create_directory"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or delete ignored/untracked generated files and empty directories under explicit prefixes without exposing broad git clean.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `delete generated paths` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without deleting. Defaults to true.",
+          "type": "boolean"
+        },
+        "prefixes": {
+          "description": "Repository-relative prefixes to expand for ignored/untracked generated cleanup.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "prefixes"
+      ],
+      "type": "object"
+    },
+    "name": "delete_generated_prefix"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or delete one clean tracked regular file only when its current SHA-256 matches exactly, leaving an unstaged Git deletion.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `delete tracked file` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without deleting. Defaults to true.",
+          "type": "boolean"
+        },
+        "expected_sha256": {
+          "description": "Lowercase SHA-256 hex digest of the current file content.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Existing clean tracked regular file path relative to the repository root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "expected_sha256"
+      ],
+      "type": "object"
+    },
+    "name": "delete_guarded"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or delete explicit untracked files only. Refuses tracked files, directories, globs, and broad cleanup.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `delete untracked files` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without deleting. Defaults to true.",
+          "type": "boolean"
+        },
+        "paths": {
+          "description": "Repository-relative untracked file paths to delete.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
+    "name": "delete_untracked_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Return a unified diff for an exact replacement without writing.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "new": {
+          "description": "Replacement text to preview.",
+          "type": "string"
+        },
+        "old": {
+          "description": "Existing text that must appear exactly once.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path relative to the configured repository root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "old",
+        "new"
+      ],
+      "type": "object"
+    },
+    "name": "diff_preview"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run `docker image inspect` for one validated image reference without exposing generic Docker.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `inspect docker image` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without running Docker. Defaults to true.",
+          "type": "boolean"
+        },
+        "image": {
+          "description": "Docker image reference to inspect.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Optional timeout in seconds. Defaults to 120.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "name": "docker_image_inspect"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Return read-only metadata for one path or a bounded batch of paths, including SHA-256 for files, UTF-8 line count when available, mode, and symlink status.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "paths"
+            ]
+          },
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "path"
+            ]
+          },
+          "required": [
+            "paths"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "description": "File or directory path relative to the configured repository root.",
+          "type": "string"
+        },
+        "paths": {
+          "description": "A bounded batch of repository-relative file or directory paths.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "name": "file_info"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run a repo-relative Python fixture generator that may mutate only declared output paths or prefixes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_existing_dirty_paths": {
+          "description": "Pre-existing dirty paths allowed before the run. Defaults to the script path only, supporting temporary untracked generators that are deleted before commit.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "args": {
+          "description": "Arguments passed after the script path. Use only explicit argv strings; no shell interpolation is performed.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "confirm": {
+          "description": "Required literal value `run fixture generator` when dry_run is false.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Optional working directory relative to the repository root. Defaults to the repository root.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Plan only without running Python. Defaults to true.",
+          "type": "boolean"
+        },
+        "expected_output_paths": {
+          "description": "Exact repository-relative paths the generator may create or modify.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expected_output_prefixes": {
+          "description": "Repository-relative directory prefixes under which the generator may create or modify files.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "script_path": {
+          "description": "Repository-relative .py script to run with python3. The script itself may be the only pre-existing dirty path unless allowed_existing_dirty_paths is provided.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Optional timeout in seconds. Defaults to 120, maximum 600.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "script_path"
+      ],
+      "type": "object"
+    },
+    "name": "fixture_generator_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Regenerate a fixture manifest JSON from declared repository fixture paths or prefixes, guarded by dry-run, confirmation, and existing manifest hash.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `refresh fixture manifest` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Preview the generated manifest metadata without writing. Defaults to true.",
+          "type": "boolean"
+        },
+        "expected_manifest_sha256": {
+          "description": "Required when overwriting an existing manifest; must match its current SHA-256.",
+          "type": "string"
+        },
+        "fixture_paths": {
+          "description": "Exact fixture files to include.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fixture_prefixes": {
+          "description": "Repository-relative directories or file prefixes whose regular files are included.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "manifest_path": {
+          "description": "Repository-relative manifest JSON path to create or overwrite.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_path"
+      ],
+      "type": "object"
+    },
+    "name": "fixture_manifest_refresh"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Verify a fixture manifest's exact file set and SHA-256 digests against declared repository fixture paths or prefixes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "fixture_paths": {
+          "description": "Exact fixture files to include in the file-set check.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fixture_prefixes": {
+          "description": "Repository-relative directories or file prefixes whose regular files must exactly match the manifest.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "manifest_path": {
+          "description": "Repository-relative manifest JSON path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest_path"
+      ],
+      "type": "object"
+    },
+    "name": "fixture_manifest_verify"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or prepare and switch to a local branch from one explicit remote base branch with guard checks. Names no paths, so it requires the configured repo root to be exactly a Git worktree root; a subdirectory root is refused rather than acting on the enclosing repository.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "base_branch": {
+          "description": "Remote base branch to fetch and prepare from.",
+          "type": "string"
+        },
+        "branch": {
+          "description": "Local branch to create or switch to.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal value `reset branch from remote base` when reset_existing is true.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and report the exact fetch and branch command plan without mutation. Defaults to true.",
+          "type": "boolean"
+        },
+        "remote": {
+          "description": "Git remote name. Defaults to origin.",
+          "type": "string"
+        },
+        "required_files": {
+          "description": "Optional repository-relative files that must exist after preparation.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reset_existing": {
+          "description": "Reset an existing local branch to the fetched remote base. Defaults to false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "base_branch",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "name": "git_branch_prepare"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or create one local Git commit from an exact full dirty-path set. Never pushes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "description": "Optional commit body/trailers.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal value `commit exact paths` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without staging or committing. Defaults to true.",
+          "type": "boolean"
+        },
+        "paths": {
+          "description": "Exact repository-relative dirty paths that must be the complete changed-path set.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "subject": {
+          "description": "Commit subject line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "paths",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "name": "git_commit_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or create one local Git commit from dirty paths under explicit prefixes after expanding and reporting the exact path list. Never pushes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "description": "Optional commit body/trailers.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal value `commit prefix paths` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview expanded paths without staging or committing. Defaults to true.",
+          "type": "boolean"
+        },
+        "prefixes": {
+          "description": "Repository-relative dirty path prefixes or directories to expand.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "subject": {
+          "description": "Commit subject line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prefixes",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "name": "git_commit_prefix"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or create one local Git commit from an explicit subset of dirty paths while preserving unrelated dirty files. Never pushes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "description": "Optional commit body/trailers.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal value `commit scoped paths` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without staging or committing. Defaults to true.",
+          "type": "boolean"
+        },
+        "paths": {
+          "description": "Repository-relative dirty paths to stage and commit. Other dirty paths are preserved.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "subject": {
+          "description": "Commit subject line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "paths",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "name": "git_commit_scoped"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Read-only merge/PR readiness analysis between two refs, including changed-on-both-sides conflict candidates.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "base_ref": {
+          "description": "Base ref to compare, such as HEAD, main, origin/main, refs/heads/main, or a commit hash.",
+          "type": "string"
+        },
+        "fetch": {
+          "description": "Optionally fetch one explicit remote branch before analysis. Defaults to false.",
+          "type": "boolean"
+        },
+        "remote": {
+          "description": "Remote name used only when fetch is true. Defaults to origin.",
+          "type": "string"
+        },
+        "target_branch": {
+          "description": "Remote branch to fetch when fetch is true. Inferred from target_ref when target_ref is a remote-tracking ref.",
+          "type": "string"
+        },
+        "target_ref": {
+          "description": "Target ref to compare, such as feature, origin/feature, refs/remotes/origin/feature, or a commit hash.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_ref",
+        "target_ref"
+      ],
+      "type": "object"
+    },
+    "name": "git_merge_readiness"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Push the current branch HEAD to the matching remote branch only after exact hash and divergence checks. Names no paths, so it requires the configured repo root to be exactly a Git worktree root; a subdirectory root is refused rather than pushing the enclosing repository.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "description": "Current branch name and matching remote branch name.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal value `push exact commit`.",
+          "type": "string"
+        },
+        "expected_head": {
+          "description": "Full or short commit hash expected at HEAD.",
+          "type": "string"
+        },
+        "remote": {
+          "description": "Git remote name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "remote",
+        "branch",
+        "expected_head",
+        "confirm"
+      ],
+      "type": "object"
+    },
+    "name": "git_push_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Fetch one remote branch and report whether the remote branch is ahead of HEAD. Does not modify source files.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "description": "Branch name to compare with the remote-tracking ref.",
+          "type": "string"
+        },
+        "remote": {
+          "description": "Git remote name. Defaults to origin.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch"
+      ],
+      "type": "object"
+    },
+    "name": "git_remote_check"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read-only Git remote inspection, equivalent to a parsed git remote -v.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "git_remote_list"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or restore exact dirty repository paths from HEAD. Use for generated noise cleanup before exact commits; never resets the whole worktree.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `restore exact paths` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without restoring. Defaults to true.",
+          "type": "boolean"
+        },
+        "paths": {
+          "description": "Repository-relative dirty paths to restore from HEAD. Every path must currently be dirty.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
+    "name": "git_restore_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or stage explicit dirty paths without creating a commit. Requires a clean index first.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `stage exact paths` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without staging. Defaults to true.",
+          "type": "boolean"
+        },
+        "paths": {
+          "description": "Repository-relative dirty paths to stage. Other dirty paths are preserved unstaged.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
+    "name": "git_stage_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read-only check that staged paths are limited to allowed exact paths and prefixes, with optional required staged paths.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_paths": {
+          "description": "Repository-relative paths that may be staged exactly.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_prefixes": {
+          "description": "Repository-relative prefixes or directories under which staged paths are allowed.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required_paths": {
+          "description": "Optional repository-relative paths that must be staged.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "name": "git_staged_scope_check"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run a guarded gh repo fork workflow for the current repository.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `prepare github fork` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Plan only without mutating GitHub or remotes. Defaults to true.",
+          "type": "boolean"
+        },
+        "remote": {
+          "description": "Pass --remote to add fork remotes. Defaults to true.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "github_fork_prepare"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Run narrow GitHub review workflows through gh: auth status, PR view/checks/comments, commit-scoped Actions run discovery, run/job evidence, guarded reruns, or confirmation-gated PR creation.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "GitHub workflow action.",
+          "enum": [
+            "auth_status",
+            "pr_view",
+            "pr_comments",
+            "pr_checks",
+            "workflow_runs_for_commit",
+            "workflow_run_view",
+            "workflow_job_log",
+            "workflow_run_rerun_failed",
+            "pr_create"
+          ],
+          "type": "string"
+        },
+        "base": {
+          "description": "Base branch for pr_create.",
+          "type": "string"
+        },
+        "body": {
+          "description": "Pull request body for pr_create.",
+          "type": "string"
+        },
+        "comment_contains": {
+          "description": "Optional case-insensitive marker used to filter pr_comments locally, such as `pass@2` or `Rerun Recommended`.",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal value `create pull request` for confirmed PR creation or `rerun failed workflow jobs` for a confirmed failed-job rerun.",
+          "type": "string"
+        },
+        "draft": {
+          "description": "Create a draft pull request. Defaults to false.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "description": "For pr_create and workflow_run_rerun_failed, default true. When true, returns the gh command plan without mutating GitHub.",
+          "type": "boolean"
+        },
+        "head": {
+          "description": "Head branch for pr_create.",
+          "type": "string"
+        },
+        "head_sha": {
+          "description": "Full commit SHA for workflow_runs_for_commit.",
+          "pattern": "^[A-Fa-f0-9]{40}$",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "Workflow job database ID for workflow_job_log.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "limit": {
+          "description": "Maximum results for pr_comments (default 20, maximum 100) or workflow_runs_for_commit (default 20, maximum 50).",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "log_view": {
+          "default": "tail",
+          "description": "Bounded workflow_job_log projection. tail is the default so terminal failure evidence is retained; head returns the beginning.",
+          "enum": [
+            "tail",
+            "head"
+          ],
+          "type": "string"
+        },
+        "number": {
+          "description": "Pull request number for pr_view or pr_checks.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "repository": {
+          "description": "Optional explicit OWNER/REPO target for PR and Actions workflows. Use this when the checkout remote is a fork but the PR or run belongs to upstream.",
+          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+          "type": "string"
+        },
+        "run_id": {
+          "description": "Workflow run database ID for workflow_run_view or workflow_run_rerun_failed.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "title": {
+          "description": "Pull request title for pr_create.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "github_pr_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Start one typed Harbor run in the background and return a log_id immediately. Poll with read_command_log; completed logs include structured Harbor evidence. Harbor, task-image, validation-profile, Compose-stack, and artifact-build jobs share a two-job cap.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "description": "Harbor agent identifier. A leading hyphen is refused.",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._][A-Za-z0-9._-]*$",
+          "type": "string"
+        },
+        "project": {
+          "description": "Normalized repository-relative Harbor project directory. Defaults to task.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Run timeout in seconds. Defaults to 3600.",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "type": "object"
+    },
+    "name": "harbor_run_start"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run a narrow Docker image cleanliness check for a simple file name without exposing generic docker.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `run image cleanliness check` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without running Docker. Defaults to true.",
+          "type": "boolean"
+        },
+        "filename": {
+          "description": "Simple file name to search for with find. Defaults to solve.sh.",
+          "type": "string"
+        },
+        "image": {
+          "description": "Docker image reference to inspect.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Optional timeout in seconds. Defaults to 120.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "name": "image_cleanliness_check_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "List one repository directory with optional bounded recursion, entry type, symlink flag, and file sizes without following symlink directories.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_hidden": {
+          "description": "Include dotfiles and dot-directories. Defaults to false.",
+          "type": "boolean"
+        },
+        "max_depth": {
+          "description": "Maximum recursive depth. Defaults to 4.",
+          "maximum": 16,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_entries": {
+          "description": "Maximum entries to return. Defaults to 2000.",
+          "maximum": 2000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Directory path relative to the configured repository root. Defaults to repository root.",
+          "type": "string"
+        },
+        "recursive": {
+          "description": "Recurse into ordinary directories. Defaults to false.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_directory"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Dry-run or move one clean tracked regular file to an absent repository path with Git index and hash-preservation guards.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `move tracked file` when dry_run is false.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without moving. Defaults to true.",
+          "type": "boolean"
+        },
+        "from": {
+          "description": "Existing clean tracked regular file path relative to the repository root.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Absent destination file path with an existing in-repository parent.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "name": "move_tracked"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run a typed native build/test action without exposing raw xcodebuild or Gradle commands.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Native build action: ios_build, ios_test, android_assemble_debug, or android_unit_test.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Optional working directory relative to the configured repository root.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Plan only without running the build. Defaults to true.",
+          "type": "boolean"
+        },
+        "params": {
+          "description": "Typed action parameters. iOS uses workspace, scheme, optional configuration/sdk/destination/derived_data_path. Android accepts optional gradlew path.",
+          "type": "object"
+        },
+        "timeout_secs": {
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action",
+        "params"
+      ],
+      "type": "object"
+    },
+    "name": "native_build_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run bounded typed native simulator/emulator/device smoke actions without arbitrary xcrun or adb access.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Native device action such as ios_list_simulators, ios_create_simulator, ios_boot_simulator, ios_cap_run, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal `run native device` when dry_run is false for device-state changes.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Optional working directory relative to the configured repository root.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Plan only without touching simulator/device state. Defaults to true.",
+          "type": "boolean"
+        },
+        "params": {
+          "description": "Typed action parameters such as device, serial, app_id, app_path, apk_path, Android lines, or iOS log duration.",
+          "type": "object"
+        },
+        "timeout_secs": {
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "native_device_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Check repository and local tool readiness for Claude Desktop workflows without mutating the repository. Dirty-path evidence is sampled within fixed entry and byte limits; use response_mode compact or minimal when full probe details are unnecessary.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "default": "full",
+          "description": "full returns bounded detailed probes and resolved paths; compact returns availability booleans; minimal returns readiness counts. Repository status sampling is bounded in every mode.",
+          "enum": [
+            "minimal",
+            "compact",
+            "full"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "preflight_health"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Describe or execute one guarded ContextPatch action for this configured project. Discovery is projectable, and the cheap projections are worth knowing before the expensive one: action `describe` with `arguments.name` set to an action name returns that one action's schema, action `capability_manifest` with `arguments.names_only` true returns the action-name list plus the build stamp, and action `preflight_health` with `arguments.response_mode` set to `minimal` returns readiness counts and still reports the configured repository root. Calling `describe` with no arguments returns every action schema at once, so reach for it only when the whole set is genuinely wanted.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "An existing ContextPatch action name, or `describe` for discovery. Reported action-name lists include `describe`, so enumerating actions finds it.",
+          "type": "string"
+        },
+        "arguments": {
+          "description": "Arguments for the selected action. For `describe`, pass `name` (or `action`) to return a single action's schema instead of all of them.",
+          "type": "object"
+        },
+        "repository": {
+          "description": "Optional normalized workspace-relative path to an exact descendant Git worktree root. Omit it to use the configured --repo-root unchanged.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "project_execute"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read a previously captured guarded command log by log_id.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "log_id": {
+          "description": "Opaque log id returned by guarded commands or asynchronous Harbor, task-image, validation-profile, Compose-stack, and artifact-build actions.",
+          "type": "string"
+        },
+        "max_chars": {
+          "description": "Optional maximum characters to return. Defaults to 12000.",
+          "maximum": 200000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Optional character offset for paging long logs. Defaults to 0.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "log_id"
+      ],
+      "type": "object"
+    },
+    "name": "read_command_log"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read a bounded byte range from a repository file as hex or base64, including total size and SHA-256.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "encoding": {
+          "description": "Output encoding. Defaults to hex.",
+          "enum": [
+            "hex",
+            "base64"
+          ],
+          "type": "string"
+        },
+        "max_bytes": {
+          "description": "Maximum bytes to return. Defaults to 4096.",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Byte offset to start reading from. Defaults to 0.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Existing regular file path relative to the configured repository root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "read_file_bytes"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Read a bounded section of a UTF-8 text file with 1-based line numbers.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "end_line": {
+          "description": "Last 1-based line number to read.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "File path relative to the configured repository root.",
+          "type": "string"
+        },
+        "start_line": {
+          "description": "First 1-based line number to read.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "end_line"
+      ],
+      "type": "object"
+    },
+    "name": "read_range"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Report recent mutation attempts and whether each one settled. Call this after a tool call is interrupted or times out to find out whether the write landed.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "interrupted_only": {
+          "description": "Return only attempts that began and never settled, which is what a caller wants after a timeout. Defaults to false.",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Maximum number of attempts to return, newest first. Defaults to 25.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "read_write_receipts"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Replace text only when the old text matches exactly once.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_sha256": {
+          "description": "Optional lowercase SHA-256 digest of the complete current file. Use this to refuse if another agent changed the file after it was read.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "new": {
+          "description": "Replacement text.",
+          "type": "string"
+        },
+        "old": {
+          "description": "Existing text that must appear exactly once.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path relative to the configured repository root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "old",
+        "new"
+      ],
+      "type": "object"
+    },
+    "name": "replace_exact"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Run an allowlisted validation command with repo-root-confined arguments and no shell interposed by this server. That narrows the entry point and the arguments; it is not a sandbox. The child inherits this server's environment, and reviewed repository code it runs (cargo build scripts and tests, npm-family scripts, Python, pytest collection) can read files, start subprocesses, and use the network with the server user's permissions. npm-family scripts may invoke their own shell. Only task_image_python_run carries the documented container isolation with networking disabled.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "description": "Command arguments. The first argument must be an allowlisted subcommand.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "Optional working directory relative to the configured repository root.",
+          "type": "string"
+        },
+        "program": {
+          "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for a script on the fixed validation-script list, or rg. Use harbor_run_start for Harbor.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Optional timeout in seconds. Defaults to 120 and remains capped at 600. Harbor uses its typed asynchronous action.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "program",
+        "args"
+      ],
+      "type": "object"
+    },
+    "name": "run_guarded_command"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Plan or apply an exact-hash, exact-mode change to only the executable bits of one regular repository file.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Execution requires the exact phrase: set file executable",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Plan without changing the file. Defaults to true.",
+          "type": "boolean"
+        },
+        "executable": {
+          "description": "Whether owner, group, and other executable bits should be enabled.",
+          "type": "boolean"
+        },
+        "expected_mode": {
+          "description": "Required for execution; copy from a current dry-run plan.",
+          "pattern": "^[0-7]{3,4}$",
+          "type": "string"
+        },
+        "expected_sha256": {
+          "description": "Required for execution; copy from a current dry-run plan.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "path": {
+          "description": "Existing regular repository file; symlinks are refused.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "executable"
+      ],
+      "type": "object"
+    },
+    "name": "set_file_executable"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Plan or run a predefined repository setup action from a typed profile. Callers do not provide raw commands.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Profile action, such as install_capacitor_dependencies, install_capacitor_filesystem, cap_init, cap_add_ios, cap_add_android, cap_sync, or ios_pod_install.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required mutation confirmation literal `run setup profile` when dry_run is false.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Optional working directory relative to the configured repository root.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Plan only without mutating. Defaults to true.",
+          "type": "boolean"
+        },
+        "params": {
+          "description": "Typed action parameters. cap_init requires app_id, app_name, and web_dir; cap_sync accepts platform: ios, android, or all.",
+          "type": "object"
+        },
+        "profile": {
+          "description": "Setup profile name. Supported: node-capacitor-shell.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Optional timeout for the planned command. Defaults to 120, maximum 600.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "profile",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "setup_profile_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Refuse when the repository or requested path has uncommitted Git changes.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Optional file or directory path relative to the configured repository root.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "status_guard"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Plan a hardened task-image Python run. With dry_run=false, start the build and execution in the background, return a log_id immediately, and poll with read_command_log.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "description": "Arguments passed to the script without a shell.",
+          "items": {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "build_timeout_secs": {
+          "description": "Image build timeout in seconds. Defaults to 600.",
+          "maximum": 1800,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "confirm": {
+          "description": "Execution requires the exact phrase: run task image python",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Return the exact build and run plan without invoking Docker. Defaults to true.",
+          "type": "boolean"
+        },
+        "program": {
+          "description": "Python executable inside the image. Defaults to python3.",
+          "enum": [
+            "python3",
+            "python"
+          ],
+          "type": "string"
+        },
+        "script": {
+          "description": "Existing normalized repository-relative .py file; symlinks are refused.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Script timeout in seconds. Defaults to 120.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "script"
+      ],
+      "type": "object"
+    },
+    "name": "task_image_python_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Start a predefined validation profile in the background and return a log_id immediately. Poll with read_command_log; polling never restarts work.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "description": "Validation profile name: repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task.",
+          "type": "string"
+        },
+        "stop_on_failure": {
+          "description": "Stop after the first non-zero or timed-out command. Defaults to true.",
+          "type": "boolean"
+        },
+        "timeout_secs": {
+          "description": "Optional per-command timeout override up to 600. Defaults to each profile command timeout; Dynamo Harbor commands default to 3600.",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "type": "object"
+    },
+    "name": "validation_profile_run"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Overwrite an existing repository file only when the current SHA-256 hash matches the caller's expectation.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `write exact hash` when dry_run is false.",
+          "type": "string"
+        },
+        "content": {
+          "description": "Full UTF-8 file content to write.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Validate and preview without writing. Defaults to true.",
+          "type": "boolean"
+        },
+        "expected_sha256": {
+          "description": "Lowercase SHA-256 hex digest of the current file content.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Existing file path relative to the configured repository root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content",
+        "expected_sha256"
+      ],
+      "type": "object"
+    },
+    "name": "write_existing_file_exact_hash"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a new UTF-8 text file only when the destination does not already exist.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "description": "Full file content to write.",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path relative to the configured repository root.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "write_new_file"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a new binary file from base64 only when the destination does not already exist.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "content_base64": {
+          "description": "Base64-encoded file content to write.",
+          "type": "string"
+        },
+        "expected_bytes": {
+          "description": "Optional decoded byte count guard.",
+          "maximum": 20971520,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "File path relative to the configured repository root. Parent directory must already exist.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content_base64"
+      ],
+      "type": "object"
+    },
+    "name": "write_new_file_base64"
+  }
+]

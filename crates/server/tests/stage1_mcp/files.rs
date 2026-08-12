@@ -456,7 +456,16 @@ fn stage1_mcp_tools_work_together() {
     );
 
     let list = &responses[0]["result"]["tools"];
-    assert_eq!(list.as_array().unwrap().len(), 54, "{list}");
+    // The exact advertised set is pinned byte-for-byte by the recorded surface snapshot, which is
+    // strictly stronger than a count and does not need editing when a tool is added. What is worth
+    // asserting here is that the live server advertises each name this workflow then calls.
+    let listed: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert!(!listed.is_empty(), "{list}");
     for name in [
         "capability_manifest",
         "preflight_health",
@@ -512,10 +521,7 @@ fn stage1_mcp_tools_work_together() {
         "github_fork_prepare",
     ] {
         assert!(
-            list.as_array()
-                .unwrap()
-                .iter()
-                .any(|tool| tool["name"] == name),
+            listed.contains(&name),
             "tools/list did not include {name}: {list}"
         );
     }

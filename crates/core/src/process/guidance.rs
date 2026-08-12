@@ -61,7 +61,13 @@ pub fn permitted_summary(program: &str) -> Option<&'static str> {
         "python" | "python3" => "a repository-relative .py script path",
         "pytest" => "validation invocations",
         "harbor" => "run",
-        "bash" => "references/check-base-image.sh, optionally with the argument `task`",
+        // Stated as the rule rather than the list. The enumeration that used to live here named only
+        // the base-image script and stayed wrong after the fixed validation-script list replaced it,
+        // which understates the permitted set to the one caller guaranteed to be reading it.
+        "bash" => {
+            "a script on the fixed validation-script list; references/check-base-image.sh \
+             additionally accepts the exact argument `task`"
+        }
         "rg" => "any search invocation with at least one argument",
         _ => return None,
     })

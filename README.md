@@ -69,63 +69,12 @@ The server supports two public MCP surfaces over the same guarded actions:
   exact descendant Git worktree root. Omitting it preserves the configured root. The wrapper derives
   that effective root before deadlines, mutation locks, handlers, logs, and receipts are selected.
 
-The full surface exposes these direct actions; project mode keeps the same set behind
-`project_execute`:
-
-- `capability_manifest`
-- `preflight_health`
-- `read_range`
-- `read_write_receipts`
-- `diff_preview`
-- `replace_exact`
-- `bulk_replace_exact`
-- `write_new_file`
-- `write_new_file_base64`
-- `write_existing_file_exact_hash`
-- `file_info`
-- `set_file_executable`
-- `list_directory`
-- `read_file_bytes`
-- `artifact_write_text`
-- `artifact_write_base64`
-- `artifact_delete_exact`
-- `bulk_write_new_files_base64`
-- `create_directory`
-- `status_guard`
-- `run_guarded_command`
-- `artifact_python_run`
-- `task_image_python_run`
-- `harbor_run_start`
-- `compose_stack_run`
-- `artifact_build_check_run`
-- `image_cleanliness_check_run`
-- `docker_image_inspect`
-- `fixture_generator_run`
-- `base_image_check_run`
-- `fixture_manifest_verify`
-- `fixture_manifest_refresh`
-- `read_command_log`
-- `validation_profile_run`
-- `setup_profile_run`
-- `native_build_run`
-- `native_device_run`
-- `git_commit_exact`
-- `git_commit_scoped`
-- `git_commit_prefix`
-- `git_stage_exact`
-- `git_staged_scope_check`
-- `git_restore_exact`
-- `move_tracked`
-- `delete_guarded`
-- `delete_untracked_exact`
-- `delete_generated_prefix`
-- `git_remote_list`
-- `git_remote_check`
-- `git_branch_prepare`
-- `git_merge_readiness`
-- `git_push_exact`
-- `github_pr_run`
-- `github_fork_prepare`
+The full surface advertises every action as a direct MCP tool; project mode keeps the same set
+behind `project_execute`. The authoritative list is the server itself — call `tools/list`, or
+`capability_manifest` with `names_only` for a cheap enumeration that also carries the build stamp so
+staleness stays checkable. Each action's contract is specified in
+[docs/tool-spec.md](docs/tool-spec.md), which is enforced against the registered tool set by test in
+both directions.
 
 Run `contextpatch configure-claude-desktop` to validate detected ContextPatch entries in the normal `claude_desktop_config.json` `mcpServers` map and default them to `--tool-surface project`. The command preserves repository roots, unrelated arguments, configuration, and user-authored policies, and removes only the exact legacy ContextPatch wildcard `toolPolicy: {"*":"allow"}` from targeted entries. It uses a cooperative lock and stale-read check and creates an exact backup before an update. `--dry-run` leaves the config unchanged and creates no backup; `--tool-surface full` restores the direct-tool surface.
 
@@ -197,6 +146,7 @@ Public docs:
 - [Claude Desktop usage](docs/claude-desktop.md)
 - [Implementation roadmap](docs/implementation-roadmap.md)
 - [Server refactor plan](docs/server-refactor-plan.md)
+- [Tool registry plan](docs/tool-registry-plan.md)
 - [Native background implementation](docs/native-background-implementation.md)
 - [Copilot repository instructions](.github/copilot-instructions.md)
 

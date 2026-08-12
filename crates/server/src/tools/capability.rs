@@ -296,7 +296,8 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "python": ["repo-relative .py script"],
                 "python3": ["repo-relative .py script"],
                 "pytest": ["validation invocation"],
-                "bash": ["references/check-base-image.sh", "references/check-base-image.sh task"],
+                // Derived, not restated: a hand-copied list here fell behind the allowlist itself.
+                "bash": contextpatch_core::process::guarded_command::allowed_shell_scripts(),
                 "rg": ["search"]
             },
             "typed_workflows": {
@@ -316,7 +317,9 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "fixture_manifest_verify": "Verifies exact fixture file sets and SHA-256 digests.",
                 "fixture_manifest_refresh": "Regenerates fixture manifests with dry-run, confirmation, and existing-manifest hash guard.",
                 "image_cleanliness_check_run": "Runs a narrow Docker image file-name scan without exposing generic docker.",
-                "docker_image_inspect": "Runs docker image inspect for one validated image reference without exposing generic docker."
+                "docker_image_inspect": "Runs docker image inspect for one validated image reference without exposing generic docker.",
+                "compose_stack_run": "Plans or asynchronously starts one named Docker Compose stack proof, with the compose file pinned per action, every Docker argument server-derived, networking enabled, and a teardown scoped to this server's own Compose project.",
+                "artifact_build_check_run": "Plans or asynchronously builds a repository Dockerfile and then runs the built image as an import smoke check, with the build networked, the smoke run pinned to --network none, and the uniquely tagged image always removed."
             },
             "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode", "dynamo-harbor-task"],
             "guards": [

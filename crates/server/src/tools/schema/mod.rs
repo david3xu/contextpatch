@@ -13,16 +13,58 @@ mod setup;
 
 use crate::tools::ToolSurface;
 
+// Re-exported so the advertised-authority axes can be asserted alongside the deadline and
+// mutation-lock axes that live in `dispatch`. Those six facts are currently decided in five separate
+// files; the registry migration collapses them, and until it does, the snapshot that guards the
+// migration needs to read all six from one place.
+pub(crate) use authority::RemoteReach;
+pub(crate) use capability::{capability_manifest_definition, preflight_health_definition};
+pub(crate) use files::{
+    artifact_delete_exact_definition, artifact_write_base64_definition,
+    artifact_write_text_definition, bulk_replace_exact_definition,
+    bulk_write_new_files_base64_definition, create_directory_definition, diff_preview_definition,
+    file_info_definition, list_directory_definition, read_file_bytes_definition,
+    read_range_definition, read_write_receipts_definition, replace_exact_definition,
+    set_file_executable_definition, status_guard_definition,
+    write_existing_file_exact_hash_definition, write_new_file_base64_definition,
+    write_new_file_definition,
+};
+pub(crate) use fixtures::{
+    base_image_check_run_definition, fixture_generator_run_definition,
+    fixture_manifest_refresh_definition, fixture_manifest_verify_definition,
+};
+pub(crate) use git::{
+    delete_generated_prefix_definition, delete_guarded_definition,
+    delete_untracked_exact_definition, git_branch_prepare_definition, git_commit_exact_definition,
+    git_commit_prefix_definition, git_commit_scoped_definition, git_merge_readiness_definition,
+    git_push_exact_definition, git_remote_check_definition, git_remote_list_definition,
+    git_restore_exact_definition, git_stage_exact_definition, git_staged_scope_check_definition,
+    move_tracked_definition,
+};
+pub(crate) use github::{github_fork_prepare_definition, github_pr_run_definition};
+pub(crate) use native::{native_build_run_definition, native_device_run_definition};
+pub(crate) use process::{
+    artifact_build_check_run_definition, artifact_python_run_definition,
+    compose_stack_run_definition, docker_image_inspect_definition, harbor_run_start_definition,
+    image_cleanliness_check_run_definition, read_command_log_definition,
+    run_guarded_command_definition, task_image_python_run_definition,
+    validation_profile_run_definition,
+};
+pub(crate) use setup::setup_profile_run_definition;
+// Still test-only: production reads these through `add_always_allow_annotations`, which lives here.
+// They become ordinary reads once every tool is a descriptor and annotations come from its fields.
+#[cfg(test)]
+pub(crate) use authority::{is_read_only, remote_reach};
+
 fn internal_tool_definitions() -> Vec<Value> {
     let mut definitions = Vec::new();
-    definitions.extend(capability::definitions());
-    definitions.extend(files::definitions());
-    definitions.extend(process::definitions());
-    definitions.extend(fixtures::definitions());
-    definitions.extend(setup::definitions());
-    definitions.extend(native::definitions());
-    definitions.extend(git::definitions());
-    definitions.extend(github::definitions());
+    // Migrated tools carry their own schema on their descriptor; the module lists below hold only
+    // what has not moved yet, so the two sources are disjoint by construction.
+    definitions.extend(
+        crate::tools::registry::descriptors()
+            .iter()
+            .map(|entry| (entry.schema)()),
+    );
     for definition in &mut definitions {
         add_always_allow_annotations(definition);
     }
@@ -222,6 +264,74 @@ mod tests {
         let mut sorted = project.clone();
         sorted.sort();
         assert_eq!(project, sorted);
+    }
+
+    /// The advertised surface, recorded before the tool registry migration.
+    ///
+    /// Names, schemas, descriptions, and annotations are the entire public contract of this server, so
+    /// a migration that moves all of them must prove it produced the same thing rather than merely
+    /// something that works. Definitions are sorted by name because registration order is not part of
+    /// the contract and would otherwise churn when modules are split.
+    #[test]
+    fn the_advertised_tool_surface_matches_its_recorded_snapshot() {
+        let mut definitions = internal_tool_definitions();
+        definitions.push(project_tool_definition());
+        definitions.sort_by(|left, right| {
+            left.get("name")
+                .and_then(Value::as_str)
+                .cmp(&right.get("name").and_then(Value::as_str))
+        });
+
+        let rendered = serde_json::to_string_pretty(&Value::Array(definitions))
+            .expect("tool definitions must serialize");
+        crate::tools::snapshot_fixture::assert_matches("tools-surface.json", &(rendered + "\n"));
+    }
+
+    /// Refusal guidance must point at tools that exist.
+    ///
+    /// `core::process::guidance` names tools as the route forward from a refusal, but it lives in a
+    /// crate that cannot see the tool registry, so nothing has ever checked those names resolve. A
+    /// renamed or retired tool leaves advice pointing at nothing, which is worse than a bare refusal:
+    /// the caller is told a capability exists under a name it cannot call.
+    ///
+    /// Every alternative is required to *begin* with a registered tool name. That is already the
+    /// convention — trailing detail like "(actions: run_list, run_view)" or "with `git ls-tree`"
+    /// qualifies the tool rather than replacing it — and it keeps the tool name first, where a caller
+    /// reads it.
+    #[test]
+    fn every_refusal_alternative_begins_with_a_registered_tool() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../core/src/process/guidance.rs"),
+        )
+        .expect("core guidance module must be readable");
+
+        let body = source
+            .split_once("pub fn tool_redirects")
+            .expect("guidance must expose tool_redirects")
+            .1;
+        let body = body.split_once("\npub fn ").map_or(body, |(head, _)| head);
+
+        let registered = registered_names();
+        let mut offenders = Vec::new();
+        for literal in body.split('"').skip(1).step_by(2) {
+            // Skip the match patterns, which are program names rather than alternatives.
+            if !literal.contains('_') || literal.starts_with(char::is_uppercase) {
+                continue;
+            }
+            if !registered
+                .iter()
+                .any(|tool| literal == tool || literal.starts_with(&format!("{tool} ")))
+            {
+                offenders.push(literal.to_string());
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "refusal guidance names tools that are not registered, so the advice cannot be \
+             followed: {offenders:?}"
+        );
     }
 
     #[test]

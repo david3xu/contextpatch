@@ -10,8 +10,11 @@ pub mod journal;
 pub mod native;
 pub mod process;
 pub mod project;
+pub mod registry;
 pub mod schema;
 pub mod setup;
+#[cfg(test)]
+pub(crate) mod snapshot_fixture;
 
 pub use capability::{capability_manifest, preflight_health};
 pub use files::{
