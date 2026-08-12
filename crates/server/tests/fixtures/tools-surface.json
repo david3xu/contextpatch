@@ -1955,7 +1955,16 @@
       "additionalProperties": false,
       "properties": {
         "action": {
-          "description": "Profile action, such as install_capacitor_dependencies, install_capacitor_filesystem, cap_init, cap_add_ios, cap_add_android, cap_sync, or ios_pod_install.",
+          "description": "Which step of the selected profile to plan or run.",
+          "enum": [
+            "install_capacitor_dependencies",
+            "install_capacitor_filesystem",
+            "cap_init",
+            "cap_add_ios",
+            "cap_add_android",
+            "cap_sync",
+            "ios_pod_install"
+          ],
           "type": "string"
         },
         "confirm": {

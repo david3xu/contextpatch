@@ -15,7 +15,10 @@ pub(crate) fn setup_profile_run_definition() -> Value {
                         },
                         "action": {
                             "type": "string",
-                            "description": "Profile action, such as install_capacitor_dependencies, install_capacitor_filesystem, cap_init, cap_add_ios, cap_add_android, cap_sync, or ios_pod_install."
+                            // Derived, not restated: the members are the enum beside this field, so
+                            // the description says what the field selects instead of listing them.
+                            "enum": contextpatch_core::setup::advertised_action_names(),
+                            "description": "Which step of the selected profile to plan or run."
                         },
                         "params": {
                             "type": "object",

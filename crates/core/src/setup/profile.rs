@@ -65,7 +65,12 @@ pub fn setup_profile_run<'a>(
     }
 
     let plan = match profile {
-        node_capacitor::PROFILE => node_capacitor::plan(root, cwd.relative(), action, params)?,
+        node_capacitor::PROFILE => node_capacitor::plan(
+            root,
+            cwd.relative(),
+            node_capacitor::Action::parse(action)?,
+            params,
+        )?,
         _ => {
             return Err(ContextPatchError::new(format!(
                 "setup_profile_run refused: unknown profile `{profile}`"
@@ -473,6 +478,40 @@ mod tests {
 
         assert!(error.to_string().contains("requires a Podfile"));
         assert!(error.to_string().contains("Swift Package Manager"));
+    }
+
+    /// Every action the profile declares reaches its own arm, and nothing here needs a package manager.
+    ///
+    /// The population comes from `Action::ALL` rather than a list written here, so this cannot pass
+    /// by agreeing with a copy of itself. Every call passes `SetupActionParams::None` and plans
+    /// only, a shape each arm either plans or refuses on its own parameters or preconditions, so no
+    /// external program runs. What is asserted is the absence of the vocabulary refusal: an action
+    /// that failed to dispatch would report an unknown action instead of a parameter.
+    #[test]
+    fn every_declared_profile_action_dispatches() {
+        use crate::setup::node_capacitor::{Action, PROFILE};
+
+        let root = git_root("every_declared_profile_action_dispatches");
+
+        for action in Action::ALL.iter().copied() {
+            let outcome = setup_profile_run(
+                &root,
+                None,
+                PROFILE,
+                action.as_str(),
+                SetupActionParams::None,
+                Some(30),
+                true,
+                None,
+            );
+            if let Err(error) = outcome {
+                assert!(
+                    !error.to_string().contains("unknown action"),
+                    "{} must reach its own arm: {error}",
+                    action.as_str()
+                );
+            }
+        }
     }
 
     #[test]

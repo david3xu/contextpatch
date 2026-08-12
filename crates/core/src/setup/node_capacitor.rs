@@ -11,6 +11,68 @@ pub(crate) const PROFILE: &str = "node-capacitor-shell";
 const PNPM_LOCKFILE: &str = "pnpm-lock.yaml";
 const PODFILE: &str = "Podfile";
 
+/// One `node-capacitor-shell` action.
+///
+/// The vocabulary belongs to the profile rather than to the tool. `setup_profile_run` selects a
+/// profile and delegates, so the set of actions that can be planned is a property of the profile,
+/// not of the surface: a second profile brings its own enum rather than extending this one, and a
+/// name valid here is not thereby valid there.
+///
+/// `ALL` is the single source for the advertised schema keyword and the capability manifest, which
+/// both reach it through `setup::advertised_action_names`. Safety-contract clause 34 leaves the
+/// keyword advisory with a core guard behind it, and `parse` is that guard.
+///
+/// A variant left out of `ALL` does not compile. `ALL` is the only site that constructs one, so an
+/// omitted variant is constructed nowhere and the dead-code lint refuses it under `-D warnings`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    InstallCapacitorDependencies,
+    InstallCapacitorFilesystem,
+    CapInit,
+    CapAddIos,
+    CapAddAndroid,
+    CapSync,
+    IosPodInstall,
+}
+
+impl Action {
+    /// Every action this profile plans, in the order the surfaces advertise them.
+    pub const ALL: &'static [Self] = &[
+        Self::InstallCapacitorDependencies,
+        Self::InstallCapacitorFilesystem,
+        Self::CapInit,
+        Self::CapAddIos,
+        Self::CapAddAndroid,
+        Self::CapSync,
+        Self::IosPodInstall,
+    ];
+
+    /// The wire name, which is the only form a caller ever supplies or reads.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InstallCapacitorDependencies => "install_capacitor_dependencies",
+            Self::InstallCapacitorFilesystem => "install_capacitor_filesystem",
+            Self::CapInit => "cap_init",
+            Self::CapAddIos => "cap_add_ios",
+            Self::CapAddAndroid => "cap_add_android",
+            Self::CapSync => "cap_sync",
+            Self::IosPodInstall => "ios_pod_install",
+        }
+    }
+
+    pub(crate) fn parse(action: &str) -> Result<Self, ContextPatchError> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == action)
+            .ok_or_else(|| {
+                ContextPatchError::new(format!(
+                    "setup_profile_run refused: unknown action `{action}` for profile `{PROFILE}`"
+                ))
+            })
+    }
+}
+
 /// Plan one setup action for a project rooted at `cwd_relative` inside `root`.
 ///
 /// The project is inspected through the repository's own authority, named relative to the root rather than
@@ -20,13 +82,13 @@ const PODFILE: &str = "Podfile";
 pub(crate) fn plan(
     root: RepositoryRoot<'_>,
     cwd_relative: &str,
-    action: &str,
+    action: Action,
     params: SetupActionParams,
 ) -> Result<CommandPlan, ContextPatchError> {
     let package_manager = detect_package_manager(root, cwd_relative)?;
     match action {
-        "install_capacitor_dependencies" => {
-            require_no_params(action, params)?;
+        Action::InstallCapacitorDependencies => {
+            require_no_params(action.as_str(), params)?;
             Ok(CommandPlan::sequence(
                 package_manager.install_capacitor_dependency_commands(),
                 vec![
@@ -36,8 +98,8 @@ pub(crate) fn plan(
                 ],
             ))
         }
-        "install_capacitor_filesystem" => {
-            require_no_params(action, params)?;
+        Action::InstallCapacitorFilesystem => {
+            require_no_params(action.as_str(), params)?;
             Ok(CommandPlan::new(
                 package_manager.program(),
                 package_manager.add_args(&["@capacitor/filesystem"], false),
@@ -48,7 +110,7 @@ pub(crate) fn plan(
                 ],
             ))
         }
-        "cap_init" => {
+        Action::CapInit => {
             let SetupActionParams::CapInit {
                 app_id,
                 app_name,
@@ -76,8 +138,8 @@ pub(crate) fn plan(
                 vec!["capacitor_config".to_string()],
             ))
         }
-        "cap_add_ios" => {
-            require_no_params(action, params)?;
+        Action::CapAddIos => {
+            require_no_params(action.as_str(), params)?;
             Ok(cap_platform_plan(
                 package_manager,
                 "add",
@@ -85,8 +147,8 @@ pub(crate) fn plan(
                 vec!["ios_project"],
             ))
         }
-        "cap_add_android" => {
-            require_no_params(action, params)?;
+        Action::CapAddAndroid => {
+            require_no_params(action.as_str(), params)?;
             Ok(cap_platform_plan(
                 package_manager,
                 "add",
@@ -94,7 +156,7 @@ pub(crate) fn plan(
                 vec!["android_project"],
             ))
         }
-        "cap_sync" => {
+        Action::CapSync => {
             let SetupActionParams::CapSync { platform } = params else {
                 return Err(ContextPatchError::new(
                     "setup_profile_run refused: cap_sync requires optional platform params",
@@ -117,8 +179,8 @@ pub(crate) fn plan(
             };
             Ok(CommandPlan::new(package_manager.program(), args, expected))
         }
-        "ios_pod_install" => {
-            require_no_params(action, params)?;
+        Action::IosPodInstall => {
+            require_no_params(action.as_str(), params)?;
             if !crate::fs::rooted::is_regular_file(root, &project_relative(cwd_relative, PODFILE))?
             {
                 return Err(ContextPatchError::new(
@@ -131,9 +193,6 @@ pub(crate) fn plan(
                 vec!["ios_project".to_string()],
             ))
         }
-        _ => Err(ContextPatchError::new(format!(
-            "setup_profile_run refused: unknown action `{action}` for profile `{PROFILE}`"
-        ))),
     }
 }
 

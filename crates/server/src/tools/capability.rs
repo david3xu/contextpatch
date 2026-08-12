@@ -347,15 +347,8 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
             "mode": "declarative_profile_actions",
             "profiles": {
                 "node-capacitor-shell": {
-                    "actions": [
-                        "install_capacitor_dependencies",
-                        "install_capacitor_filesystem",
-                        "cap_init",
-                        "cap_add_ios",
-                        "cap_add_android",
-                        "cap_sync",
-                        "ios_pod_install"
-                    ],
+                    // Derived, not restated: the profile owns this vocabulary and the manifest reads it.
+                    "actions": contextpatch_core::setup::advertised_action_names(),
                     "external_mutator": true,
                     "caller_supplies_raw_command": false,
                     "ios_pod_install_requirement": "requires Podfile in cwd; Swift Package Manager based Capacitor projects do not need this action",
