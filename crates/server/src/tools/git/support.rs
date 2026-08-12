@@ -225,11 +225,8 @@ pub(crate) fn validate_git_branch(branch: &str) -> Result<String, String> {
     {
         return Err(format!("git workflow refused: invalid branch `{branch}`"));
     }
-    let status = git_state::run(
-        Path::new("."),
-        &["check-ref-format", "--branch", branch],
-    )
-    .map_err(|error| refused("git workflow", error))?;
+    let status = git_state::run(Path::new("."), &["check-ref-format", "--branch", branch])
+        .map_err(|error| refused("git workflow", error))?;
     if !status.success() {
         return Err(format!("git workflow refused: invalid branch `{branch}`"));
     }
@@ -404,22 +401,32 @@ mod tests {
 
         let error = git_status_short(&outside_any_repository).unwrap_err();
         assert!(
-            error.starts_with("git_status_short refused: git status --short --untracked-files=all failed:"),
+            error.starts_with(
+                "git_status_short refused: git status --short --untracked-files=all failed:"
+            ),
             "{error}"
         );
 
-        let error = git_status_paths_for_tool("git_commit_exact", &outside_any_repository)
-            .unwrap_err();
-        assert!(error.starts_with("git_commit_exact refused: git status"), "{error}");
+        let error =
+            git_status_paths_for_tool("git_commit_exact", &outside_any_repository).unwrap_err();
+        assert!(
+            error.starts_with("git_commit_exact refused: git status"),
+            "{error}"
+        );
 
         let error = current_branch("git_push_exact", &outside_any_repository).unwrap_err();
-        assert!(error.starts_with("git_push_exact refused: git branch"), "{error}");
+        assert!(
+            error.starts_with("git_push_exact refused: git branch"),
+            "{error}"
+        );
 
         // This one is addressed to `git workflow`, not to any tool, which is the string callers have
         // always received.
         let error = local_branch_exists(&outside_any_repository, "main").unwrap_err();
         assert!(
-            error.starts_with("git workflow refused: failed to check local branch `main` (exit code "),
+            error.starts_with(
+                "git workflow refused: failed to check local branch `main` (exit code "
+            ),
             "{error}"
         );
     }
@@ -436,11 +443,15 @@ mod tests {
             "{error}"
         );
         // Not core's wording, which names the path instead.
-        assert!(!error.contains("failed to resolve repository root"), "{error}");
+        assert!(
+            !error.contains("failed to resolve repository root"),
+            "{error}"
+        );
 
         // The policy wrapper routes through the same resolver and keeps the same wording.
-        let policy_error = repo_root_for_policy(&absent, "list_directory", WorktreeRootPolicy::ResolvedPath)
-            .unwrap_err();
+        let policy_error =
+            repo_root_for_policy(&absent, "list_directory", WorktreeRootPolicy::ResolvedPath)
+                .unwrap_err();
         assert!(
             policy_error.starts_with("list_directory refused: failed to resolve repo root: "),
             "{policy_error}"

@@ -30,6 +30,14 @@ pub mod harbor_run_start {
     pub const NAME: &str = "harbor_run_start";
 }
 
+pub mod compose_stack_run {
+    pub const NAME: &str = "compose_stack_run";
+}
+
+pub mod artifact_build_check_run {
+    pub const NAME: &str = "artifact_build_check_run";
+}
+
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Component, Path, PathBuf};
@@ -62,9 +70,9 @@ impl BackgroundJobPermit {
         loop {
             if active >= MAX_ACTIVE_BACKGROUND_JOBS {
                 return Err(format!(
-                    "{tool_name} refused: at most {MAX_ACTIVE_BACKGROUND_JOBS} Harbor, task-image, \
-                     or validation-profile jobs may run at once; poll existing log_ids before \
-                     starting another job"
+                    "{tool_name} refused: at most {MAX_ACTIVE_BACKGROUND_JOBS} background jobs may run at \
+                     once, across Harbor, task-image, validation-profile, Compose-stack, and \
+                     artifact-build work; poll existing log_ids before starting another job"
                 ));
             }
             match ACTIVE_BACKGROUND_JOBS.compare_exchange_weak(
@@ -131,7 +139,7 @@ pub(crate) fn call_run_guarded_command<'a>(
         &args,
         timeout_secs,
     )
-        .map_err(|error| format!("run_guarded_command refused: {error}"))?;
+    .map_err(|error| format!("run_guarded_command refused: {error}"))?;
     let log_id = write_command_log(&output)
         .map_err(|error| format!("run_guarded_command log write failed: {error}"))?;
     Ok(format!("log_id: {log_id}\n{output}"))
@@ -235,6 +243,289 @@ fn panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
     } else {
         "unknown panic payload".to_string()
     }
+}
+
+/// Plan or start one named Compose stack proof.
+///
+/// The argv is derived in core from the action name alone, so no caller-supplied Docker arguments
+/// reach the child. Execution is asynchronous for the same reason Harbor runs are: a stack proof
+/// routinely outlives any reply deadline, and the 600-second guarded-command cap does not apply to
+/// this path because it never passes through the guarded-command allowlist.
+pub(crate) fn call_compose_stack_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let repository_root = repository_root.into();
+    // Checked before any argument is read, so planning against a selected repository is refused
+    // exactly where executing would be.
+    contextpatch_core::process::compose_stack::ensure_compose_root_is_addressable(repository_root)
+        .map_err(|error| format!("compose_stack_run refused: {error}"))?;
+
+    let action = required_string(arguments, "action")?;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    let plan = contextpatch_core::process::compose_stack::plan_compose_stack_run(
+        repository_root,
+        action,
+        timeout_secs,
+    )
+    .map_err(|error| format!("compose_stack_run refused: {error}"))?;
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::compose_stack_run::NAME,
+            "dry_run": true,
+            "action": plan.action(),
+            "compose_file": plan.compose_file(),
+            "project_name": plan.project_name(),
+            "up": {
+                "program": "docker",
+                "args": plan.up_args(),
+                "timeout_secs": plan.up_timeout().as_secs()
+            },
+            "teardown": {
+                "program": "docker",
+                "args": plan.down_args(),
+                "timeout_secs": plan.down_timeout().as_secs()
+            },
+            "network": "enabled",
+            "required_confirm_for_run": contextpatch_core::process::compose_stack::CONFIRMATION
+        }))
+        .map_err(|error| format!("compose_stack_run refused: {error}"));
+    }
+
+    if confirm != Some(contextpatch_core::process::compose_stack::CONFIRMATION) {
+        return Err(format!(
+            "compose_stack_run refused: dry_run=false requires confirm: {:?}",
+            contextpatch_core::process::compose_stack::CONFIRMATION
+        ));
+    }
+
+    let initial_log = serde_json::to_string_pretty(&json!({
+        "tool": crate::tools::compose_stack_run::NAME,
+        "status": "running",
+        "action": plan.action(),
+        "compose_file": plan.compose_file(),
+        "project_name": plan.project_name()
+    }))
+    .map_err(|error| format!("compose_stack_run refused: {error}"))?;
+
+    let worker_plan = plan.clone();
+    let log_id = start_background_job(
+        crate::tools::compose_stack_run::NAME,
+        "compose-stack",
+        &initial_log,
+        move |_| {
+            let result = contextpatch_core::process::compose_stack::run_compose_stack(
+                &worker_plan,
+                Some(contextpatch_core::process::compose_stack::CONFIRMATION),
+            )
+            .map_err(|error| format!("compose_stack_run failed: {error}"))?;
+
+            let terminal_status = if result.up.timed_out {
+                "timed_out"
+            } else if result.success() {
+                "completed"
+            } else {
+                "failed"
+            };
+            let result_value = json!({
+                "tool": crate::tools::compose_stack_run::NAME,
+                "status": terminal_status,
+                "dry_run": false,
+                "action": worker_plan.action(),
+                "compose_file": worker_plan.compose_file(),
+                "project_name": worker_plan.project_name(),
+                "up": compose_command_value(&result.up),
+                "teardown": result.teardown.as_ref().map(compose_command_value),
+                // Surfaced separately because a leaked stack must not be hidden by a passing proof.
+                "teardown_clean": result.teardown_clean()
+            });
+            let log = serde_json::to_string_pretty(&result_value)
+                .map_err(|error| format!("compose_stack_run failed: {error}"))?;
+            Ok(BackgroundJobOutcome {
+                log,
+                status: terminal_status,
+                exit_code: result.up.exit_code,
+                timed_out: result.up.timed_out,
+            })
+        },
+    )?;
+
+    Ok(format!(
+        "log_id: {log_id}\n{}",
+        serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::compose_stack_run::NAME,
+            "status": "running",
+            "action": plan.action(),
+            "project_name": plan.project_name(),
+            "poll_with": crate::tools::read_command_log::NAME
+        }))
+        .map_err(|error| format!("compose_stack_run refused: {error}"))?
+    ))
+}
+
+/// Plan or start one artifact build plus its import smoke check.
+///
+/// The caller names a Dockerfile and the arguments for the built image; every Docker flag, the tag,
+/// and the networkless smoke invocation are derived here.
+pub(crate) fn call_artifact_build_check_run<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let repository_root = repository_root.into();
+    contextpatch_core::process::artifact_build::ensure_artifact_root_is_addressable(
+        repository_root,
+    )
+    .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
+
+    let dockerfile = required_string(arguments, "dockerfile")?;
+    let context = optional_string(arguments, "context")?;
+    let smoke_args = optional_string_array(arguments, "smoke_args")?;
+    let build_timeout_secs = optional_u64(arguments, "build_timeout_secs")?;
+    let smoke_timeout_secs = optional_u64(arguments, "smoke_timeout_secs")?;
+    let dry_run = optional_bool(arguments, "dry_run")?.unwrap_or(true);
+    let confirm = optional_string(arguments, "confirm")?;
+
+    let plan = contextpatch_core::process::artifact_build::plan_artifact_build_check(
+        repository_root,
+        dockerfile,
+        context,
+        &smoke_args,
+        build_timeout_secs,
+        smoke_timeout_secs,
+    )
+    .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
+
+    if dry_run {
+        return serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::artifact_build_check_run::NAME,
+            "dry_run": true,
+            "dockerfile": plan.dockerfile(),
+            "context": plan.context(),
+            "tag": plan.tag(),
+            "build": {
+                "program": "docker",
+                "args": plan.build_args(),
+                "timeout_secs": plan.build_timeout().as_secs()
+            },
+            "smoke": {
+                "program": "docker",
+                "args": plan.smoke_args(),
+                "timeout_secs": plan.smoke_timeout().as_secs()
+            },
+            "image_cleanup": {
+                "program": "docker",
+                "args": plan.image_cleanup_args()
+            },
+            "build_network": "enabled",
+            "smoke_network": "none",
+            "required_confirm_for_run":
+                contextpatch_core::process::artifact_build::CONFIRMATION
+        }))
+        .map_err(|error| format!("artifact_build_check_run refused: {error}"));
+    }
+
+    if confirm != Some(contextpatch_core::process::artifact_build::CONFIRMATION) {
+        return Err(format!(
+            "artifact_build_check_run refused: dry_run=false requires confirm: {:?}",
+            contextpatch_core::process::artifact_build::CONFIRMATION
+        ));
+    }
+
+    let initial_log = serde_json::to_string_pretty(&json!({
+        "tool": crate::tools::artifact_build_check_run::NAME,
+        "status": "running",
+        "dockerfile": plan.dockerfile(),
+        "tag": plan.tag()
+    }))
+    .map_err(|error| format!("artifact_build_check_run refused: {error}"))?;
+
+    let worker_plan = plan.clone();
+    let log_id = start_background_job(
+        crate::tools::artifact_build_check_run::NAME,
+        "artifact-build",
+        &initial_log,
+        move |_| {
+            let result = contextpatch_core::process::artifact_build::run_artifact_build_check(
+                &worker_plan,
+                Some(contextpatch_core::process::artifact_build::CONFIRMATION),
+            )
+            .map_err(|error| format!("artifact_build_check_run failed: {error}"))?;
+
+            let timed_out = result.build.timed_out
+                || result.smoke.as_ref().is_some_and(|smoke| smoke.timed_out);
+            let terminal_status = if timed_out {
+                "timed_out"
+            } else if result.success() {
+                "completed"
+            } else {
+                "failed"
+            };
+            let result_value = json!({
+                "tool": crate::tools::artifact_build_check_run::NAME,
+                "status": terminal_status,
+                "dry_run": false,
+                "dockerfile": worker_plan.dockerfile(),
+                "tag": worker_plan.tag(),
+                "build": artifact_command_value(&result.build),
+                "smoke": result.smoke.as_ref().map(artifact_command_value),
+                "image_cleanup": result.image_cleanup.as_ref().map(artifact_command_value),
+                // A leaked image is reported rather than hidden behind a passing gate.
+                "cleanup_clean": result.cleanup_clean()
+            });
+            let log = serde_json::to_string_pretty(&result_value)
+                .map_err(|error| format!("artifact_build_check_run failed: {error}"))?;
+            Ok(BackgroundJobOutcome {
+                log,
+                status: terminal_status,
+                exit_code: result.build.exit_code,
+                timed_out,
+            })
+        },
+    )?;
+
+    Ok(format!(
+        "log_id: {log_id}\n{}",
+        serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::artifact_build_check_run::NAME,
+            "status": "running",
+            "dockerfile": plan.dockerfile(),
+            "tag": plan.tag(),
+            "poll_with": crate::tools::read_command_log::NAME
+        }))
+        .map_err(|error| format!("artifact_build_check_run refused: {error}"))?
+    ))
+}
+
+fn artifact_command_value(
+    result: &contextpatch_core::process::artifact_build::ArtifactBuildCommandResult,
+) -> Value {
+    json!({
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "duration_ms": result.duration_ms,
+        "stdout": result.stdout,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr": result.stderr,
+        "stderr_truncated": result.stderr_truncated
+    })
+}
+
+fn compose_command_value(
+    result: &contextpatch_core::process::compose_stack::ComposeStackCommandResult,
+) -> Value {
+    json!({
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "duration_ms": result.duration_ms,
+        "stdout": result.stdout,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr": result.stderr,
+        "stderr_truncated": result.stderr_truncated
+    })
 }
 
 pub(crate) fn call_task_image_python_run<'a>(
@@ -787,8 +1078,9 @@ pub(crate) fn call_validation_profile_run<'a>(
     // name. Capturing a path here would mean the directory each command runs in is resolved after this call
     // has already returned, which is the longest possible gap between validating a repository and acting on
     // it.
-    let worker_authority = contextpatch_core::git::OwnedRepositoryRoot::retain(repository_root.into())
-        .map_err(|error| format!("validation_profile_run refused: {error}"))?;
+    let worker_authority =
+        contextpatch_core::git::OwnedRepositoryRoot::retain(repository_root.into())
+            .map_err(|error| format!("validation_profile_run refused: {error}"))?;
     let worker_arguments = arguments.clone();
     let profile_name = profile.to_string();
     let initial_log = json!({

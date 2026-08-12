@@ -534,7 +534,10 @@ mod tests {
 
         assert!(outcome.still_dirty.is_empty(), "{outcome:?}");
         assert_eq!(outcome.dirty_after, names(&["other.txt"]));
-        assert_eq!(fs::read_to_string(root.join("tracked.txt")).unwrap(), "alpha\n");
+        assert_eq!(
+            fs::read_to_string(root.join("tracked.txt")).unwrap(),
+            "alpha\n"
+        );
     }
 
     #[test]
@@ -545,7 +548,10 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.starts_with("every requested path must currently be dirty"), "{error}");
+        assert!(
+            error.starts_with("every requested path must currently be dirty"),
+            "{error}"
+        );
         assert!(error.contains("not_dirty_paths:\ntracked.txt"), "{error}");
     }
 
@@ -559,7 +565,10 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.starts_with("untracked paths cannot be restored from HEAD"), "{error}");
+        assert!(
+            error.starts_with("untracked paths cannot be restored from HEAD"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -612,7 +621,10 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.starts_with("every requested path must be an untracked file"), "{error}");
+        assert!(
+            error.starts_with("every requested path must be an untracked file"),
+            "{error}"
+        );
         assert!(root.join("tracked.txt").exists());
     }
 
@@ -639,11 +651,17 @@ mod tests {
         fs::create_dir_all(root.join("build").join("hollow")).unwrap();
 
         let plan = plan_delete_generated_prefix(&root, &owned(&["build"])).unwrap();
-        assert!(plan.files.contains(&"build/out.bin".to_string()), "{plan:?}");
+        assert!(
+            plan.files.contains(&"build/out.bin".to_string()),
+            "{plan:?}"
+        );
 
         apply_delete_generated_prefix(&root, &plan).unwrap();
 
-        assert!(!root.join("build").exists(), "the ignored directory was named, so it goes whole");
+        assert!(
+            !root.join("build").exists(),
+            "the ignored directory was named, so it goes whole"
+        );
     }
 
     #[test]
@@ -717,7 +735,13 @@ mod tests {
 
         // Every guard above ran, and nothing changed. Planning is separate from applying precisely so a
         // refusal cannot leave a partial mutation behind.
-        assert_eq!(fs::read_to_string(root.join("tracked.txt")).unwrap(), "changed\n");
-        assert_eq!(fs::read_to_string(root.join("fresh.txt")).unwrap(), "beta\n");
+        assert_eq!(
+            fs::read_to_string(root.join("tracked.txt")).unwrap(),
+            "changed\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("fresh.txt")).unwrap(),
+            "beta\n"
+        );
     }
 }

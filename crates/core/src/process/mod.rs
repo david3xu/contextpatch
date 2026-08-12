@@ -1,3 +1,5 @@
+pub mod artifact_build;
+pub mod compose_stack;
 pub mod deadline;
 pub mod guarded_command;
 pub mod guidance;

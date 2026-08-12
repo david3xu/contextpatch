@@ -71,8 +71,9 @@ fn create_directory_unix(
         // For messages only. Access goes through `current`, never through this path.
         let absolute = root.join(&walked);
         let is_target = index + 1 == components.len();
-        let name = std::ffi::CString::new(component.as_encoded_bytes())
-            .map_err(|_| ContextPatchError::new("target path must not contain an embedded NUL byte"))?;
+        let name = std::ffi::CString::new(component.as_encoded_bytes()).map_err(|_| {
+            ContextPatchError::new("target path must not contain an embedded NUL byte")
+        })?;
 
         match component_kind(&current, &name, &absolute)? {
             Some(kind) if kind == libc::S_IFLNK => {

@@ -456,9 +456,7 @@ pub fn apply_planned_replacement<'a>(
     // comparison is by canonical label because that is what the plan stored; access still goes through the
     // root's own authority.
     let current_root = crate::fs::rooted::canonical_label(repo_root).map_err(|error| {
-        ContextPatchError::new(format!(
-            "{error} while applying replacement plan"
-        ))
+        ContextPatchError::new(format!("{error} while applying replacement plan"))
     })?;
     if current_root != planned.repo_root {
         return Err(ContextPatchError::new(format!(
@@ -1297,7 +1295,8 @@ mod tests {
 
         // The digest one write reports must be usable as the guard for the next, with no intervening
         // read. That is the whole reason for returning it.
-        let first = replace_exact_in_root(&root, Path::new("sample.txt"), "alpha", "ALPHA").unwrap();
+        let first =
+            replace_exact_in_root(&root, Path::new("sample.txt"), "alpha", "ALPHA").unwrap();
         let second = replace_exact_in_root_with_sha256(
             &root,
             Path::new("sample.txt"),
@@ -1317,7 +1316,8 @@ mod tests {
         let file = root.join("sample.txt");
         fs::write(&file, "alpha beta gamma").unwrap();
 
-        let first = replace_exact_in_root(&root, Path::new("sample.txt"), "alpha", "ALPHA").unwrap();
+        let first =
+            replace_exact_in_root(&root, Path::new("sample.txt"), "alpha", "ALPHA").unwrap();
         fs::write(&file, "external change gamma").unwrap();
 
         let error = replace_exact_in_root_with_sha256(

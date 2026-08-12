@@ -132,10 +132,7 @@ pub fn git_path<'a>(
 /// The final component is inspected rather than opened, because a path that does not exist yet is a
 /// legitimate create target.
 #[cfg(unix)]
-fn confine_relative_to_root(
-    root: RepositoryRoot<'_>,
-    raw: &str,
-) -> Result<(), ContextPatchError> {
+fn confine_relative_to_root(root: RepositoryRoot<'_>, raw: &str) -> Result<(), ContextPatchError> {
     let handle = crate::fs::rooted::root_descriptor(root)?;
     confine_relative_to_descriptor(handle.as_file(), raw)
 }
@@ -282,10 +279,7 @@ pub fn git_prefixes<'a>(
 ///
 /// Matching requires either equality or a separator boundary, so the prefix `src` never captures
 /// `src-generated`.
-pub fn paths_under_prefixes(
-    paths: &BTreeSet<String>,
-    prefixes: &[String],
-) -> BTreeSet<String> {
+pub fn paths_under_prefixes(paths: &BTreeSet<String>, prefixes: &[String]) -> BTreeSet<String> {
     paths
         .iter()
         .filter(|path| {
@@ -322,7 +316,10 @@ mod tests {
 
     #[test]
     fn a_commit_subject_is_trimmed_and_bounded() {
-        assert_eq!(commit_subject("  Fix the guard  ").unwrap(), "Fix the guard");
+        assert_eq!(
+            commit_subject("  Fix the guard  ").unwrap(),
+            "Fix the guard"
+        );
         assert_eq!(
             commit_subject("   ").unwrap_err().to_string(),
             "subject must not be empty"
@@ -439,7 +436,10 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert_eq!(error, "path `link.txt` contains symlink component `link.txt`");
+        assert_eq!(
+            error,
+            "path `link.txt` contains symlink component `link.txt`"
+        );
         assert_eq!(
             fs::read_to_string(outside.join("secret.txt")).unwrap(),
             "secret"
@@ -455,9 +455,12 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
         let directory = anchored_root(&root);
 
-        let error = git_path(RepositoryRoot::anchored(&root, &directory), "linked/secret.txt")
-            .unwrap_err()
-            .to_string();
+        let error = git_path(
+            RepositoryRoot::anchored(&root, &directory),
+            "linked/secret.txt",
+        )
+        .unwrap_err()
+        .to_string();
 
         assert_eq!(
             error,
@@ -586,7 +589,10 @@ mod tests {
         // now refuses the link at the component itself, before anything outside is reached at all, so the
         // refusal names the component rather than the resolution.
         let error = git_path(&root, "link.txt").unwrap_err().to_string();
-        assert_eq!(error, "path `link.txt` contains symlink component `link.txt`");
+        assert_eq!(
+            error,
+            "path `link.txt` contains symlink component `link.txt`"
+        );
         assert_eq!(
             fs::read_to_string(outside.join("secret.txt")).unwrap(),
             "secret",

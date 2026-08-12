@@ -138,7 +138,10 @@ pub fn remote_tracking_ref(remote: &str, branch: &str) -> String {
 /// Exactly one branch, never a wildcard, so a fetch cannot quietly update refs the caller did not ask
 /// about.
 pub fn fetch_refspec(remote: &str, branch: &str) -> String {
-    format!("refs/heads/{branch}:{}", remote_tracking_ref(remote, branch))
+    format!(
+        "refs/heads/{branch}:{}",
+        remote_tracking_ref(remote, branch)
+    )
 }
 
 /// Name blank text so a before-and-after comparison is readable.
@@ -402,7 +405,10 @@ mod tests {
     /// which would mask the guards under test.
     fn clone_with_bare_remote(name: &str) -> (PathBuf, PathBuf) {
         let bare = unique_dir(&format!("{name}-remote"));
-        git(&bare, &["init", "--quiet", "--bare", "--initial-branch=main"]);
+        git(
+            &bare,
+            &["init", "--quiet", "--bare", "--initial-branch=main"],
+        );
 
         let seed = unique_dir(&format!("{name}-seed"));
         git(&seed, &["init", "--quiet", "--initial-branch=main"]);
@@ -416,10 +422,7 @@ mod tests {
         git(&seed, &["push", "--quiet", "origin", "main"]);
 
         let clone = unique_dir(&format!("{name}-clone"));
-        git(
-            &clone,
-            &["clone", "--quiet", bare.to_str().unwrap(), "."],
-        );
+        git(&clone, &["clone", "--quiet", bare.to_str().unwrap(), "."]);
         git(&clone, &["config", "user.email", "guard@example.invalid"]);
         git(&clone, &["config", "user.name", "Guard"]);
         (clone, bare)
@@ -448,11 +451,19 @@ mod tests {
             infer_fetch_branch("origin", "refs/remotes/origin/feature").unwrap(),
             "feature"
         );
-        assert_eq!(infer_fetch_branch("origin", "origin/feature").unwrap(), "feature");
+        assert_eq!(
+            infer_fetch_branch("origin", "origin/feature").unwrap(),
+            "feature"
+        );
 
         // Guessing here would fetch a different branch than the caller asked about.
-        let error = infer_fetch_branch("origin", "main").unwrap_err().to_string();
-        assert!(error.starts_with("fetch=true requires target_branch"), "{error}");
+        let error = infer_fetch_branch("origin", "main")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with("fetch=true requires target_branch"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -523,8 +534,13 @@ mod tests {
     fn a_fetch_that_changed_the_worktree_is_refused() {
         // A fetch writes refs, never files, so a changed status means something else is running.
         assert!(ensure_status_unchanged("", "").is_ok());
-        let error = ensure_status_unchanged("", " M a.txt").unwrap_err().to_string();
-        assert!(error.starts_with("source worktree changed during fetch"), "{error}");
+        let error = ensure_status_unchanged("", " M a.txt")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with("source worktree changed during fetch"),
+            "{error}"
+        );
         // Blank sides are named so the comparison is readable.
         assert!(error.contains("before:\n(empty)"), "{error}");
     }
@@ -565,9 +581,9 @@ mod tests {
         assert!(remotes.iter().all(|remote| remote.name == "origin"));
         assert!(remotes.iter().any(|remote| remote.kind == "fetch"));
         assert!(remotes.iter().any(|remote| remote.kind == "push"));
-        assert!(remotes
-            .iter()
-            .all(|remote| remote.url.contains(bare.file_name().unwrap().to_str().unwrap())));
+        assert!(remotes.iter().all(|remote| remote
+            .url
+            .contains(bare.file_name().unwrap().to_str().unwrap())));
     }
 
     #[test]
@@ -613,7 +629,10 @@ mod tests {
 
         let main_changed = changed_files_between(&clone, &base, &main_side).unwrap();
         let feature_changed = changed_files_between(&clone, &base, &feature_side).unwrap();
-        let both: BTreeSet<String> = main_changed.intersection(&feature_changed).cloned().collect();
+        let both: BTreeSet<String> = main_changed
+            .intersection(&feature_changed)
+            .cloned()
+            .collect();
 
         // The overlap is what a merge would have to reconcile.
         assert_eq!(both, ["tracked.txt".to_string()].into_iter().collect());

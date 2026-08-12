@@ -41,7 +41,8 @@ pub(crate) fn recorded<'a, T>(
 ) -> Result<T, String> {
     let normalized = normalize_repo_relative_path(tool, relative_path)?;
     let root = repo_root.into();
-    let before = digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
+    let before =
+        digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
     let id = receipt::begin_file(root, tool, &normalized, before.as_deref())
         .map_err(|error| format!("{tool} refused before mutation: {error}"))?;
 
@@ -94,7 +95,8 @@ pub(crate) fn recorded_in_batch<'a, T>(
 ) -> Result<T, String> {
     let normalized = normalize_repo_relative_path(tool, relative_path)?;
     let root = repo_root.into();
-    let before = digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
+    let before =
+        digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
     let id = batch
         .begin_file(&normalized, before.as_deref())
         .map_err(|error| format!("{tool} refused before mutation: {error}"))?;
@@ -215,8 +217,8 @@ pub(crate) fn recorded_deletions<'a, T>(
 
     for relative in relative_paths {
         let normalized = normalize_repo_relative_path(tool, relative)?;
-        let before =
-            digest_in_root(root, &normalized).map_err(|error| format!("{tool} refused: {error}"))?;
+        let before = digest_in_root(root, &normalized)
+            .map_err(|error| format!("{tool} refused: {error}"))?;
         match receipt::begin_file(root, tool, &normalized, before.as_deref()) {
             Ok(id) => planned.push((normalized, before, id)),
             Err(error) => {

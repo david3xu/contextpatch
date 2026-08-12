@@ -533,7 +533,10 @@ mod tests {
         let error = plan_commit_exact(&root, &owned(&["tracked.txt"]))
             .unwrap_err()
             .to_string();
-        assert!(error.starts_with("provided paths must exactly match the full dirty-path set"), "{error}");
+        assert!(
+            error.starts_with("provided paths must exactly match the full dirty-path set"),
+            "{error}"
+        );
         assert!(error.contains("missing_from_input:\nfresh.txt"), "{error}");
 
         let plan = plan_commit_exact(&root, &owned(&["tracked.txt", "fresh.txt"])).unwrap();
@@ -565,13 +568,19 @@ mod tests {
         let scoped = plan_commit_scoped(&root, &owned(&["tracked.txt"]))
             .unwrap_err()
             .to_string();
-        assert!(scoped.starts_with("index must be clean before scoped commit"), "{scoped}");
+        assert!(
+            scoped.starts_with("index must be clean before scoped commit"),
+            "{scoped}"
+        );
         assert!(scoped.contains("staged_paths:\nfresh.txt"), "{scoped}");
 
         let staged = plan_stage_exact(&root, &owned(&["tracked.txt"]))
             .unwrap_err()
             .to_string();
-        assert!(staged.starts_with("index must be clean before staging exact paths"), "{staged}");
+        assert!(
+            staged.starts_with("index must be clean before staging exact paths"),
+            "{staged}"
+        );
     }
 
     #[test]
@@ -597,10 +606,15 @@ mod tests {
         verify_scoped_staged(&root, &plan).unwrap();
         commit_staged(&root, "Scoped", "").unwrap();
 
-        let (dirty_after, still_dirty) = requested_still_dirty(&root, &plan.requested_paths).unwrap();
+        let (dirty_after, still_dirty) =
+            requested_still_dirty(&root, &plan.requested_paths).unwrap();
         assert!(still_dirty.is_empty(), "{still_dirty:?}");
         assert_eq!(dirty_after, names(&["fresh.txt"]));
-        assert_eq!(state::rev_count(&root, "HEAD").unwrap(), 2, "exactly one commit");
+        assert_eq!(
+            state::rev_count(&root, "HEAD").unwrap(),
+            2,
+            "exactly one commit"
+        );
     }
 
     #[test]
@@ -619,7 +633,10 @@ mod tests {
         let unmatched = plan_commit_prefix(&root, &owned(&["absent"]))
             .unwrap_err()
             .to_string();
-        assert!(unmatched.starts_with("no dirty paths matched prefixes"), "{unmatched}");
+        assert!(
+            unmatched.starts_with("no dirty paths matched prefixes"),
+            "{unmatched}"
+        );
         assert!(unmatched.contains("prefixes:\nabsent"), "{unmatched}");
     }
 
@@ -635,7 +652,10 @@ mod tests {
         git(&root, &["add", "fresh.txt"]);
 
         let error = verify_scoped_staged(&root, &plan).unwrap_err().to_string();
-        assert!(error.starts_with("staged paths differ from requested scoped set"), "{error}");
+        assert!(
+            error.starts_with("staged paths differ from requested scoped set"),
+            "{error}"
+        );
         assert!(error.contains("staged:\nfresh.txt\ntracked.txt"), "{error}");
     }
 
@@ -649,7 +669,11 @@ mod tests {
         verify_stage_exact(&root, &plan).unwrap();
 
         assert_eq!(state::cached_paths(&root).unwrap(), names(&["tracked.txt"]));
-        assert_eq!(state::rev_count(&root, "HEAD").unwrap(), 1, "no commit was made");
+        assert_eq!(
+            state::rev_count(&root, "HEAD").unwrap(),
+            1,
+            "no commit was made"
+        );
     }
 
     #[test]
@@ -660,8 +684,8 @@ mod tests {
         fs::write(root.join("src").join("a.rs"), "alpha\n").unwrap();
         git(&root, &["add", "tracked.txt", "src/a.rs"]);
 
-        let report = evaluate_staged_scope(&root, &owned(&["tracked.txt"]), &owned(&["src"]), &[])
-            .unwrap();
+        let report =
+            evaluate_staged_scope(&root, &owned(&["tracked.txt"]), &owned(&["src"]), &[]).unwrap();
         assert!(report.passed, "{report:?}");
         assert_eq!(report.staged_paths, names(&["tracked.txt", "src/a.rs"]));
 
@@ -669,9 +693,13 @@ mod tests {
         assert!(!narrowed.passed);
         assert_eq!(narrowed.disallowed_paths, names(&["src/a.rs"]));
 
-        let demanding =
-            evaluate_staged_scope(&root, &[], &owned(&["src", "tracked.txt"]), &owned(&["absent.txt"]))
-                .unwrap();
+        let demanding = evaluate_staged_scope(
+            &root,
+            &[],
+            &owned(&["src", "tracked.txt"]),
+            &owned(&["absent.txt"]),
+        )
+        .unwrap();
         assert!(!demanding.passed);
         assert_eq!(demanding.missing_required_paths, names(&["absent.txt"]));
     }
@@ -681,11 +709,15 @@ mod tests {
         let root = repo("duplicates");
 
         assert_eq!(
-            plan_commit_exact(&root, &owned(&["a", "a"])).unwrap_err().to_string(),
+            plan_commit_exact(&root, &owned(&["a", "a"]))
+                .unwrap_err()
+                .to_string(),
             "duplicate paths are not allowed"
         );
         assert_eq!(
-            plan_commit_prefix(&root, &owned(&["a", "a"])).unwrap_err().to_string(),
+            plan_commit_prefix(&root, &owned(&["a", "a"]))
+                .unwrap_err()
+                .to_string(),
             "duplicate prefixes are not allowed"
         );
         assert_eq!(
@@ -717,7 +749,14 @@ mod tests {
         let _ = plan_commit_scoped(&root, &owned(&["tracked.txt"])).unwrap();
         let _ = plan_stage_exact(&root, &owned(&["tracked.txt"])).unwrap();
 
-        assert!(state::cached_paths(&root).unwrap().is_empty(), "nothing was staged");
-        assert_eq!(state::rev_count(&root, "HEAD").unwrap(), 1, "nothing was committed");
+        assert!(
+            state::cached_paths(&root).unwrap().is_empty(),
+            "nothing was staged"
+        );
+        assert_eq!(
+            state::rev_count(&root, "HEAD").unwrap(),
+            1,
+            "nothing was committed"
+        );
     }
 }

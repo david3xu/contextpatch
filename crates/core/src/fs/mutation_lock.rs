@@ -25,9 +25,7 @@ impl Drop for MutationLockGuard {
     }
 }
 
-fn lock_directory(
-    repo_root: crate::git::RepositoryRoot<'_>,
-) -> Result<PathBuf, ContextPatchError> {
+fn lock_directory(repo_root: crate::git::RepositoryRoot<'_>) -> Result<PathBuf, ContextPatchError> {
     let directory = ensure_scratch_root(repo_root)?.join(LOCK_DIRECTORY);
     fs::create_dir_all(&directory).map_err(|error| {
         ContextPatchError::new(format!(

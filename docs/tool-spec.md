@@ -39,6 +39,8 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `fixture_manifest_refresh` | Manifest file only | Regenerates fixture manifest from declared files/prefixes with dry-run, confirmation, and existing-manifest hash guard |
 | `read_command_log` | No | Reads captured command logs and asynchronous lifecycle state by opaque id |
 | `harbor_run_start` | Harbor job artifacts | Starts one typed Harbor run asynchronously and exposes pollable structured evidence through an opaque log id |
+| `compose_stack_run` | Docker containers, images, and volumes in this server's own Compose project | Plans a named Compose stack proof; confirmed execution starts asynchronously, returns a pollable log id, and always attempts a project-scoped teardown |
+| `artifact_build_check_run` | One uniquely tagged Docker image, always removed afterwards | Plans a Docker build of a repository Dockerfile plus a networkless import smoke run of the built image; confirmed execution starts asynchronously and returns a pollable log id |
 | `validation_profile_run` | No source edits | Starts predefined allowlisted validation command sequences asynchronously |
 | `setup_profile_run` | External setup command | Dry-run default, clean-worktree and confirmation gates, profile-derived command plan, typed params only, no caller-supplied raw commands |
 | `native_build_run` | External build/test command | Dry-run default, typed action params, source-status unchanged after execution, no raw native commands |
@@ -793,7 +795,7 @@ Rules:
   - `pnpm`: `run`, `test`
   - `python`/`python3`: a repo-relative `.py` script path as the first argument
   - `pytest`: validation invocation
-  - `bash`: exactly `references/check-base-image.sh` or `references/check-base-image.sh task`
+  - `bash`: only a script on the fixed validation-script list, with an optional leading `./` — `references/check-base-image.sh` (optionally with the exact `task` argument), `scripts/check-doc-commands.sh`, `scripts/check-docs.sh`, `scripts/check-endpoint-literals.sh`, `scripts/check-hosted-target-readiness.sh`, `scripts/docs-audit.sh` (each argument-free)
   - `rg`: search invocation
 - The default timeout is 120 seconds and the maximum is 600 seconds.
 - Arguments that directly reference paths outside the repository root must be refused, except for the server-owned `{scratch}` token.
@@ -802,7 +804,7 @@ Rules:
 - The tool must return command, cwd, allowlist rule, exit code, duration, stdout, and stderr.
 - Output must redact probable secret values without masking ordinary path-shaped output, env-var names, or documentation prose, then truncate large streams.
 - Program resolution may include server-host configuration through `CONTEXTPATCH_VALIDATION_PATHS` in addition to the process `PATH`; callers still supply only executable names, never paths or environment variables.
-- The tool must refuse direct `harbor run` and direct callers to `harbor_run_start`. It must also refuse arbitrary shell, shell snippets, shell scripts other than `references/check-base-image.sh` with its optional exact `task` argument, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
+- The tool must refuse direct `harbor run` and direct callers to `harbor_run_start`. It must also refuse arbitrary shell, shell snippets, shell scripts outside the fixed validation-script list, arguments to the argument-free scripts on that list, environment inspection, destructive Git commands, package installation, Docker, and automatic commits.
 
 ### `fixture_generator_run`
 
@@ -993,6 +995,62 @@ Rules:
 - Offsets are character offsets in the redacted UTF-8 log text, not byte offsets.
 - The response must report lifecycle status. Ordinary completed logs report `completed`; asynchronous logs may report `running`, `completed`, `failed`, or `timed_out`.
 - An asynchronous log still marked `running` but owned by an earlier server instance must report `unknown`. The caller must inspect current repository and external state before retrying because the earlier process outcome is not known.
+
+### `artifact_build_check_run`
+
+Plans one artifact packaging gate, and on confirmation runs it in a background worker: a Docker build of a repository Dockerfile followed by an import smoke run of the image that was built.
+
+Required inputs:
+
+- `dockerfile`: existing normalized repository-relative regular file
+
+Optional inputs:
+
+- `context`: normalized repository-relative directory; defaults to the repository root
+- `smoke_args`: at most 32 arguments of at most 4096 bytes, run inside the built image; empty runs the image's own default command
+- `build_timeout_secs`: from 1 to 3600; defaults to 1800
+- `smoke_timeout_secs`: from 1 to 600; defaults to 300
+- `dry_run`: defaults to `true`
+- `confirm`: execution requires the exact phrase `run artifact build check`
+
+Rules:
+
+- The caller may name a Dockerfile, a build context, and arguments for the built image. Every Docker flag, the image tag, and the cleanup argv must be derived by the server; no caller-supplied Docker option, mount, or tag is accepted.
+- Paths must be validated descriptor-relative with no-follow at every component, so traversal and symlinked components are refused before Docker is invoked.
+- The image tag must be unique per plan, so a concurrent job's cleanup cannot remove another job's image.
+- `smoke_args` must be placed after the image name in the `docker run` argv, so they are the container command by construction and cannot be reinterpreted as Docker options.
+- The smoke run must be pinned to `--network none`, so a dead export cannot be masked by a successful download. The build itself retains network access.
+- The import smoke must not run when the build failed, and the built image must be removed after any attempt that may have created it, with the outcome reported as `cleanup_clean`.
+- The gate passes only when the build and the smoke run both succeed.
+- The tool must refuse execution for a selected repository.
+- The action must be annotated `openWorldHint: true`, because the build has the network and executes repository-authored Dockerfile steps.
+- Artifact, Compose, Harbor, task-image, and validation-profile runs share a limit of two active background jobs per server process.
+
+### `compose_stack_run`
+
+Plans one named Docker Compose stack proof, and on confirmation starts it in a background worker, returning immediately with an opaque log id.
+
+Required inputs:
+
+- `action`: one of the named stack proofs, each pinned by this server to exactly one reviewed compose file
+
+Optional inputs:
+
+- `timeout_secs`: from 1 to 3600; defaults to 1800
+- `dry_run`: defaults to `true`
+- `confirm`: execution requires the exact phrase `run compose stack`
+
+Rules:
+
+- The compose file and every Docker argument must be derived by the server from the action name. No caller-supplied Docker argument, compose file path, service name, or project name is accepted.
+- An unknown action must be refused and the available actions named.
+- A pinned compose file that is not a regular file in the repository must be refused by name before Docker is invoked, so a wrong pin cannot start a different stack.
+- Every run must use this server's own Compose project name, so `down` cannot stop or delete a stack an operator is running by hand from the same compose file.
+- Teardown must be attempted after every outcome, including a failed or timed-out start, and its result reported separately as `teardown_clean` so a leaked stack is visible rather than hidden by a passing proof.
+- The tool must refuse execution for a selected repository, because a container receives argv paths rather than a directory descriptor.
+- Unlike `task_image_python_run`, this path runs with networking enabled and must be annotated `openWorldHint: true`.
+- Compose, Harbor, task-image, and validation-profile runs share a limit of two active background jobs per server process.
+- The start response must return `status: "running"`, the stable `log_id`, and the `read_command_log` polling tool.
 
 ### `harbor_run_start`
 

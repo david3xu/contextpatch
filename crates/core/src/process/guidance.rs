@@ -113,7 +113,13 @@ pub fn tool_redirects(program: &str, args: &[String]) -> Vec<&'static str> {
         ("find" | "ls" | "tree", _) => {
             vec!["list_directory", "run_guarded_command with `rg --files`"]
         }
-        ("sh" | "bash" | "zsh", _) => vec!["validation_profile_run", "setup_profile_run"],
+        // A refused `bash` call is usually a real gate that is simply not on the fixed script list.
+        // Pointing it at a profile it cannot extend is misleading, so name the list instead.
+        ("bash", _) => vec![
+            "run_guarded_command with a script on the fixed validation-script list",
+            "base_image_check_run",
+        ],
+        ("sh" | "zsh", _) => vec!["validation_profile_run", "setup_profile_run"],
         _ => Vec::new(),
     }
 }

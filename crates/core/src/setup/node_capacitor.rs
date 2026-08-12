@@ -119,7 +119,8 @@ pub(crate) fn plan(
         }
         "ios_pod_install" => {
             require_no_params(action, params)?;
-            if !crate::fs::rooted::is_regular_file(root, &project_relative(cwd_relative, PODFILE))? {
+            if !crate::fs::rooted::is_regular_file(root, &project_relative(cwd_relative, PODFILE))?
+            {
                 return Err(ContextPatchError::new(
                     "setup_profile_run refused: ios_pod_install requires a Podfile in cwd; Swift Package Manager based Capacitor projects do not need CocoaPods",
                 ));

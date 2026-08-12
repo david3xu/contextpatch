@@ -9,7 +9,10 @@ use crate::support::*;
 /// A blanket `false` here was a false public capability claim; see `docs/execution-threat-model.md`.
 const EXPECTED_OPEN_WORLD_ACTIONS: &[&str] = &[
     "artifact_python_run",
+    "artifact_build_check_run",
     "base_image_check_run",
+    // Runs a repository-defined stack with networking enabled, unlike the isolated task image.
+    "compose_stack_run",
     "fixture_generator_run",
     "git_branch_prepare",
     "git_merge_readiness",

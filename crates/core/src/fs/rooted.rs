@@ -131,8 +131,9 @@ pub fn entry_kind(
 ) -> Result<Option<RootedEntryKind>, ContextPatchError> {
     #[cfg(unix)]
     {
-        entry_kind_raw(root, relative)
-            .map_err(|error| ContextPatchError::new(format!("failed to inspect `{relative}`: {error}")))
+        entry_kind_raw(root, relative).map_err(|error| {
+            ContextPatchError::new(format!("failed to inspect `{relative}`: {error}"))
+        })
     }
 
     #[cfg(not(unix))]
@@ -163,7 +164,10 @@ pub fn entry_kind_raw(
 ///
 /// A symlink is reported as not a regular file rather than as whatever it points at, under either
 /// authority. Following one would mean resolving a name, which is the thing this module exists to avoid.
-pub fn is_regular_file(root: RepositoryRoot<'_>, relative: &str) -> Result<bool, ContextPatchError> {
+pub fn is_regular_file(
+    root: RepositoryRoot<'_>,
+    relative: &str,
+) -> Result<bool, ContextPatchError> {
     Ok(entry_kind(root, relative)? == Some(RootedEntryKind::RegularFile))
 }
 
@@ -391,9 +395,7 @@ pub fn directory_is_empty(
 /// A configured root may be spelled non-canonically and is resolved once.
 ///
 /// This value is a *label*. It is never used to reach a file.
-pub fn canonical_label(
-    root: RepositoryRoot<'_>,
-) -> Result<std::path::PathBuf, ContextPatchError> {
+pub fn canonical_label(root: RepositoryRoot<'_>) -> Result<std::path::PathBuf, ContextPatchError> {
     if root.is_anchored() {
         return Ok(root.logical_path().to_path_buf());
     }
@@ -411,7 +413,10 @@ pub fn canonical_label(
 /// Never used to reach a file. It exists so refusal text can keep naming the path a caller would recognize
 /// while the operation underneath it works from a descriptor.
 fn displayed(root: RepositoryRoot<'_>, relative: &str) -> String {
-    root.logical_path().join(Path::new(relative)).display().to_string()
+    root.logical_path()
+        .join(Path::new(relative))
+        .display()
+        .to_string()
 }
 
 #[cfg(not(unix))]
@@ -595,9 +600,9 @@ fn open_regular_at(
         return Err(ContextPatchError::new(message));
     }
     let file = unsafe { File::from_raw_fd(descriptor) };
-    let metadata = file
-        .metadata()
-        .map_err(|error| ContextPatchError::new(format!("failed to inspect `{relative}`: {error}")))?;
+    let metadata = file.metadata().map_err(|error| {
+        ContextPatchError::new(format!("failed to inspect `{relative}`: {error}"))
+    })?;
     if !metadata.is_file() {
         return Err(ContextPatchError::new(format!(
             "`{relative}` is not an existing regular file"

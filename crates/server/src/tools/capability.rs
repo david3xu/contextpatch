@@ -328,7 +328,7 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "stdout/stderr truncation",
                 "command/cwd/exit-code/duration metadata"
                 ,"task image repository mount is read-only and network is disabled"
-                ,"Harbor, task-image, and validation-profile background jobs share a two-job cap and become unknown after server restart"
+                ,"Harbor, task-image, validation-profile, Compose-stack, and artifact-build background jobs share a two-job cap and become unknown after server restart"
                 ,"direct harbor run is refused by run_guarded_command; use harbor_run_start"
             ],
             "not_supported": [

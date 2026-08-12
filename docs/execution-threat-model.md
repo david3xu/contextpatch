@@ -23,7 +23,7 @@ the program itself decides what to do with it.
 | `python`, `python3` | any repo-relative path ending `.py` | Yes: the whole script | Yes |
 | `pytest` | node ids and options, minus plugin-loading `-p` | Yes: `conftest.py`, collected tests | Yes |
 | `rg` | any argument | No | No |
-| `bash` | exactly `references/check-base-image.sh`, optionally `task` | Yes: whatever that tracked script contains | Depends on script |
+| `bash` | only a script on the fixed validation-script list; `references/check-base-image.sh` optionally takes `task`, the rest take no arguments | Yes: whatever those tracked scripts contain | Depends on script |
 | `harbor` | `run` | Yes: agent workload | Yes |
 
 ## Authority axes
@@ -95,11 +95,17 @@ repository-controlled code inheriting this server's environment and network capa
 Open-world: `git_remote_check`, `git_push_exact`, `git_branch_prepare`, `git_merge_readiness`,
 `github_fork_prepare`, `github_pr_run`, `run_guarded_command`, `artifact_python_run`,
 `validation_profile_run`, `harbor_run_start`, `setup_profile_run`, `native_build_run`,
-`native_device_run`, `fixture_generator_run`, `base_image_check_run`, and `project_execute`,
-which dispatches every inner action.
+`native_device_run`, `fixture_generator_run`, `base_image_check_run`, `compose_stack_run`, `artifact_build_check_run`, and
+`project_execute`, which dispatches every inner action.
 
 Closed-world by isolation: `task_image_python_run` and `image_cleanliness_check_run`, both of
 which run with networking disabled.
+
+The two Docker paths are classified differently on purpose, and the difference is the whole point.
+`task_image_python_run` pins `--network none`; `compose_stack_run` does not, because a stack proof
+exists to exercise service-to-service traffic. Running a Docker command is therefore not what makes
+an action closed-world — the isolation flags are. A test pins both classifications so the pair
+cannot drift into a single blanket claim.
 
 `git_merge_readiness` is both read-only and open-world, because it may fetch from a remote in
 order to report state. That combination is deliberate and pinned by test.
@@ -130,7 +136,17 @@ sandbox vocabulary has leaked from the first to the second.
 `task_image_python_run` is sandboxed: read-only repository mount, disabled networking, all
 capabilities dropped, `no-new-privileges`, PID cap, read-only container root, bounded `/tmp`
 tmpfs. `image_cleanliness_check_run` runs `docker run --rm --network none` with a fixed
-entrypoint. `artifact_python_run` refuses caller-supplied executable paths, shell snippets, and
+entrypoint. `compose_stack_run` is explicitly **not** in this category: it is allowlisted by
+construction rather than isolated, since its containment comes from a per-action pinned compose
+file, server-derived argv, and a project-scoped teardown, while the containers it starts have the
+network and the server user's permissions.
+
+`artifact_build_check_run` splits the two halves deliberately: the build has the network, because
+dependency installation is most of what a build does, while the import smoke is pinned to
+`--network none` so a dead export cannot be masked by a successful download. Neither half is a
+sandbox. `docker build` executes repository-authored Dockerfile steps through the Docker daemon,
+which conventionally runs as root and is not namespaced from the host the way the task image is, so
+the authority of a Dockerfile is at least that of the server user and should be reviewed as such. `artifact_python_run` refuses caller-supplied executable paths, shell snippets, and
 per-request environment overrides.
 
 `run_guarded_command` has none of those properties. It is a narrowed policy over a trusted
@@ -146,7 +162,8 @@ Probe-confirmed and source-confirmed refusals, which the corrections must not we
 - arbitrary `python -m`: the first argument must end in `.py` and must not start with `-`
 - Python outside the repository: a scratch-token script path is refused and redirected to
   `artifact_python_run`
-- caller-supplied shell strings: no program accepts one; `bash` is pinned to one tracked script
+- caller-supplied shell strings: no program accepts one; `bash` is pinned to an exact list of
+  tracked scripts, and a glob over a scripts directory is deliberately not used
 - argv paths outside the repository root
 - direct `harbor run`, redirected to `harbor_run_start`
 
