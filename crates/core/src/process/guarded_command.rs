@@ -377,20 +377,6 @@ fn is_allowed_rg_argument(arg: &str) -> bool {
     })
 }
 
-/// Whether one `bash` invocation names a script on the fixed list.
-///
-/// A leading `./` is accepted because it names the identical file, and refusing it is a usability
-/// trap with no security value. Traversal, absolute paths, and `..` are already refused by
-/// `validate_common_command_shape` before this runs, so this function only has to decide
-/// membership and argument shape.
-///
-/// Only the base-image check takes an argument. The doc gates are argument-free, and keeping them
-/// that way means a caller cannot reach a script's own option surface through this exception.
-/// The fixed shell-script list, for surfaces that must report it rather than restate it.
-///
-/// The capability manifest previously carried its own hand-written copy of this list and fell
-/// behind the moment the list changed, which is the worst possible staleness: the manifest exists so
-/// a client can tell a missing capability from a stale binary.
 /// The ripgrep options this server permits, for the capability manifest to advertise.
 ///
 /// Exposed so the manifest can derive the list instead of describing it. The hand-written `["search"]`
@@ -400,6 +386,11 @@ pub fn allowed_rg_long_options() -> &'static [&'static str] {
     RG_LONG_OPTIONS
 }
 
+/// The fixed shell-script list, for surfaces that must report it rather than restate it.
+///
+/// The capability manifest previously carried its own hand-written copy of this list and fell
+/// behind the moment the list changed, which is the worst possible staleness: the manifest exists so
+/// a client can tell a missing capability from a stale binary.
 pub fn allowed_shell_scripts() -> &'static [&'static str] {
     ALLOWED_SHELL_SCRIPTS
 }
@@ -409,6 +400,15 @@ pub fn allowed_git_subcommands() -> &'static [&'static str] {
     GIT_SUBCOMMANDS
 }
 
+/// Whether one `bash` invocation names a script on the fixed list.
+///
+/// A leading `./` is accepted because it names the identical file, and refusing it is a usability
+/// trap with no security value. Traversal, absolute paths, and `..` are already refused by
+/// `validate_common_command_shape` before this runs, so this function only has to decide
+/// membership and argument shape.
+///
+/// Only the base-image check takes an argument. Every other entry is argument-free, and keeping
+/// them that way means a caller cannot reach a script's own option surface through this exception.
 fn is_allowed_shell_script(args: &[String]) -> bool {
     let Some(first) = args.first() else {
         return false;
