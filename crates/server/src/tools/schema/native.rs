@@ -50,7 +50,8 @@ pub(crate) fn native_device_run_definition() -> Value {
                     "properties": {
                         "action": {
                             "type": "string",
-                            "description": "Native device action such as ios_list_simulators, ios_create_simulator, ios_boot_simulator, ios_cap_run, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat."
+                            "enum": contextpatch_core::native_device::DeviceAction::advertised_names(),
+                            "description": "Which device operation to plan or run."
                         },
                         "params": {
                             "type": "object",

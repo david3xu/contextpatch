@@ -1597,7 +1597,20 @@
       "additionalProperties": false,
       "properties": {
         "action": {
-          "description": "Native device action such as ios_list_simulators, ios_create_simulator, ios_boot_simulator, ios_cap_run, ios_install_app, ios_launch_app, ios_read_logs, android_list_devices, android_install_app, android_launch_app, or android_read_logcat.",
+          "description": "Which device operation to plan or run.",
+          "enum": [
+            "ios_list_simulators",
+            "ios_boot_simulator",
+            "ios_create_simulator",
+            "ios_install_app",
+            "ios_launch_app",
+            "ios_cap_run",
+            "ios_read_logs",
+            "android_list_devices",
+            "android_install_app",
+            "android_launch_app",
+            "android_read_logcat"
+          ],
           "type": "string"
         },
         "confirm": {

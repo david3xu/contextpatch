@@ -117,6 +117,97 @@ pub struct NativeDeviceExecution {
     pub stderr: String,
 }
 
+/// The device actions this surface advertises and accepts.
+///
+/// `ALL` is the only place a variant is constructed, so one omitted from it is constructed nowhere
+/// and `-D dead-code` refuses to compile. That binds the advertised list to the type without a macro,
+/// the same way it does for the build actions and the GitHub actions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceAction {
+    IosListSimulators,
+    IosBootSimulator,
+    IosCreateSimulator,
+    IosInstallApp,
+    IosLaunchApp,
+    IosCapRun,
+    IosReadLogs,
+    AndroidListDevices,
+    AndroidInstallApp,
+    AndroidLaunchApp,
+    AndroidReadLogcat,
+}
+
+impl DeviceAction {
+    pub const ALL: &'static [Self] = &[
+        Self::IosListSimulators,
+        Self::IosBootSimulator,
+        Self::IosCreateSimulator,
+        Self::IosInstallApp,
+        Self::IosLaunchApp,
+        Self::IosCapRun,
+        Self::IosReadLogs,
+        Self::AndroidListDevices,
+        Self::AndroidInstallApp,
+        Self::AndroidLaunchApp,
+        Self::AndroidReadLogcat,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IosListSimulators => "ios_list_simulators",
+            Self::IosBootSimulator => "ios_boot_simulator",
+            Self::IosCreateSimulator => "ios_create_simulator",
+            Self::IosInstallApp => "ios_install_app",
+            Self::IosLaunchApp => "ios_launch_app",
+            Self::IosCapRun => "ios_cap_run",
+            Self::IosReadLogs => "ios_read_logs",
+            Self::AndroidListDevices => "android_list_devices",
+            Self::AndroidInstallApp => "android_install_app",
+            Self::AndroidLaunchApp => "android_launch_app",
+            Self::AndroidReadLogcat => "android_read_logcat",
+        }
+    }
+
+    /// Whether this action changes device state, which is what requires an exact confirmation.
+    ///
+    /// This was previously the third element of a tuple returned by each planner arm, so the
+    /// safety-relevant half of an arm was visible only by counting positions. Naming it on the action
+    /// makes the confirmation gate a property of what was asked for rather than a value carried
+    /// beside the command, and lets it be asserted without planning anything.
+    pub const fn changes_device_state(self) -> bool {
+        match self {
+            Self::IosListSimulators => false,
+            Self::IosBootSimulator => true,
+            Self::IosCreateSimulator => true,
+            Self::IosInstallApp => true,
+            Self::IosLaunchApp => true,
+            Self::IosCapRun => true,
+            Self::IosReadLogs => false,
+            Self::AndroidListDevices => false,
+            Self::AndroidInstallApp => true,
+            Self::AndroidLaunchApp => true,
+            Self::AndroidReadLogcat => false,
+        }
+    }
+
+    pub fn parse(action: &str) -> Result<Self, ContextPatchError> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == action)
+            .ok_or_else(|| {
+                ContextPatchError::invalid(format!(
+                    "unknown native device action `{action}`; expected one of {}",
+                    Self::advertised_names().join(", ")
+                ))
+            })
+    }
+
+    pub fn advertised_names() -> Vec<&'static str> {
+        Self::ALL.iter().map(|action| action.as_str()).collect()
+    }
+}
+
 pub fn native_device_run<'a>(
     repository_root: impl Into<crate::git::RepositoryRoot<'a>>,
     cwd: Option<&Path>,
@@ -132,6 +223,7 @@ pub fn native_device_run<'a>(
     let root = repository_root.into();
     let cwd = resolve_child_cwd(root, cwd)?;
     let timeout = checked_timeout(timeout_secs)?;
+    let action = DeviceAction::parse(action)?;
     let plan = plan_native_device(root, cwd.relative(), action, params)?;
 
     if !dry_run && plan.changes_device_state && confirm != Some(NATIVE_DEVICE_CONFIRMATION) {
@@ -169,7 +261,7 @@ pub fn native_device_run<'a>(
     };
 
     Ok(NativeDeviceResult {
-        action: action.to_string(),
+        action: action.as_str().to_string(),
         dry_run,
         cwd: cwd.logical_path().to_path_buf(),
         plan,
@@ -181,33 +273,35 @@ pub fn native_device_run<'a>(
 fn plan_native_device(
     root: crate::git::RepositoryRoot<'_>,
     cwd_relative: &str,
-    action: &str,
+    action: DeviceAction,
     params: NativeDeviceParams,
 ) -> Result<NativeDevicePlan, ContextPatchError> {
-    let (program, args, changes_device_state) = match action {
-        "ios_list_simulators" => {
-            require_none(action, params)?;
-            ("xcrun", strings(&["simctl", "list", "devices"]), false)
+    // The confirmation gate reads the action, not the arm, so a planner arm can no longer disagree
+    // with what the surface advertises about whether it changes device state.
+    let changes_device_state = action.changes_device_state();
+    let (program, args) = match action {
+        DeviceAction::IosListSimulators => {
+            require_none(action.as_str(), params)?;
+            ("xcrun", strings(&["simctl", "list", "devices"]))
         }
-        "ios_boot_simulator" => {
+        DeviceAction::IosBootSimulator => {
             let NativeDeviceParams::IosDevice { device } = params else {
-                return Err(required(action, "device"));
+                return Err(required(action.as_str(), "device"));
             };
             validate_device_id("device", &device)?;
             (
                 "xcrun",
                 vec!["simctl".to_string(), "boot".to_string(), device],
-                true,
             )
         }
-        "ios_create_simulator" => {
+        DeviceAction::IosCreateSimulator => {
             let NativeDeviceParams::IosCreate {
                 name,
                 device_type,
                 runtime,
             } = params
             else {
-                return Err(required(action, "name and device_type"));
+                return Err(required(action.as_str(), "name and device_type"));
             };
             validate_simctl_label("name", &name)?;
             validate_simctl_label("device_type", &device_type)?;
@@ -221,11 +315,11 @@ fn plan_native_device(
                 validate_simctl_label("runtime", &runtime)?;
                 args.push(runtime);
             }
-            ("xcrun", args, true)
+            ("xcrun", args)
         }
-        "ios_install_app" => {
+        DeviceAction::IosInstallApp => {
             let NativeDeviceParams::IosInstall { device, app_path } = params else {
-                return Err(required(action, "device and app_path"));
+                return Err(required(action.as_str(), "device and app_path"));
             };
             validate_device_id("device", &device)?;
             validate_relative_path_param("native_device_run", "app_path", &app_path)?;
@@ -237,24 +331,22 @@ fn plan_native_device(
                     device,
                     app_path,
                 ],
-                true,
             )
         }
-        "ios_launch_app" => {
+        DeviceAction::IosLaunchApp => {
             let NativeDeviceParams::IosLaunch { device, app_id } = params else {
-                return Err(required(action, "device and app_id"));
+                return Err(required(action.as_str(), "device and app_id"));
             };
             validate_device_id("device", &device)?;
             validate_app_id(&app_id)?;
             (
                 "xcrun",
                 vec!["simctl".to_string(), "launch".to_string(), device, app_id],
-                true,
             )
         }
-        "ios_cap_run" => {
+        DeviceAction::IosCapRun => {
             let NativeDeviceParams::IosCapRun { target } = params else {
-                return Err(required(action, "target"));
+                return Err(required(action.as_str(), "target"));
             };
             validate_device_id("target", &target)?;
             let package_manager = detect_package_manager(root, cwd_relative)?;
@@ -266,11 +358,11 @@ fn plan_native_device(
                 target,
                 "--no-sync".to_string(),
             ]);
-            (package_manager.program(), args, true)
+            (package_manager.program(), args)
         }
-        "ios_read_logs" => {
+        DeviceAction::IosReadLogs => {
             let NativeDeviceParams::IosLogs { device, duration } = params else {
-                return Err(required(action, "device and optional duration"));
+                return Err(required(action.as_str(), "device and optional duration"));
             };
             validate_device_id("device", &device)?;
             let duration = duration.unwrap_or_else(|| "5".to_string());
@@ -288,25 +380,24 @@ fn plan_native_device(
                     "--timeout".to_string(),
                     duration,
                 ],
-                false,
             )
         }
-        "android_list_devices" => {
-            require_android_serial_or_none(action, params)?;
-            ("adb", strings(&["devices"]), false)
+        DeviceAction::AndroidListDevices => {
+            require_android_serial_or_none(action.as_str(), params)?;
+            ("adb", strings(&["devices"]))
         }
-        "android_install_app" => {
+        DeviceAction::AndroidInstallApp => {
             let NativeDeviceParams::AndroidInstall { serial, apk_path } = params else {
-                return Err(required(action, "apk_path"));
+                return Err(required(action.as_str(), "apk_path"));
             };
             validate_relative_path_param("native_device_run", "apk_path", &apk_path)?;
             let mut args = serial_args(serial)?;
             args.extend(["install".to_string(), apk_path]);
-            return android_plan(action, args, true);
+            return android_plan(action, args);
         }
-        "android_launch_app" => {
+        DeviceAction::AndroidLaunchApp => {
             let NativeDeviceParams::AndroidLaunch { serial, app_id } = params else {
-                return Err(required(action, "app_id"));
+                return Err(required(action.as_str(), "app_id"));
             };
             validate_app_id(&app_id)?;
             let mut args = serial_args(serial)?;
@@ -317,11 +408,11 @@ fn plan_native_device(
                 app_id,
                 "1".to_string(),
             ]);
-            return android_plan(action, args, true);
+            return android_plan(action, args);
         }
-        "android_read_logcat" => {
+        DeviceAction::AndroidReadLogcat => {
             let NativeDeviceParams::AndroidLogcat { serial, lines } = params else {
-                return Err(required(action, "optional serial and lines"));
+                return Err(required(action.as_str(), "optional serial and lines"));
             };
             let lines = lines.unwrap_or(200).clamp(1, 2000).to_string();
             let mut args = serial_args(serial)?;
@@ -331,17 +422,12 @@ fn plan_native_device(
                 "-t".to_string(),
                 lines,
             ]);
-            return android_plan(action, args, false);
-        }
-        _ => {
-            return Err(ContextPatchError::new(format!(
-                "native_device_run refused: unknown action `{action}`"
-            )));
+            return android_plan(action, args);
         }
     };
     validate_common_command_shape(program, &args)?;
     Ok(NativeDevicePlan {
-        action: action.to_string(),
+        action: action.as_str().to_string(),
         program: program.to_string(),
         args,
         device_operation: true,
@@ -397,13 +483,13 @@ fn detect_package_manager(
 }
 
 fn android_plan(
-    action: &str,
+    action: DeviceAction,
     args: Vec<String>,
-    changes_device_state: bool,
 ) -> Result<NativeDevicePlan, ContextPatchError> {
+    let changes_device_state = action.changes_device_state();
     validate_common_command_shape("adb", &args)?;
     Ok(NativeDevicePlan {
-        action: action.to_string(),
+        action: action.as_str().to_string(),
         program: "adb".to_string(),
         args,
         device_operation: true,
@@ -512,6 +598,34 @@ fn empty_label(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every declared action parses back to itself and reaches a planner arm.
+    ///
+    /// `advertised_names` is built from `ALL`, so comparing the two would only prove the list agrees
+    /// with itself — the shape rejected elsewhere in this crate. This drives each name through `parse`
+    /// and asserts the round trip, which catches a duplicated or mistyped wire name, and reads the
+    /// confirmation classification for every variant so a new action cannot be added without deciding
+    /// whether it changes device state.
+    #[test]
+    fn every_declared_device_action_round_trips_and_is_classified() {
+        for &action in super::DeviceAction::ALL {
+            let parsed = super::DeviceAction::parse(action.as_str())
+                .unwrap_or_else(|error| panic!("{} must parse: {error}", action.as_str()));
+            assert_eq!(parsed, action, "{} did not round trip", action.as_str());
+            // Reading it is the assertion: a variant missing from the match cannot compile.
+            let _ = action.changes_device_state();
+        }
+    }
+
+    /// An unknown action refuses by naming what is accepted, rather than failing later.
+    #[test]
+    fn an_unknown_device_action_is_refused_with_the_accepted_set() {
+        let error = super::DeviceAction::parse("ios_teleport")
+            .expect_err("an undeclared action must refuse")
+            .to_string();
+        assert!(error.contains("unknown native device action"), "{error}");
+        assert!(error.contains("ios_list_simulators"), "{error}");
+    }
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;

@@ -471,19 +471,7 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
         },
         "native_device": {
             "mode": "typed_native_device_actions",
-            "actions": [
-                "ios_list_simulators",
-                "ios_create_simulator",
-                "ios_boot_simulator",
-                "ios_cap_run",
-                "ios_install_app",
-                "ios_launch_app",
-                "ios_read_logs",
-                "android_list_devices",
-                "android_install_app",
-                "android_launch_app",
-                "android_read_logcat"
-            ],
+            "actions": contextpatch_core::native_device::DeviceAction::advertised_names(),
             "required_confirm_for_device_state": "run native device",
             "examples": [
                 {
