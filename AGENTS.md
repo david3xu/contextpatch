@@ -57,13 +57,13 @@ Operations do **not** take a repository path. They take `core::git::root::Reposi
 - `server::tools::dispatch::EffectiveRepository::root()` is the single place a call's authority is decided. Handlers receive it; they never resolve names themselves.
 - Boundaries that need a stable *name* (mutation locks, the receipt journal, scratch identity) use `canonical_label`, never a path used to reach a file.
 
-Most of the recent commit history is the migration of individual tools onto this model. Three sites still read `logical_path()`, all deliberately and none for access: `github.rs:38` and `github.rs:443` report `cwd` back to the caller, and `git/handlers/restore.rs:139` uses it as receipt identity, which is path-derived by design. Adding a fourth reader for *access* would be a regression; adding one for reporting needs the same justification these carry.
+Most of the recent commit history is the migration of individual tools onto this model. A few sites still read `logical_path()`, all deliberately and none for access: two report `cwd` back to the caller, and one uses it as receipt identity, which is path-derived by design. The exact set is asserted by `the_files_that_read_a_logical_path_are_the_known_ones` in `dispatch.rs`, so read it there rather than from a list here — line numbers in prose go stale and that test does not. Adding a reader for *access* would be a regression; adding one for reporting needs the same justification these carry.
 
 ### Module size
 
 There is no enforced line limit, and any figure quoted as one has been fitted to a measurement rather than chosen. What matters is whether a file holds more than one concern.
 
-`registry.rs` is the largest file under `tools/` at ~720 lines and is deliberately exempt: it is a declarative table of one entry per tool, roughly twelve lines each, growing linearly with the tool count. That is not the coupling the module split was addressing, and breaking it up would scatter the single source of truth it exists to be. `harbor.rs` and `capability.rs` are larger still and are genuine candidates, the latter because its manifest prose grows with every tool.
+`registry.rs` is the largest file under `tools/` and is deliberately exempt: it is a declarative table of one entry per tool, growing linearly with the tool count. No figure is quoted, because it drifts by roughly a dozen lines per tool and a stale number here would argue against the very point this section makes. That is not the coupling the module split was addressing, and breaking it up would scatter the single source of truth it exists to be. `harbor.rs` and `capability.rs` are larger still and are genuine candidates, the latter because its manifest prose grows with every tool.
 
 Split when a file holds unrelated concerns — which is what `process.rs` did, with job machinery, a log store, guarded execution, and container tools in one place — not when it crosses a number.
 
