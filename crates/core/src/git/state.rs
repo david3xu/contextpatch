@@ -128,33 +128,47 @@ fn ensure_output_complete(
 
 /// Parse NUL-separated porcelain v1 entries into the set of changed paths.
 ///
-/// Rename and copy entries are refused rather than half-interpreted, because porcelain reports them as
-/// two paths in one record and treating either as "the" path would silently pick the wrong one.
+/// A rename or copy is one record spanning two NUL-separated pieces: the new path carrying the status
+/// characters, then the original path bare. Both sides are collected, because both changed and a
+/// caller listing an exact path set must be able to name them. Picking one and discarding the other
+/// would silently choose wrongly, which is why this used to refuse the whole record instead.
+///
+/// Similarity is deliberately not consulted. Porcelain v1 status reports `R` without a score, so a
+/// pure move and a move carrying edits are indistinguishable here; requiring one would mean running a
+/// second command to learn something this one cannot say. The exact path set is the guard: a caller
+/// commits a rename only by naming both sides, exactly as it names any other change.
 pub fn parse_porcelain_paths(
     bytes: &[u8],
     label: &str,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
     let mut paths = BTreeSet::new();
-    for entry in porcelain_entries(bytes) {
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
         ensure_porcelain_entry_shape(entry, label)?;
-        if matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C') {
-            return Err(ContextPatchError::new(
-                "rename/copy entries require a future dedicated tool",
-            ));
-        }
         paths.insert(porcelain_entry_path(entry, label)?);
+        if is_rename_or_copy(entry) {
+            paths.insert(porcelain_original_path(&mut entries, label)?);
+        }
     }
     Ok(paths)
 }
 
 /// Parse porcelain v1 entries, keeping only untracked paths.
+///
+/// A rename's original path is consumed and dropped: it is tracked by definition, so it can never be
+/// one of the paths this returns, but leaving it in the stream would fail the entry shape check.
 pub fn parse_untracked_porcelain_paths(
     bytes: &[u8],
     label: &str,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
     let mut paths = BTreeSet::new();
-    for entry in porcelain_entries(bytes) {
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
         ensure_porcelain_entry_shape(entry, label)?;
+        if is_rename_or_copy(entry) {
+            porcelain_original_path(&mut entries, label)?;
+            continue;
+        }
         if entry[0] == b'?' && entry[1] == b'?' {
             paths.insert(porcelain_entry_path(entry, label)?);
         }
@@ -171,8 +185,13 @@ pub fn parse_untracked_and_ignored_porcelain_paths(
     label: &str,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
     let mut paths = BTreeSet::new();
-    for entry in porcelain_entries(bytes) {
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
         ensure_porcelain_entry_shape(entry, label)?;
+        if is_rename_or_copy(entry) {
+            porcelain_original_path(&mut entries, label)?;
+            continue;
+        }
         if (entry[0] == b'?' && entry[1] == b'?') || (entry[0] == b'!' && entry[1] == b'!') {
             paths.insert(
                 porcelain_entry_path(entry, label)?
@@ -211,8 +230,37 @@ fn ensure_porcelain_entry_shape(entry: &[u8], label: &str) -> Result<(), Context
     Ok(())
 }
 
+/// Whether either status character marks this record as a rename or a copy.
+///
+/// Both are reported the same way and carry the same two-piece shape, so both are handled together.
+/// No action in this surface produces a copy, but treating it as a special case would leave a second
+/// code path that nothing exercises.
+fn is_rename_or_copy(entry: &[u8]) -> bool {
+    matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C')
+}
+
+/// Consume the bare original path that follows a rename or copy record.
+///
+/// It carries no status characters, so it must be taken from the stream here rather than reaching the
+/// entry shape check, which would reject it.
+fn porcelain_original_path<'a>(
+    entries: &mut impl Iterator<Item = &'a [u8]>,
+    label: &str,
+) -> Result<String, ContextPatchError> {
+    let original = entries.next().ok_or_else(|| {
+        ContextPatchError::new(format!(
+            "{label} reported a rename or copy with no original path"
+        ))
+    })?;
+    porcelain_path(original, label)
+}
+
 fn porcelain_entry_path(entry: &[u8], label: &str) -> Result<String, ContextPatchError> {
-    std::str::from_utf8(&entry[3..])
+    porcelain_path(&entry[3..], label)
+}
+
+fn porcelain_path(bytes: &[u8], label: &str) -> Result<String, ContextPatchError> {
+    std::str::from_utf8(bytes)
         .map(str::to_string)
         .map_err(|error| ContextPatchError::new(format!("{label} path is not UTF-8: {error}")))
 }
@@ -608,17 +656,76 @@ mod tests {
     }
 
     #[test]
-    fn a_rename_entry_is_refused_rather_than_half_interpreted() {
-        // Porcelain reports a rename as two paths in one record, so picking either would silently pick
-        // the wrong one.
+    fn a_rename_entry_yields_both_of_its_paths() {
+        // Porcelain reports a rename as two pieces in one record: the new path with the status
+        // characters, then the original bare. Both changed, so a caller naming an exact path set has to
+        // be able to name both, and picking one would silently discard the other.
         let entry = b"R  new.txt\0old.txt\0";
+
+        let paths = parse_porcelain_paths(entry, STATUS_LABEL).unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from(["new.txt".to_string(), "old.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_copy_entry_yields_both_of_its_paths() {
+        // No action in this surface produces a copy, but it carries the identical two-piece shape, so
+        // it takes the identical path rather than a second one nothing exercises.
+        let entry = b"C  copy.txt\0source.txt\0";
+
+        let paths = parse_porcelain_paths(entry, STATUS_LABEL).unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from(["copy.txt".to_string(), "source.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_rename_beside_other_changes_does_not_consume_them() {
+        // The original path is taken from the stream by position, so an off-by-one here would swallow
+        // the following record and report a clean path as unchanged.
+        let entries = b"R  new.txt\0old.txt\0 M kept.txt\0?? extra.txt\0";
+
+        let paths = parse_porcelain_paths(entries, STATUS_LABEL).unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from([
+                "new.txt".to_string(),
+                "old.txt".to_string(),
+                "kept.txt".to_string(),
+                "extra.txt".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn a_rename_missing_its_original_path_is_refused() {
+        // A truncated record must not be read as a single-path change, which would report the rename as
+        // an addition and leave the deletion invisible.
+        let entry = b"R  new.txt\0";
 
         assert_eq!(
             parse_porcelain_paths(entry, STATUS_LABEL)
                 .unwrap_err()
                 .to_string(),
-            "rename/copy entries require a future dedicated tool"
+            "git status reported a rename or copy with no original path"
         );
+    }
+
+    #[test]
+    fn an_untracked_scan_drops_a_rename_original_without_failing_on_its_shape() {
+        // The bare original path has no status characters, so leaving it in the stream would fail the
+        // entry shape check and make any untracked scan error out once a rename existed.
+        let entries = b"R  new.txt\0old.txt\0?? untracked.txt\0";
+
+        let paths = parse_untracked_porcelain_paths(entries, STATUS_LABEL).unwrap();
+
+        assert_eq!(paths, BTreeSet::from(["untracked.txt".to_string()]));
     }
 
     #[test]
