@@ -43,6 +43,15 @@ const ALLOWED_SHELL_SCRIPTS: &[&str] = &[
     "scripts/check-endpoint-literals.sh",
     "scripts/check-hosted-target-readiness.sh",
     "scripts/docs-audit.sh",
+    // The six root proofs. Measured rather than assumed: these are shell scripts that bring the
+    // system up themselves and contain no `docker compose` invocation, which is why the Compose
+    // stack tool is not the instrument for them and its action list stays empty.
+    "scripts/front-door-proof.sh",
+    "scripts/full-platform-proof.sh",
+    "scripts/prove-auto-workflow.sh",
+    "scripts/prove-dispatch-preflight.sh",
+    "scripts/prove-human-ai-team-flow.sh",
+    "scripts/prove-local-edition-bundle.sh",
 ];
 
 /// Run one allowlisted command inside the repository, through the repository's own authority.
@@ -165,7 +174,16 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     let allowed = match program {
         "git" => matches!(
             subcommand,
-            Some("status" | "diff" | "log" | "show" | "rev-parse" | "ls-tree")
+            Some(
+                "status"
+                    | "diff"
+                    | "log"
+                    | "show"
+                    | "rev-parse"
+                    | "rev-list"
+                    | "shortlog"
+                    | "ls-tree"
+            )
         ),
         "cargo" => match subcommand {
             Some("check" | "test" | "build" | "clippy") => true,
@@ -639,6 +657,42 @@ mod tests {
         ] {
             validate_command("rg", &args(&values))
                 .unwrap_or_else(|error| panic!("{values:?} must stay permitted: {error}"));
+        }
+    }
+
+    /// `rev-list` and `shortlog` are admitted, and their neighbours in the same namespace are not.
+    ///
+    /// Both only read history, but they sit beside `fetch`, `push` and `commit` under one program, so
+    /// the boundary is a property of this list rather than of the word `git`. The refusals are what
+    /// make that legible: without them, adding two read subcommands looks indistinguishable from
+    /// widening the program.
+    ///
+    /// Their absence had a measured cost. Counting commits was impossible through this surface, so it
+    /// was done by eye from `log` output, and got the same number wrong twice in two consecutive
+    /// messages whose subject was that number.
+    #[test]
+    fn admits_git_history_reads_without_admitting_their_neighbours() {
+        for values in [
+            vec!["rev-list", "--count", "main..HEAD"],
+            vec!["shortlog", "--summary", "--numbered"],
+        ] {
+            validate_command("git", &args(&values))
+                .unwrap_or_else(|error| panic!("{values:?} must be permitted: {error}"));
+        }
+
+        for values in [
+            vec!["fetch", "origin"],
+            vec!["push", "origin", "HEAD"],
+            vec!["commit", "-m", "subject"],
+            vec!["add", "README.md"],
+            vec!["reset", "--hard"],
+            vec!["clean", "-fd"],
+        ] {
+            let message = refusal("git", &values);
+            assert!(
+                message.contains("not allowlisted"),
+                "unexpected refusal for {values:?}: {message}"
+            );
         }
     }
 

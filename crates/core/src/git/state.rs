@@ -128,33 +128,75 @@ fn ensure_output_complete(
 
 /// Parse NUL-separated porcelain v1 entries into the set of changed paths.
 ///
-/// Rename and copy entries are refused rather than half-interpreted, because porcelain reports them as
-/// two paths in one record and treating either as "the" path would silently pick the wrong one.
+/// A rename or copy is one record spanning two NUL-separated pieces: the new path carrying the status
+/// characters, then the original path bare. Both sides are collected, because both changed and a
+/// caller listing an exact path set must be able to name them. Picking one and discarding the other
+/// would silently choose wrongly, which is why this used to refuse the whole record instead.
+///
+/// Similarity is deliberately not consulted. Porcelain v1 status reports `R` without a score, so a
+/// pure move and a move carrying edits are indistinguishable here; requiring one would mean running a
+/// second command to learn something this one cannot say. The exact path set is the guard: a caller
+/// commits a rename only by naming both sides, exactly as it names any other change.
 pub fn parse_porcelain_paths(
     bytes: &[u8],
     label: &str,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
     let mut paths = BTreeSet::new();
-    for entry in porcelain_entries(bytes) {
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
         ensure_porcelain_entry_shape(entry, label)?;
-        if matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C') {
-            return Err(ContextPatchError::new(
-                "rename/copy entries require a future dedicated tool",
-            ));
-        }
         paths.insert(porcelain_entry_path(entry, label)?);
+        if is_rename_or_copy(entry) {
+            paths.insert(porcelain_original_path(&mut entries, label)?);
+        }
     }
     Ok(paths)
 }
 
+/// Every path Git reports only as the source of a staged rename.
+///
+/// These cannot be staged by pathspec. `git mv` has already removed the source from both the index and
+/// the worktree, so `git add -- <source>` matches nothing and aborts the entire invocation, taking the
+/// other paths with it. They remain part of the changed set a caller must name, which is why the gate
+/// and the staging step need different lists: naming both sides is how a caller acknowledges the
+/// rename, while only one side can be handed to `git add`.
+///
+/// A copy's source is deliberately excluded. A copy leaves its original in place, so pathspec matches
+/// it and there is nothing to work around.
+pub fn parse_porcelain_rename_sources(
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let mut sources = BTreeSet::new();
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
+        ensure_porcelain_entry_shape(entry, label)?;
+        if is_rename_or_copy(entry) {
+            let original = porcelain_original_path(&mut entries, label)?;
+            if entry[0] == b'R' || entry[1] == b'R' {
+                sources.insert(original);
+            }
+        }
+    }
+    Ok(sources)
+}
+
 /// Parse porcelain v1 entries, keeping only untracked paths.
+///
+/// A rename's original path is consumed and dropped: it is tracked by definition, so it can never be
+/// one of the paths this returns, but leaving it in the stream would fail the entry shape check.
 pub fn parse_untracked_porcelain_paths(
     bytes: &[u8],
     label: &str,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
     let mut paths = BTreeSet::new();
-    for entry in porcelain_entries(bytes) {
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
         ensure_porcelain_entry_shape(entry, label)?;
+        if is_rename_or_copy(entry) {
+            porcelain_original_path(&mut entries, label)?;
+            continue;
+        }
         if entry[0] == b'?' && entry[1] == b'?' {
             paths.insert(porcelain_entry_path(entry, label)?);
         }
@@ -171,14 +213,53 @@ pub fn parse_untracked_and_ignored_porcelain_paths(
     label: &str,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
     let mut paths = BTreeSet::new();
-    for entry in porcelain_entries(bytes) {
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
         ensure_porcelain_entry_shape(entry, label)?;
+        if is_rename_or_copy(entry) {
+            porcelain_original_path(&mut entries, label)?;
+            continue;
+        }
         if (entry[0] == b'?' && entry[1] == b'?') || (entry[0] == b'!' && entry[1] == b'!') {
             paths.insert(
                 porcelain_entry_path(entry, label)?
                     .trim_end_matches('/')
                     .to_string(),
             );
+        }
+    }
+    Ok(paths)
+}
+
+/// Parse `--name-status -z` output into the set of paths it reports.
+///
+/// The field layout is not porcelain's. Porcelain packs the two status characters and a space into the
+/// front of the path field; `--name-status -z` emits the status as its own NUL-terminated field, so a
+/// normal change is two fields and a rename or copy is three, the score being part of the status field
+/// as `R100` rather than a bare `R`. Reusing the porcelain parser here would misread every record.
+///
+/// Both sides of a rename are collected for the same reason as in [`parse_porcelain_paths`]: the index
+/// holds a deletion and an addition, so a caller's exact set names both, and reporting one would make
+/// the staged set differ from the requested set for a rename that staged correctly.
+pub fn parse_name_status_paths(
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let mut paths = BTreeSet::new();
+    let mut fields = porcelain_entries(bytes);
+    while let Some(status) = fields.next() {
+        let carries_two_paths = matches!(status.first(), Some(b'R') | Some(b'C'));
+        let path = fields.next().ok_or_else(|| {
+            ContextPatchError::new(format!("{label} reported a status with no path"))
+        })?;
+        paths.insert(porcelain_path(path, label)?);
+        if carries_two_paths {
+            let destination = fields.next().ok_or_else(|| {
+                ContextPatchError::new(format!(
+                    "{label} reported a rename or copy with only one path"
+                ))
+            })?;
+            paths.insert(porcelain_path(destination, label)?);
         }
     }
     Ok(paths)
@@ -211,8 +292,37 @@ fn ensure_porcelain_entry_shape(entry: &[u8], label: &str) -> Result<(), Context
     Ok(())
 }
 
+/// Whether either status character marks this record as a rename or a copy.
+///
+/// Both are reported the same way and carry the same two-piece shape, so both are handled together.
+/// No action in this surface produces a copy, but treating it as a special case would leave a second
+/// code path that nothing exercises.
+fn is_rename_or_copy(entry: &[u8]) -> bool {
+    matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C')
+}
+
+/// Consume the bare original path that follows a rename or copy record.
+///
+/// It carries no status characters, so it must be taken from the stream here rather than reaching the
+/// entry shape check, which would reject it.
+fn porcelain_original_path<'a>(
+    entries: &mut impl Iterator<Item = &'a [u8]>,
+    label: &str,
+) -> Result<String, ContextPatchError> {
+    let original = entries.next().ok_or_else(|| {
+        ContextPatchError::new(format!(
+            "{label} reported a rename or copy with no original path"
+        ))
+    })?;
+    porcelain_path(original, label)
+}
+
 fn porcelain_entry_path(entry: &[u8], label: &str) -> Result<String, ContextPatchError> {
-    std::str::from_utf8(&entry[3..])
+    porcelain_path(&entry[3..], label)
+}
+
+fn porcelain_path(bytes: &[u8], label: &str) -> Result<String, ContextPatchError> {
+    std::str::from_utf8(bytes)
         .map(str::to_string)
         .map_err(|error| ContextPatchError::new(format!("{label} path is not UTF-8: {error}")))
 }
@@ -226,6 +336,17 @@ pub fn status_paths<'a>(
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
     parse_porcelain_paths(&output.stdout, STATUS_LABEL)
+}
+
+/// Every path Git reports only as the source of a staged rename.
+pub fn rename_source_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let output = output(
+        repository,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    parse_porcelain_rename_sources(&output.stdout, STATUS_LABEL)
 }
 
 /// Only the untracked paths Git reports.
@@ -257,11 +378,15 @@ pub fn untracked_and_ignored_paths<'a>(
 }
 
 /// The paths currently staged in the index.
+///
+/// `--name-status` rather than `--name-only`, because `--name-only` reports a rename as its new path
+/// alone. The exact set a caller must name holds both sides, so with `--name-only` a correctly staged
+/// rename verified as a mismatch after staging had already happened.
 pub fn cached_paths<'a>(
     repository: impl Into<GitRepository<'a>>,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
-    let output = output(repository, &["diff", "--cached", "--name-only", "-z"])?;
-    parse_nul_paths(&output.stdout, CACHED_DIFF_LABEL)
+    let output = output(repository, &["diff", "--cached", "--name-status", "-z"])?;
+    parse_name_status_paths(&output.stdout, CACHED_DIFF_LABEL)
 }
 
 /// Short-format status text, including untracked files.
@@ -496,6 +621,19 @@ mod tests {
     }
 
     #[test]
+    fn cached_paths_report_both_sides_of_a_staged_rename() {
+        // The index holds a deletion and an addition, and the exact set a caller names holds both, so
+        // reporting only the new path made a correctly staged rename verify as a mismatch.
+        let root = committed_repo("cached_paths_rename");
+        fs::write(root.join("old.txt"), "moved\n").unwrap();
+        git(&root, &["add", "old.txt"]);
+        git(&root, &["commit", "--quiet", "-m", "add old"]);
+        git(&root, &["mv", "old.txt", "new.txt"]);
+
+        assert_eq!(cached_paths(&root).unwrap(), names(&["new.txt", "old.txt"]));
+    }
+
+    #[test]
     fn a_local_branch_is_present_or_absent_without_refusing() {
         let root = committed_repo("local_branch");
         git(&root, &["branch", "feature"]);
@@ -608,17 +746,76 @@ mod tests {
     }
 
     #[test]
-    fn a_rename_entry_is_refused_rather_than_half_interpreted() {
-        // Porcelain reports a rename as two paths in one record, so picking either would silently pick
-        // the wrong one.
+    fn a_rename_entry_yields_both_of_its_paths() {
+        // Porcelain reports a rename as two pieces in one record: the new path with the status
+        // characters, then the original bare. Both changed, so a caller naming an exact path set has to
+        // be able to name both, and picking one would silently discard the other.
         let entry = b"R  new.txt\0old.txt\0";
+
+        let paths = parse_porcelain_paths(entry, STATUS_LABEL).unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from(["new.txt".to_string(), "old.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_copy_entry_yields_both_of_its_paths() {
+        // No action in this surface produces a copy, but it carries the identical two-piece shape, so
+        // it takes the identical path rather than a second one nothing exercises.
+        let entry = b"C  copy.txt\0source.txt\0";
+
+        let paths = parse_porcelain_paths(entry, STATUS_LABEL).unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from(["copy.txt".to_string(), "source.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_rename_beside_other_changes_does_not_consume_them() {
+        // The original path is taken from the stream by position, so an off-by-one here would swallow
+        // the following record and report a clean path as unchanged.
+        let entries = b"R  new.txt\0old.txt\0 M kept.txt\0?? extra.txt\0";
+
+        let paths = parse_porcelain_paths(entries, STATUS_LABEL).unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from([
+                "new.txt".to_string(),
+                "old.txt".to_string(),
+                "kept.txt".to_string(),
+                "extra.txt".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn a_rename_missing_its_original_path_is_refused() {
+        // A truncated record must not be read as a single-path change, which would report the rename as
+        // an addition and leave the deletion invisible.
+        let entry = b"R  new.txt\0";
 
         assert_eq!(
             parse_porcelain_paths(entry, STATUS_LABEL)
                 .unwrap_err()
                 .to_string(),
-            "rename/copy entries require a future dedicated tool"
+            "git status reported a rename or copy with no original path"
         );
+    }
+
+    #[test]
+    fn an_untracked_scan_drops_a_rename_original_without_failing_on_its_shape() {
+        // The bare original path has no status characters, so leaving it in the stream would fail the
+        // entry shape check and make any untracked scan error out once a rename existed.
+        let entries = b"R  new.txt\0old.txt\0?? untracked.txt\0";
+
+        let paths = parse_untracked_porcelain_paths(entries, STATUS_LABEL).unwrap();
+
+        assert_eq!(paths, BTreeSet::from(["untracked.txt".to_string()]));
     }
 
     #[test]

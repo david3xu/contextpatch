@@ -81,6 +81,14 @@ Regeneration is operator-only. `CONTEXTPATCH_UPDATE_FIXTURES=1 cargo test -p ser
 
 Do not route around this by spawning `cargo` from a Python artifact with a modified environment. That is the `rg --pre` escape wearing a different name, and C37 closed it by construction.
 
+### Testing a dry-run-then-confirm capability
+
+**A capability whose contract is dry run and then confirm needs at least one test that confirms.** The plan path and the execution path share no code, so a green plan proves nothing about execution.
+
+This is the same defect the rest of this file catalogues, a fact asserted in one place and never checked against the thing it describes, but relocated from documentation into tests, where it was least visible and cost the most. Committing a rename had five passing parser tests and could not execute: `git add` aborted on the rename source, and once that was fixed the staged set reported one side against an expected set holding both. Both failures land after the plan returns ok. Neither was reachable from a test that only planned.
+
+So for anything with a `dry_run` argument, the test that matters is the one that passes `dry_run: false` and its confirmation phrase, then asserts the world changed: the commit exists, the file moved, the worktree is clean. Assertions about what the plan *said* are worth having and are not evidence that the plan is achievable.
+
 ### Request pipeline (`crates/server/src/tools/dispatch.rs`)
 
 `handle_tool_call` → resolve the tool surface → `effective_repository` → `execute_tool` → per-name reply deadline (`core::process::deadline`, 30s read / 60s write / 120s Git, max 16 active workers) → cooperative per-repository mutation lock for mutating tools → `call_tool` match arm → bounded 900 KiB response envelope.

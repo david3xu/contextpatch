@@ -325,3 +325,106 @@ The pattern across the six instances found so far: **claims about a set are the 
 single tool are not.** Every defect has been a place asserting which tools have a property, and every
 safe site names one tool in its own code path. That is the discriminator worth applying to any site
 added later.
+
+
+---
+
+# Blocker status — updated 2026-08-12, branch `guarded-shell-script-list` @ `45a959a`
+
+Two numbers, not one, because conflating them made a publication blocker look like it gated the
+merge. Measure both rather than reading them here: `git rev-list --count main..HEAD` for the merge
+backlog and `git rev-list --count origin/guarded-shell-script-list..HEAD` for the unpushed tail. Both
+are available since C38; before it, neither was, and the backlog figure was hand-counted from `log`
+output and reported wrongly twice in consecutive messages whose subject was that figure.
+
+At the time of writing the unpushed tail is everything after `b5d3489`, which is the whole of B5 and
+C38. The credential failure in B14 gates that tail and nothing else. B3 is unaffected by it and is the
+largest carried risk here whether or not the push clears.
+
+B5 is now delivered and confirmed working end to end against the built server, including the mixed
+case of a rename beside an unrelated edit. B12 below records how it was three-quarters done and
+reported otherwise by a passing dry run, which is the finding worth more than the fix.
+
+## B15. `git rev-list` and `shortlog` were not allowlisted — **closed by C38**
+
+The git read allowlist admitted `status`, `diff`, `log`, `show`, `rev-parse` and `ls-tree` but not
+`rev-list` or `shortlog`, so no commit count was obtainable through the surface and counting was done
+by eye from `log` output. That produced the same wrong number twice, from both sides, in the two
+messages correcting each other about it. Closed in `45be47e`: both admitted positively in the C37
+shape, with refusals pinning that `fetch`, `push`, `commit`, `add`, `reset` and `clean` stay out,
+because admitting two read subcommands is only distinguishable from widening `git` if the boundary is
+asserted. Threat model row and `permitted_summary` updated in the same commit.
+
+The general form is worth keeping: a number that cannot be measured through the surface will be
+estimated, and an estimate stated as a fact is the defect this register has catalogued throughout. The
+fix was four lines of allowlist.
+
+## B16. The remaining constants sweep — **known and deferred**
+
+78 numeric bounds are advertised across seven schema files. Every one checked has a guard that agrees,
+so there is no missing counterpart anywhere: what remains is duplicated literals and undisclosed
+bounds. Deferred deliberately after `b5d3489`, because no caller is misled, nothing is unenforced, and
+safety-contract clause 34 already states the rule for whoever next opens those files.
+
+The largest remaining item is eleven `timeout_secs` property objects restated with drifting prose, two
+of which advertise no description at all. The agreed shape is a `timeout_property` constructor and a
+separate pass for the prose, which also carries the `120` default and `task_image`'s two bare literal
+defaults. None of it is a defect.
+
+## B12. B5 is three-quarters done, and the dry run says otherwise — **closed**
+
+A rename's path set is computed in three places. `acde439` fixed one, `a8368f9` fixed the other two.
+
+| Collector | Command | Reports for a rename | State |
+| --- | --- | --- | --- |
+| `state::status_paths` | `status --porcelain -z` | both sides | Fixed in `acde439` |
+| `commit::stage_paths` | `git add -- <paths>` | n/a — must *exclude* the source | Fixed on disk, uncommitted |
+| `state::cached_paths` | `diff --cached --name-only -z` | **new path only** | **Not fixed** |
+
+Measured, not inferred:
+
+```
+status --porcelain -z         M keep.txt | R new.txt | old.txt
+diff --cached --name-only -z  keep.txt | new.txt
+diff --cached --name-status   M keep.txt | R100 old.txt new.txt
+```
+
+So `verify_exact_staged` compares a two-sided expected set against a one-sided staged set and refuses
+with `staged paths differ from requested`. `--name-status -z` carries both sides and is the available
+fix, parsed the same way `status_paths` now parses its own records.
+
+Two consequences worth stating. The failure lands *after* staging, so a refused commit leaves the
+index modified — the tool stages, fails verification, and returns, having changed state the caller was
+told was a plan. And the dry run passes at every stage, because planning never exercises staging or
+verification. A dry-run-then-confirm contract where the plan cannot detect the failure is the one
+shape that contract exists to prevent.
+
+## B13. The uncertain write is resolved — it did not land
+
+`tests/stage1_mcp/git.rs` is unmodified. The `replace_exact` that timed out never applied, so no
+receipt reconciliation is needed and no partial edit exists. Only `crates/core/src/git/commit.rs` and
+`crates/core/src/git/state.rs` are dirty.
+
+## B14. Push refused: the credential is not the repository owner
+
+`git_push_exact` returns 403 — `Permission to david3xu/contextpatch.git denied to
+annie7xu-BankTech`. Nothing in the guarded surface reaches credential storage. Operator fix: `gh auth
+switch`, the keychain entry, or an SSH remote.
+
+## B15. The bridge transport is unreliable
+
+Two consecutive four-minute timeouts. Datacore logging runs over the same transport, so session
+continuity is also affected.
+
+## The finding that outlasts the bug
+
+Five tests passed on a capability that could not execute once. They tested the parser in isolation;
+none committed a rename through the real path, in the commit closing a blocker whose entire nature was
+end-to-end. One real invocation found what five green tests missed, and then found a second defect the
+first fix exposed.
+
+This is the same class as every staleness defect in this register, moved from documentation into
+tests: a fact asserted in one place and never checked against the thing it describes. The rule that
+falls out is narrower than "write integration tests" — **a capability whose contract is dry-run-then-
+confirm must have at least one test that confirms**, because the plan path and the execution path
+share no code and a green plan proves nothing about execution.

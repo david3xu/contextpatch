@@ -300,7 +300,19 @@ pub fn stage_paths<'a>(
     repository: impl Into<GitRepository<'a>>,
     paths: &[String],
 ) -> Result<(), ContextPatchError> {
-    state::success(repository, &stage_argv(paths))
+    let repository = repository.into();
+    let sources = state::rename_source_paths(repository)?;
+    let stageable: Vec<String> = paths
+        .iter()
+        .filter(|path| !sources.contains(*path))
+        .cloned()
+        .collect();
+    if stageable.is_empty() {
+        // Everything named is already in the index because `git mv` put it there. Invoking `git add`
+        // with an empty pathspec would depend on how Git treats that, so it is not invoked.
+        return Ok(());
+    }
+    state::success(repository, &stage_argv(&stageable))
 }
 
 /// Verify the index holds exactly the exact-commit set, and that the dirty set has not moved.
