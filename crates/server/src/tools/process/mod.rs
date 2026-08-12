@@ -52,6 +52,7 @@ pub(crate) use jobs::MAX_ACTIVE_BACKGROUND_JOBS;
 use jobs::{start_background_job, BackgroundJobOutcome};
 pub(crate) use runs::{
     call_artifact_python_run, call_harbor_run_start, call_validation_profile_run,
+    MAX_HARBOR_AGENT_LEN, VALIDATION_PROFILE_NAMES,
 };
 
 use std::fs;
@@ -348,6 +349,38 @@ fn shell_display_arg(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The declared list and the match arms must agree in both directions.
+    ///
+    /// `VALIDATION_PROFILE_NAMES` exists so the refusal text, the capability manifest and the
+    /// advertised description stop repeating the same five names. Nothing in the compiler ties it to
+    /// the arms that actually resolve, though, so on its own it would be one more hand-written list
+    /// claiming which profiles exist, which is the defect it was introduced to remove.
+    #[test]
+    fn every_declared_validation_profile_resolves_and_nothing_else_does() {
+        for name in VALIDATION_PROFILE_NAMES {
+            assert!(
+                runs::validation_profile(name).is_ok(),
+                "{name} is declared but does not resolve to any commands"
+            );
+        }
+
+        let undeclared = "repo-basic-";
+        assert!(
+            !VALIDATION_PROFILE_NAMES.contains(&undeclared),
+            "the negative case must name a profile that is genuinely undeclared"
+        );
+        let refusal = match runs::validation_profile(undeclared) {
+            Ok(_) => panic!("an undeclared profile must not resolve"),
+            Err(refusal) => refusal,
+        };
+        for name in VALIDATION_PROFILE_NAMES {
+            assert!(
+                refusal.contains(name),
+                "the refusal must list {name}, since it is derived from the declared list"
+            );
+        }
+    }
 
     #[test]
     fn command_log_ids_are_unique_under_concurrency() {

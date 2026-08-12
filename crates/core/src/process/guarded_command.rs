@@ -6,8 +6,16 @@ use crate::process::runner::{
     run_bounded_command, validate_common_command_shape,
 };
 
+/// Cap for an allowlisted guarded command.
+///
+/// Equal to `runner::MAX_TIMEOUT_SECS` and `task_image::MAX_RUN_TIMEOUT_SECS` today, and separate
+/// from both on purpose: the call sets are disjoint, so they bound different work and agree only by
+/// coincidence.
 const DEFAULT_MAX_TIMEOUT_SECS: u64 = 600;
-const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
+/// The longest a Harbor run may be given, whether reached through a guarded `harbor run` command or
+/// through `harbor_run_start`. Public because the advertised bound must read it rather than restate
+/// it, and both paths bound the same operation.
+pub const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
 
 /// pytest's plugin-loading option, in both its separated and combined short forms.
 const PYTEST_PLUGIN_OPTION: &str = "-p";
@@ -355,6 +363,15 @@ fn is_allowed_rg_argument(arg: &str) -> bool {
 /// The capability manifest previously carried its own hand-written copy of this list and fell
 /// behind the moment the list changed, which is the worst possible staleness: the manifest exists so
 /// a client can tell a missing capability from a stale binary.
+/// The ripgrep options this server permits, for the capability manifest to advertise.
+///
+/// Exposed so the manifest can derive the list instead of describing it. The hand-written `["search"]`
+/// it replaces was accurate when any argument was accepted and survived C37 replacing that with a
+/// positive allowlist, so it went on describing a surface that no longer existed.
+pub fn allowed_rg_long_options() -> &'static [&'static str] {
+    RG_LONG_OPTIONS
+}
+
 pub fn allowed_shell_scripts() -> &'static [&'static str] {
     ALLOWED_SHELL_SCRIPTS
 }

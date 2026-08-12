@@ -135,11 +135,7 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
             "responses_may_arrive_out_of_order": true,
             "correlate_by": "JSON-RPC id",
             "background_jobs": {
-                "tools": [
-                    tools::task_image_python_run::NAME,
-                    tools::harbor_run_start::NAME,
-                    tools::validation_profile_run::NAME
-                ],
+                "tools": crate::tools::registry::background_job_tools(),
                 "max_active": crate::tools::process::MAX_ACTIVE_BACKGROUND_JOBS,
                 "poll_with": tools::read_command_log::NAME,
                 "same_server_required": true,
@@ -298,7 +294,9 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "pytest": ["validation invocation"],
                 // Derived, not restated: a hand-copied list here fell behind the allowlist itself.
                 "bash": contextpatch_core::process::guarded_command::allowed_shell_scripts(),
-                "rg": ["search"]
+                // Derived for the same reason as `bash` above: `["search"]` described the surface
+                // where any argument was accepted, and outlived it.
+                "rg": contextpatch_core::process::guarded_command::allowed_rg_long_options()
             },
             "typed_workflows": {
                 "read_command_log": "Reads command logs with max_chars and offset paging.",
@@ -321,7 +319,7 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "compose_stack_run": "Plans or asynchronously starts one named Docker Compose stack proof, with the compose file pinned per action, every Docker argument server-derived, networking enabled, and a teardown scoped to this server's own Compose project.",
                 "artifact_build_check_run": "Plans or asynchronously builds a repository Dockerfile and then runs the built image as an import smoke check, with the build networked, the smoke run pinned to --network none, and the uniquely tagged image always removed."
             },
-            "validation_profiles": ["repo-basic", "rust-workspace", "datacore-vscode", "datacore-m6-vscode", "dynamo-harbor-task"],
+            "validation_profiles": crate::tools::process::VALIDATION_PROFILE_NAMES,
             "guards": [
                 "repo-root-confined cwd",
                 "no shell interpolation",

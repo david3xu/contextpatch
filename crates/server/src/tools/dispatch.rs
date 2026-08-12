@@ -356,7 +356,7 @@ mod tests {
         names.sort();
         names.dedup();
 
-        let mut rendered = String::from("tool\tdeadline\tlock\treach\tread_only\n");
+        let mut rendered = String::from("tool\tdeadline\tlock\treach\tread_only\tbackground\n");
         for name in &names {
             let deadline = match deadline_for(name) {
                 Some(limit) if limit == READ_DEADLINE => "read",
@@ -365,8 +365,15 @@ mod tests {
                 Some(_) => "other",
                 None => "none",
             };
+            let background = match crate::tools::registry::descriptor(name) {
+                Some(entry) if entry.starts_background_job => "yes",
+                Some(_) => "no",
+                // The wrapper holds no descriptor and inherits this from whatever it dispatches, the
+                // same way its reach does, so it cannot answer yes or no.
+                None => "wrapper",
+            };
             rendered.push_str(&format!(
-                "{name}\t{deadline}\t{}\t{:?}\t{}\n",
+                "{name}\t{deadline}\t{}\t{:?}\t{}\t{background}\n",
                 if serializes_repository_mutation(name) {
                     "yes"
                 } else {

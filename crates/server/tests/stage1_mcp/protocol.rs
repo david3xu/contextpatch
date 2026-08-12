@@ -113,6 +113,120 @@ fn stage2_capability_manifest_mentions_every_registered_tool() {
     );
 }
 
+/// Every place in the manifest that claims *which* tools have a property.
+///
+/// The test above checks that each registered tool is mentioned somewhere in the document, and that is
+/// weaker than it looks. `background_jobs.tools` advertised three tools when there were five and
+/// passed it, because both missing names appeared elsewhere in the same manifest. Mention is not
+/// membership, and every staleness defect on this branch was a claim about a set rather than a missing
+/// word.
+///
+/// So the sites are recorded rather than their contents. A collection whose members are all registered
+/// tool names is a set claim, and a new one has to appear here and be classified: derived from the
+/// registry, or asserted whole in its own test. Adding a tool does not move this list. Adding a
+/// hand-written collection of tool names does, which is the point.
+///
+/// Objects keyed by tool name count as well as arrays of them. `typed_workflows` was the first
+/// instance of this class and it is an object, so an array-only check would miss the defect that
+/// started the inventory.
+#[test]
+fn stage2_capability_manifest_records_where_it_claims_which_tools_have_a_property() {
+    // Derived from the registry, so adding a tool updates them and no drift is possible:
+    //   tool_surface.public_tool_names, tool_surface.action_names, transport.background_jobs.tools
+    // Still written by hand, and therefore the remaining scope of the inventory:
+    //   process_execution.typed_workflows  the first instance of this class, fixed in 7de5b1d
+    //   github_workflows.tools             correct when last diffed
+    //   file_tools                         found by this test, in neither audit of the manifest
+    const KNOWN_TOOL_SET_CLAIMS: &[&str] = &[
+        "file_tools",
+        "github_workflows.tools",
+        "process_execution.typed_workflows",
+        "tool_surface.action_names",
+        "tool_surface.public_tool_names",
+        "transport.background_jobs.tools",
+    ];
+
+    let root = git_repo("stage2_capability_manifest_tool_set_claims");
+    let responses = run_server(
+        &root,
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"capability_manifest","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+        ],
+    );
+
+    let manifest: serde_json::Value = serde_json::from_str(response_text(&responses[0]))
+        .expect("the manifest is a JSON document");
+    let registered: std::collections::BTreeSet<String> = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools/list array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name").to_string())
+        .collect();
+
+    let mut observed = Vec::new();
+    collect_tool_set_claims(&manifest, String::new(), &registered, &mut observed);
+    observed.sort();
+
+    let mut known: Vec<String> = KNOWN_TOOL_SET_CLAIMS
+        .iter()
+        .map(|path| (*path).to_string())
+        .collect();
+    known.sort();
+
+    assert_eq!(
+        observed, known,
+        "the manifest's set of tool-set claims changed; each one must be derived from the registry or \
+         asserted whole, then recorded here"
+    );
+}
+
+/// Collect the paths of every collection whose members are all registered tool names.
+///
+/// A single tool named inside its own entry is not a set claim and is deliberately not collected,
+/// which is why the threshold is two: one name is a reference, several are an assertion about
+/// membership.
+fn collect_tool_set_claims(
+    value: &serde_json::Value,
+    path: String,
+    registered: &std::collections::BTreeSet<String>,
+    found: &mut Vec<String>,
+) {
+    let child_path = |key: &str| {
+        if path.is_empty() {
+            key.to_string()
+        } else {
+            format!("{path}.{key}")
+        }
+    };
+
+    match value {
+        serde_json::Value::Object(entries) => {
+            let keys_are_tools =
+                entries.len() >= 2 && entries.keys().all(|key| registered.contains(key.as_str()));
+            if keys_are_tools {
+                found.push(path.clone());
+            }
+            for (key, child) in entries {
+                collect_tool_set_claims(child, child_path(key), registered, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let names: Vec<&str> = items.iter().filter_map(serde_json::Value::as_str).collect();
+            if names.len() == items.len()
+                && names.len() >= 2
+                && names.iter().all(|name| registered.contains(*name))
+            {
+                found.push(path.clone());
+            }
+            for (index, child) in items.iter().enumerate() {
+                collect_tool_set_claims(child, child_path(&index.to_string()), registered, found);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn stage2_capability_manifest_projects_cheaply_without_losing_the_build_stamp() {
     // The full manifest runs to hundreds of lines, which made the orientation tool expensive enough to

@@ -5,7 +5,7 @@ use crate::tools;
 pub(crate) fn run_guarded_command_definition() -> Value {
     json!({
                 "name": tools::run_guarded_command::NAME,
-                "description": "Run an allowlisted validation command with repo-root-confined arguments and no shell interposed by this server. That narrows the entry point and the arguments; it is not a sandbox. The child inherits this server's environment, and reviewed repository code it runs (cargo build scripts and tests, npm-family scripts, Python, pytest collection) can read files, start subprocesses, and use the network with the server user's permissions. npm-family scripts may invoke their own shell. Only task_image_python_run carries the documented container isolation with networking disabled.",
+                "description": "Run an allowlisted validation command with repo-root-confined arguments and no shell interposed by this server. That narrows the entry point and the arguments; it is not a sandbox. The child inherits this server's environment, and reviewed repository code it runs (cargo build scripts and tests, npm-family scripts, Python, pytest collection) can read files, start subprocesses, and use the network with the server user's permissions. npm-family scripts may invoke their own shell. Container isolation with networking disabled belongs to the tools classified for isolated execution, which this is not.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -252,15 +252,15 @@ pub(crate) fn harbor_run_start_definition() -> Value {
                         "agent": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": 128,
+                            "maxLength": crate::tools::process::MAX_HARBOR_AGENT_LEN,
                             "pattern": "^[A-Za-z0-9._][A-Za-z0-9._-]*$",
                             "description": "Harbor agent identifier. A leading hyphen is refused."
                         },
                         "timeout_secs": {
                             "type": "integer",
                             "minimum": 1,
-                            "maximum": 3600,
-                            "description": "Run timeout in seconds. Defaults to 3600."
+                            "maximum": contextpatch_core::process::guarded_command::HARBOR_RUN_MAX_TIMEOUT_SECS,
+                            "description": format!("Run timeout in seconds. Defaults to {}.", contextpatch_core::process::guarded_command::HARBOR_RUN_MAX_TIMEOUT_SECS)
                         }
                     },
                     "required": ["agent"],
@@ -349,7 +349,8 @@ pub(crate) fn validation_profile_run_definition() -> Value {
                     "properties": {
                         "profile": {
                             "type": "string",
-                            "description": "Validation profile name: repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task."
+                            "enum": crate::tools::process::VALIDATION_PROFILE_NAMES,
+                            "description": "Validation profile name."
                         },
                         "timeout_secs": {
                             "type": "integer",

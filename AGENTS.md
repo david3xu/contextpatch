@@ -1,6 +1,9 @@
-# CLAUDE.md
+# Repository operating rules
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+The non-obvious rules for working in this repository, kept here because rediscovering them from the
+source costs more than reading them. Named neutrally rather than for one vendor's convention: the
+rules are the project's, and which agent reads them is machine configuration rather than repository
+content. Point your tooling at this file if it does not find it by name.
 
 ## Commands
 
@@ -68,9 +71,15 @@ Split when a file holds unrelated concerns — which is what `process.rs` did, w
 
 One `ToolDescriptor` per tool carries all six per-tool facts. `dispatch.rs` is a table lookup, `deadline_for` and `serializes_repository_mutation` are one-line field reads, and `schema/authority.rs` classifies from the descriptor. Before this existed those facts lived in five files with nothing checking they agreed, which produced four separate staleness defects in one week.
 
+The predicate that would have caught all of them, and that has since caught two more: **a site asserting which tools have a property is a defect risk; a site naming one tool inside its own code path is not.** Every instance was a claim about a set — `typed_workflows`, `programs.bash`, the client-instruction log-id list, `guidance::permitted_summary`, `background_jobs.tools`, and the isolation sentence in `run_guarded_command`'s description. Each was true when written and went stale when the set changed. Apply the predicate to any new list: derive it from the registry or the allowlist that defines it, or assert it whole in a test that fails when it moves. A count or a membership list written by hand is the defect, not the omission from it.
+
 `project_execute` is deliberately *not* in the registry. It is the surface wrapper, not an internal action: resolved in `handle_tool_call` before the repository is determined, advertised only on the project surface, and classified as the widest reach of everything it dispatches.
 
-Two snapshots in `crates/server/tests/fixtures/` guard the whole surface: `tools-surface.json` (every advertised definition) and `tool-matrix.tsv` (every tool against the four behavioural axes). Regenerate with `CONTEXTPATCH_UPDATE_FIXTURES=1`.
+Two snapshots in `crates/server/tests/fixtures/` guard the whole surface: `tools-surface.json` (every advertised definition) and `tool-matrix.tsv` (every tool against the five behavioural axes, plus whether it starts a background job).
+
+Regeneration is operator-only. `CONTEXTPATCH_UPDATE_FIXTURES=1 cargo test -p server` rewrites both, and `run_guarded_command` has no environment parameter, so it cannot be run through the guarded surface at all. That is deliberate rather than a gap. A deliberate move is patched from the comparison's own output: the failure prints the recorded and the current line verbatim, so the fixture is edited to what the test says it should be rather than reconstructed. Any change small enough to review by eye is small enough to patch that way, and a diff too large to patch by hand is a diff too large to review — which is a signal to look harder at the change, not a reason to grant an environment.
+
+Do not route around this by spawning `cargo` from a Python artifact with a modified environment. That is the `rg --pre` escape wearing a different name, and C37 closed it by construction.
 
 ### Request pipeline (`crates/server/src/tools/dispatch.rs`)
 

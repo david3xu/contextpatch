@@ -7,20 +7,28 @@ use crate::tools::common::{
     optional_bool, optional_string, optional_string_array, optional_u64, required_string,
 };
 
+/// The longest Harbor agent identifier accepted, advertised and enforced from here.
+///
+/// Server-side because nothing in `core` bounds an agent name. The run timeout is the opposite case:
+/// `core` already names it as `HARBOR_RUN_MAX_TIMEOUT_SECS`, so this module reads that rather than
+/// declaring a second name for one bound.
+pub(crate) const MAX_HARBOR_AGENT_LEN: usize = 128;
+
 pub(crate) fn call_harbor_run_start<'a>(
     repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
 ) -> Result<String, String> {
     let project = optional_string(arguments, "project")?.unwrap_or("task");
     let agent = required_string(arguments, "agent")?;
-    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(3600);
-    if timeout_secs == 0 || timeout_secs > 3600 {
-        return Err(
-            "harbor_run_start refused: timeout_secs must be between 1 and 3600".to_string(),
-        );
+    let max_timeout_secs = contextpatch_core::process::guarded_command::HARBOR_RUN_MAX_TIMEOUT_SECS;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(max_timeout_secs);
+    if timeout_secs == 0 || timeout_secs > max_timeout_secs {
+        return Err(format!(
+            "harbor_run_start refused: timeout_secs must be between 1 and {max_timeout_secs}"
+        ));
     }
     if agent.is_empty()
-        || agent.len() > 128
+        || agent.len() > MAX_HARBOR_AGENT_LEN
         || agent.starts_with('-')
         || !agent
             .chars()
@@ -422,6 +430,27 @@ impl ProfileCommand {
     }
 }
 
+/// The validation profiles this server knows, as one declared list.
+///
+/// The five names were written out in five places: these arms, the refusal below, the capability
+/// manifest's list, the preflight document's keys, and the advertised description of the `profile`
+/// argument. Three of those now derive from here.
+///
+/// Two do not, for different reasons. The arms cannot, because each carries its own commands, so the
+/// tie between this list and them is asserted by test instead: every name here must resolve, and a
+/// name absent from here must not. The preflight document's keys stay hand-written because each entry
+/// also carries that profile's availability and required tools, which is a different fact from the
+/// name and wants its own change rather than being folded into this one.
+///
+/// Without the assertion this const would be the sixth copy rather than the single source.
+pub(crate) const VALIDATION_PROFILE_NAMES: &[&str] = &[
+    "repo-basic",
+    "rust-workspace",
+    "datacore-vscode",
+    "datacore-m6-vscode",
+    "dynamo-harbor-task",
+];
+
 pub(super) fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, String> {
     match profile {
         "repo-basic" => Ok(vec![
@@ -519,7 +548,8 @@ pub(super) fn validation_profile(profile: &str) -> Result<Vec<ProfileCommand>, S
             },
         ]),
         _ => Err(format!(
-            "validation_profile_run refused: unknown profile `{profile}`; expected repo-basic, rust-workspace, datacore-vscode, datacore-m6-vscode, or dynamo-harbor-task"
+            "validation_profile_run refused: unknown profile `{profile}`; expected one of: {}",
+            VALIDATION_PROFILE_NAMES.join(", ")
         )),
     }
 }
