@@ -19,6 +19,28 @@ use serde_json::{json, Value};
 use crate::tools::{self, ToolSurface};
 
 const PREFLIGHT_FULL_STATUS_ENTRIES: usize = 100;
+
+/// The native build actions and the facts the manifest advertises for each.
+///
+/// Built from the action set rather than written beside it. Every fact here follows the platform
+/// partition the enum already owns, so restating them was restating the set twice: once as keys and
+/// once as the values keyed by them.
+fn native_build_action_facts() -> Value {
+    let mut facts = serde_json::Map::new();
+    for action in contextpatch_core::native_build::Action::ALL {
+        let mut entry = serde_json::Map::new();
+        entry.insert("program".to_string(), json!(action.advertised_program()));
+        entry.insert("caller_supplies_raw_command".to_string(), json!(false));
+        if action.supports_repo_relative_derived_data_path() {
+            entry.insert(
+                "supports_repo_relative_derived_data_path".to_string(),
+                json!(true),
+            );
+        }
+        facts.insert(action.as_str().to_string(), Value::Object(entry));
+    }
+    Value::Object(facts)
+}
 const PREFLIGHT_FULL_STATUS_BYTES: usize = 64 * 1024;
 const PREFLIGHT_COMPACT_STATUS_ENTRIES: usize = 20;
 const PREFLIGHT_COMPACT_STATUS_BYTES: usize = 12 * 1024;
@@ -412,20 +434,9 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
         },
         "native_build": {
             "mode": "typed_native_build_actions",
-            "actions": {
-                "ios_build": {
-                    "program": "xcodebuild",
-                    "caller_supplies_raw_command": false,
-                    "supports_repo_relative_derived_data_path": true
-                },
-                "ios_test": {
-                    "program": "xcodebuild",
-                    "caller_supplies_raw_command": false,
-                    "supports_repo_relative_derived_data_path": true
-                },
-                "android_assemble_debug": { "program": "./gradlew", "caller_supplies_raw_command": false },
-                "android_unit_test": { "program": "./gradlew", "caller_supplies_raw_command": false }
-            },
+            // Derived, not restated: both the set and each action's advertised facts come from the
+            // action enum, which is where the platform partition those facts follow already lives.
+            "actions": native_build_action_facts(),
             "examples": [
                 {
                     "tool": "native_build_run",

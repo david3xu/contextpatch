@@ -1550,7 +1550,13 @@
       "additionalProperties": false,
       "properties": {
         "action": {
-          "description": "Native build action: ios_build, ios_test, android_assemble_debug, or android_unit_test.",
+          "description": "Which native build to plan or run.",
+          "enum": [
+            "ios_build",
+            "ios_test",
+            "android_assemble_debug",
+            "android_unit_test"
+          ],
           "type": "string"
         },
         "cwd": {

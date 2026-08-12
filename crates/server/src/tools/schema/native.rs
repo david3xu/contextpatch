@@ -11,7 +11,10 @@ pub(crate) fn native_build_run_definition() -> Value {
                     "properties": {
                         "action": {
                             "type": "string",
-                            "description": "Native build action: ios_build, ios_test, android_assemble_debug, or android_unit_test."
+                            // Derived, not restated: the members are the enum beside this field, so
+                            // the description says what the field selects instead of listing them.
+                            "enum": contextpatch_core::native_build::Action::advertised_names(),
+                            "description": "Which native build to plan or run."
                         },
                         "params": {
                             "type": "object",

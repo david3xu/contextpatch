@@ -42,6 +42,103 @@ pub enum NativeBuildParams {
     },
 }
 
+/// The Gradle wrapper as the manifest advertises it, which is the default the planner assumes.
+const ADVERTISED_GRADLE_PROGRAM: &str = "./gradlew";
+
+/// One `native_build_run` action.
+///
+/// Flat rather than split by platform, because nothing in the call selects a platform. A setup
+/// profile is named by the caller and selects a vocabulary; here the platform is a property of the
+/// action itself, so the advertised set is one enum and the partition is derived from it rather than
+/// supplied alongside it.
+///
+/// `ALL` is the single source for the advertised schema keyword and for the capability manifest.
+/// Safety-contract clause 34 leaves the keyword advisory with a core guard behind it, and `parse` is
+/// that guard.
+///
+/// A variant left out of `ALL` does not compile. `ALL` is the only site that constructs one, so an
+/// omitted variant is constructed nowhere and the dead-code lint refuses it under `-D warnings`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    IosBuild,
+    IosTest,
+    AndroidAssembleDebug,
+    AndroidUnitTest,
+}
+
+/// Which planner owns an action, carrying the verb that planner appends.
+///
+/// The route and the verb come from one exhaustive match rather than two. Both were previously
+/// recovered by matching the action name twice, once here to route and once inside each planner to
+/// choose the verb, and the inner matches were exhaustive only because the outer one had already
+/// agreed with them. Nothing enforced that agreement, so each inner match ended in `unreachable!()`:
+/// a panic guarded by an invariant held in two places and checked in neither. Returning the verb
+/// with the route deletes the second match, which leaves nothing to be unreachable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Platform {
+    Ios(&'static str),
+    Android(&'static str),
+}
+
+impl Action {
+    /// Every action, in the order the surfaces advertise them.
+    pub const ALL: &'static [Self] = &[
+        Self::IosBuild,
+        Self::IosTest,
+        Self::AndroidAssembleDebug,
+        Self::AndroidUnitTest,
+    ];
+
+    /// The wire name, which is the only form a caller supplies or reads.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IosBuild => "ios_build",
+            Self::IosTest => "ios_test",
+            Self::AndroidAssembleDebug => "android_assemble_debug",
+            Self::AndroidUnitTest => "android_unit_test",
+        }
+    }
+
+    /// The advertised names, for surfaces that must report the set rather than restate it.
+    pub fn advertised_names() -> Vec<&'static str> {
+        Self::ALL.iter().map(|action| action.as_str()).collect()
+    }
+
+    /// The program the manifest advertises for this action.
+    pub const fn advertised_program(self) -> &'static str {
+        match self.platform() {
+            Platform::Ios(_) => "xcodebuild",
+            Platform::Android(_) => ADVERTISED_GRADLE_PROGRAM,
+        }
+    }
+
+    /// Whether this action accepts a repository-relative derived data path.
+    pub const fn supports_repo_relative_derived_data_path(self) -> bool {
+        matches!(self.platform(), Platform::Ios(_))
+    }
+
+    const fn platform(self) -> Platform {
+        match self {
+            Self::IosBuild => Platform::Ios("build"),
+            Self::IosTest => Platform::Ios("test"),
+            Self::AndroidAssembleDebug => Platform::Android("assembleDebug"),
+            Self::AndroidUnitTest => Platform::Android("testDebugUnitTest"),
+        }
+    }
+
+    pub(crate) fn parse(action: &str) -> Result<Self, ContextPatchError> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == action)
+            .ok_or_else(|| {
+                ContextPatchError::new(format!(
+                    "native_build_run refused: unknown action `{action}`"
+                ))
+            })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeBuildPlan {
     pub action: String,
@@ -120,7 +217,7 @@ pub fn native_build_run<'a>(
     let root = repository_root.into();
     let cwd = resolve_child_cwd(root, cwd)?;
     let timeout = checked_timeout(timeout_secs)?;
-    let plan = plan_native_build(root, action, params)?;
+    let plan = plan_native_build(root, Action::parse(action)?, params)?;
 
     let execution = if dry_run {
         None
@@ -175,19 +272,20 @@ pub fn native_build_run<'a>(
 
 fn plan_native_build(
     root: RepositoryRoot<'_>,
-    action: &str,
+    action: Action,
     params: NativeBuildParams,
 ) -> Result<NativeBuildPlan, ContextPatchError> {
-    match action {
-        "ios_build" | "ios_test" => plan_ios(action, params),
-        "android_assemble_debug" | "android_unit_test" => plan_android(root, action, params),
-        _ => Err(ContextPatchError::new(format!(
-            "native_build_run refused: unknown action `{action}`"
-        ))),
+    match action.platform() {
+        Platform::Ios(verb) => plan_ios(action, verb, params),
+        Platform::Android(verb) => plan_android(root, action, verb, params),
     }
 }
 
-fn plan_ios(action: &str, params: NativeBuildParams) -> Result<NativeBuildPlan, ContextPatchError> {
+fn plan_ios(
+    action: Action,
+    verb: &'static str,
+    params: NativeBuildParams,
+) -> Result<NativeBuildPlan, ContextPatchError> {
     let NativeBuildParams::Ios {
         workspace,
         scheme,
@@ -198,7 +296,8 @@ fn plan_ios(action: &str, params: NativeBuildParams) -> Result<NativeBuildPlan, 
     } = params
     else {
         return Err(ContextPatchError::new(format!(
-            "native_build_run refused: {action} requires iOS params"
+            "native_build_run refused: {} requires iOS params",
+            action.as_str()
         )));
     };
     validate_relative_path_param("native_build_run", "workspace", &workspace)?;
@@ -236,18 +335,11 @@ fn plan_ios(action: &str, params: NativeBuildParams) -> Result<NativeBuildPlan, 
         args.push("-derivedDataPath".to_string());
         args.push(derived_data_path);
     }
-    args.push(
-        match action {
-            "ios_build" => "build",
-            "ios_test" => "test",
-            _ => unreachable!(),
-        }
-        .to_string(),
-    );
+    args.push(verb.to_string());
 
     validate_common_command_shape("xcodebuild", &args)?;
     Ok(NativeBuildPlan {
-        action: action.to_string(),
+        action: action.as_str().to_string(),
         program: "xcodebuild".to_string(),
         display_program: "xcodebuild".to_string(),
         args,
@@ -258,12 +350,14 @@ fn plan_ios(action: &str, params: NativeBuildParams) -> Result<NativeBuildPlan, 
 
 fn plan_android(
     root: RepositoryRoot<'_>,
-    action: &str,
+    action: Action,
+    verb: &'static str,
     params: NativeBuildParams,
 ) -> Result<NativeBuildPlan, ContextPatchError> {
     let NativeBuildParams::Android { gradlew } = params else {
         return Err(ContextPatchError::new(format!(
-            "native_build_run refused: {action} requires Android params"
+            "native_build_run refused: {} requires Android params",
+            action.as_str()
         )));
     };
     // Gated here, during planning, so a selection is refused before any command is built or run and a caller
@@ -277,14 +371,9 @@ fn plan_android(
         ));
     }
     let executable = resolve_repo_relative_executable(root, &gradlew)?;
-    let args = vec![match action {
-        "android_assemble_debug" => "assembleDebug",
-        "android_unit_test" => "testDebugUnitTest",
-        _ => unreachable!(),
-    }
-    .to_string()];
+    let args = vec![verb.to_string()];
     Ok(NativeBuildPlan {
-        action: action.to_string(),
+        action: action.as_str().to_string(),
         program: executable,
         display_program: format!("./{gradlew}"),
         args,
@@ -362,7 +451,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{native_build_run, NativeBuildParams};
+    use super::{native_build_run, Action, NativeBuildParams};
 
     #[test]
     fn plans_ios_build_without_raw_command() {
@@ -421,6 +510,54 @@ mod tests {
 
         assert!(result.plan.program.ends_with("/gradlew"));
         assert_eq!(result.plan.display(), "./gradlew assembleDebug");
+    }
+
+    /// Every declared action reaches a planner, and each is routed to the one matching its platform.
+    ///
+    /// The population comes from `ALL` rather than a list written here, so this cannot pass by
+    /// agreeing with a copy of itself. Each action is offered params for the *other* platform, which
+    /// every planner refuses by name, so the assertion reads the routing rather than the build: an
+    /// action sent to the wrong planner would report the wrong platform's params, and one that failed
+    /// to dispatch at all would report an unknown action. Nothing here runs xcodebuild or Gradle.
+    #[test]
+    fn every_declared_action_routes_to_the_planner_for_its_platform() {
+        let root = git_root("every_declared_action_routes_to_the_planner_for_its_platform");
+
+        for action in Action::ALL.iter().copied() {
+            let wants_ios = action.supports_repo_relative_derived_data_path();
+            let mismatched = if wants_ios {
+                NativeBuildParams::Android { gradlew: None }
+            } else {
+                NativeBuildParams::Ios {
+                    workspace: "App.xcworkspace".to_string(),
+                    scheme: "App".to_string(),
+                    configuration: None,
+                    sdk: None,
+                    destination: None,
+                    derived_data_path: None,
+                }
+            };
+
+            let error = native_build_run(&root, None, action.as_str(), mismatched, Some(30), true)
+                .expect_err("params for the other platform must be refused");
+            let message = error.to_string();
+
+            assert!(
+                !message.contains("unknown action"),
+                "{} must reach a planner: {message}",
+                action.as_str()
+            );
+            let expected = if wants_ios {
+                "requires iOS params"
+            } else {
+                "requires Android params"
+            };
+            assert!(
+                message.contains(expected),
+                "{} must route to the planner for its platform, expected {expected:?}: {message}",
+                action.as_str()
+            );
+        }
     }
 
     #[test]
