@@ -159,7 +159,11 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
             subcommand,
             Some("status" | "diff" | "log" | "show" | "rev-parse" | "ls-tree")
         ),
-        "cargo" => matches!(subcommand, Some("check" | "test" | "build" | "clippy")),
+        "cargo" => match subcommand {
+            Some("check" | "test" | "build" | "clippy") => true,
+            Some("fmt") => cargo_fmt_arguments_are_allowed(args),
+            _ => false,
+        },
         "bun" => matches!(subcommand, Some("run" | "test")),
         "npm" => matches!(subcommand, Some("run" | "test")),
         "pnpm" => matches!(subcommand, Some("run" | "test")),
@@ -169,7 +173,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         "pytest" => true,
         "harbor" => matches!(subcommand, Some("run")),
         "bash" => is_allowed_shell_script(args),
-        "rg" => subcommand.is_some(),
+        "rg" => subcommand.is_some() && rg_arguments_are_allowed(args),
         _ => false,
     };
 
@@ -182,6 +186,159 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     }
 
     Ok(())
+}
+
+/// `cargo fmt` arguments, listed positively so a later rustfmt option cannot widen this surface.
+///
+/// `fmt` is admitted only as a check, never as a rewrite: reformatting the tree is a mutation and
+/// this surface grants none. The reason to permit it at all is that a gate whose result cannot be
+/// captured is not evidence, and `--check` reports a diff and an exit code without touching a file.
+///
+/// This began as a scan that refused `--emit`, which is a denylist, and C37 is the argument that a
+/// denylist does not hold: the option worth refusing is whatever the next release adds. Measured
+/// against the current rustfmt, neither `--config emit_mode=Files` nor `--config-path` wrote a file
+/// under `--check`, so the reason to refuse them is not that they were shown to write. It is that
+/// anything not named here is refused, which does not depend on that measurement surviving an
+/// upgrade. Widening this is deliberately an edit to this list.
+const CARGO_FMT_CHECK: &str = "--check";
+
+/// The one option whose following argument is a value rather than an option.
+const CARGO_FMT_PACKAGE: &str = "-p";
+
+const CARGO_FMT_OPTIONS: &[&str] = &["--all", CARGO_FMT_CHECK, "--"];
+
+fn cargo_fmt_arguments_are_allowed(args: &[String]) -> bool {
+    let mut checked = false;
+    let mut expecting_package_name = false;
+    for argument in args.iter().skip(1).map(String::as_str) {
+        if expecting_package_name {
+            expecting_package_name = false;
+            continue;
+        }
+        if argument == CARGO_FMT_PACKAGE {
+            expecting_package_name = true;
+            continue;
+        }
+        if !CARGO_FMT_OPTIONS.contains(&argument) {
+            return false;
+        }
+        checked |= argument == CARGO_FMT_CHECK;
+    }
+    checked && !expecting_package_name
+}
+
+/// ripgrep options that only search, listed positively so a new release cannot widen this surface.
+///
+/// `rg` was previously admitted on `subcommand.is_some()`, which permitted every option it has. That
+/// was arbitrary program execution rather than search: `rg --pre sh --pre-glob '*'` runs a shell over
+/// repository files, which was demonstrated writing outside the repository root as the server user.
+/// It walked around the fixed shell-script list, the repository-relative Python rule, and the pytest
+/// plugin hardening in a single argument.
+///
+/// A denylist cannot hold this shut, because the dangerous options are whatever the next ripgrep
+/// version adds. Anything not named here is refused, so `--pre`, `--pre-glob`, `--hostname-bin`,
+/// `-z`/`--search-zip`, and `--follow` are excluded by construction rather than by enumeration: the
+/// first three start programs, the fourth shells out to decompressors, and the last follows symlinks
+/// out of the repository.
+const RG_LONG_OPTIONS: &[&str] = &[
+    "byte-offset",
+    "case-sensitive",
+    "color",
+    "column",
+    "context",
+    "count",
+    "count-matches",
+    "crlf",
+    "engine",
+    "files",
+    "files-with-matches",
+    "files-without-match",
+    "fixed-strings",
+    "glob",
+    "heading",
+    "hidden",
+    "iglob",
+    "ignore-case",
+    "invert-match",
+    "json",
+    "line-number",
+    "line-regexp",
+    "max-count",
+    "max-depth",
+    "max-filesize",
+    "multiline",
+    "no-config",
+    "no-filename",
+    "no-heading",
+    "no-ignore",
+    "no-line-number",
+    "no-messages",
+    "no-require-git",
+    "null",
+    "one-file-system",
+    "only-matching",
+    "pcre2",
+    "quiet",
+    "regexp",
+    "replace",
+    "smart-case",
+    "sort",
+    "sortr",
+    "stats",
+    "text",
+    "threads",
+    "trim",
+    "type",
+    "type-not",
+    "unrestricted",
+    "vimgrep",
+    "with-filename",
+    "word-regexp",
+];
+
+/// Short forms of the same set. Bundles such as `-in` are accepted only if every letter appears here.
+const RG_SHORT_OPTIONS: &str = "ABCFHINSTcefgilmnostuvwx";
+
+/// Whether every `rg` argument is a permitted option, a pattern, or a path.
+///
+/// `--` ends option parsing in ripgrep itself, so everything after it is positional and is checked
+/// only by the shared path confinement. Tracking that here keeps a leading-dash *pattern* usable,
+/// which is the ordinary reason to write `--` at all.
+fn rg_arguments_are_allowed(args: &[String]) -> bool {
+    let mut positional_only = false;
+    for arg in args {
+        if positional_only {
+            continue;
+        }
+        if arg == "--" {
+            positional_only = true;
+            continue;
+        }
+        if !is_allowed_rg_argument(arg) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether one `rg` argument is a permitted option, a pattern, or a path.
+///
+/// Anything not beginning with `-` is a pattern or a path and is already confined by
+/// [`validate_common_command_shape`], so only option-shaped arguments are checked here. A value that
+/// itself begins with `-` must be written as `--option=value`; that is a deliberate false refusal,
+/// because distinguishing an option from an option-shaped value requires knowing which options take
+/// values, and being wrong about that is how an allowlist silently admits the argument after `--pre`.
+fn is_allowed_rg_argument(arg: &str) -> bool {
+    if arg == "--" || !arg.starts_with('-') || arg == "-" {
+        return true;
+    }
+    let name = arg.split('=').next().unwrap_or(arg);
+    if let Some(long) = name.strip_prefix("--") {
+        return RG_LONG_OPTIONS.contains(&long);
+    }
+    name.strip_prefix('-').is_some_and(|shorts| {
+        !shorts.is_empty() && shorts.chars().all(|short| RG_SHORT_OPTIONS.contains(short))
+    })
 }
 
 /// Whether one `bash` invocation names a script on the fixed list.
@@ -386,6 +543,86 @@ mod tests {
             message.contains("fixed validation-script list"),
             "refusal must name the list: {message}"
         );
+    }
+
+    /// Formatting is a mutation; checking is not. Only the second is admitted.
+    #[test]
+    fn permits_cargo_fmt_only_as_a_check() {
+        for values in [
+            vec!["fmt", "--", "--check"],
+            vec!["fmt", "--all", "--", "--check"],
+            vec!["fmt", "--check"],
+            // A package name is a value rather than an option, so it is not matched against the list.
+            vec!["fmt", "-p", "core", "--check"],
+        ] {
+            validate_command("cargo", &args(&values))
+                .unwrap_or_else(|error| panic!("{values:?} must be permitted: {error}"));
+        }
+
+        for values in [
+            vec!["fmt"],
+            vec!["fmt", "--all"],
+            vec!["fmt", "--check", "--emit", "files"],
+            // Refused for being unnamed rather than for writing. Measured against the current
+            // rustfmt neither of these wrote a file under `--check`, and the list does not rest on
+            // that measurement surviving an upgrade.
+            vec!["fmt", "--check", "--config", "emit_mode=Files"],
+            vec!["fmt", "--check", "--config-path", "rustfmt.toml"],
+            // `-p` consumes the argument after it, so the check is no longer present.
+            vec!["fmt", "-p", "--check"],
+            vec!["fmt", "--check", "-p"],
+        ] {
+            let message = refusal("cargo", &values);
+            assert!(
+                message.contains("not allowlisted"),
+                "unexpected refusal for {values:?}: {message}"
+            );
+        }
+    }
+
+    /// The options that make `rg` a program launcher rather than a search tool.
+    ///
+    /// `--pre sh --pre-glob '*'` was demonstrated executing a shell over repository files and
+    /// writing outside the repository root, which defeated the fixed shell-script list, the
+    /// repository-relative Python rule, and the pytest hardening at once.
+    #[test]
+    fn refuses_rg_options_that_start_programs() {
+        for values in [
+            vec!["--pre", "sh", "."],
+            vec!["--pre=sh", "."],
+            vec!["--pre-glob", "*", "."],
+            vec!["--hostname-bin", "hostname", "."],
+            vec!["-z", "pattern"],
+            vec!["--search-zip", "pattern"],
+            // Following symlinks reads outside the repository even when argv stays inside it.
+            vec!["--follow", "pattern"],
+            vec!["-L", "pattern"],
+            // A bundle is only as safe as its least safe letter.
+            vec!["-iz", "pattern"],
+        ] {
+            let message = refusal("rg", &values);
+            assert!(
+                message.contains("not allowlisted"),
+                "unexpected refusal for {values:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn retains_ordinary_rg_search_invocations() {
+        for values in [
+            vec!["--files"],
+            vec!["pattern"],
+            vec!["-n", "pattern", "src"],
+            vec!["-i", "--glob", "*.rs", "pattern"],
+            vec!["-e", "pattern", "--max-depth", "2"],
+            vec!["--json", "pattern"],
+            vec!["-inH", "pattern"],
+            vec!["--", "-dash-leading-pattern"],
+        ] {
+            validate_command("rg", &args(&values))
+                .unwrap_or_else(|error| panic!("{values:?} must stay permitted: {error}"));
+        }
     }
 
     #[test]

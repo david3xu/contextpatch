@@ -16,13 +16,13 @@ the program itself decides what to do with it.
 | Program | Permitted first argument | Executes repository-authored code | May reach network |
 | --- | --- | --- | --- |
 | `git` | `status`, `diff`, `log`, `show`, `rev-parse`, `ls-tree` | No | No for these subcommands |
-| `cargo` | `check`, `test`, `build`, `clippy` | Yes: `build.rs`, proc macros, test binaries | Yes: registry and dependency fetch |
+| `cargo` | `check`, `test`, `build`, `clippy`, `fmt --check` | Yes: `build.rs`, proc macros, test binaries | Yes: registry and dependency fetch |
 | `bun` | `run`, `test` | Yes: `package.json` scripts, test files | Yes |
 | `npm` | `run`, `test` | Yes: `package.json` scripts, via a shell npm starts | Yes |
 | `pnpm` | `run`, `test` | Yes: `package.json` scripts | Yes |
 | `python`, `python3` | any repo-relative path ending `.py` | Yes: the whole script | Yes |
 | `pytest` | node ids and options, minus plugin-loading `-p` | Yes: `conftest.py`, collected tests | Yes |
-| `rg` | any argument | No | No |
+| `rg` | search options from a positive allowlist | No, since C37 | No, since C37 |
 | `bash` | only a script on the fixed validation-script list; `references/check-base-image.sh` optionally takes `task`, the rest take no arguments | Yes: whatever those tracked scripts contain | Depends on script |
 | `harbor` | `run` | Yes: agent workload | Yes |
 
@@ -164,6 +164,9 @@ Probe-confirmed and source-confirmed refusals, which the corrections must not we
   `artifact_python_run`
 - caller-supplied shell strings: no program accepts one; `bash` is pinned to an exact list of
   tracked scripts, and a glob over a scripts directory is deliberately not used
+- `rg` options that start a program: `--pre`, `--pre-glob`, `--hostname-bin`, and `-z` are
+  excluded by a positive option allowlist, and `RIPGREP_CONFIG_PATH` is removed from `rg` children
+  so an ambient config file cannot reintroduce them (C37)
 - argv paths outside the repository root
 - direct `harbor run`, redirected to `harbor_run_start`
 

@@ -1,24 +1,30 @@
 //! One table describing every tool, replacing five parallel ones.
 //!
-//! A tool's identity is currently asserted in five independent places: its schema in a
-//! `schema/*.rs` module, its handler in the `dispatch` match, its reply deadline in `deadline_for`,
-//! its mutation-lock membership in `serializes_repository_mutation`, and its advertised authority in
-//! the `authority` classifiers. Nothing checks those agree, and adding a tool means remembering all
-//! five. The observed failure is not that a tool breaks; it is that a tool is registered and
-//! classified wrongly, or described in one place and not another, and every test still passes.
+//! A tool's identity used to be asserted in five independent places: its schema in a `schema/*.rs`
+//! module, its handler in the `dispatch` match, its reply deadline in `deadline_for`, its
+//! mutation-lock membership in `serializes_repository_mutation`, and its advertised authority in the
+//! `authority` classifiers. Nothing checked those agreed, and adding a tool meant remembering all
+//! five. The failure that produced was not a broken tool; it was a tool classified wrongly, or
+//! described in one place and not another, while every test still passed.
 //!
-//! A descriptor states all of it once.
+//! A descriptor states all of it once. This table is now the only answer: `dispatch` looks a tool up
+//! here or refuses it as unknown, `deadline_for` and `serializes_repository_mutation` read a field,
+//! and `schema::authority` classifies from `reach` and `read_only`. There is no fallback path left.
 //!
-//! # Migration
+//! `project_execute` is deliberately absent. It is the surface wrapper rather than an internal
+//! action: resolved in `handle_tool_call` before the repository is determined, advertised only on
+//! the project surface, and classified as the widest reach of everything it dispatches.
 //!
-//! The registry is authoritative for the tools it contains and silent about the rest, so tools move
-//! over one at a time. Each consumer — dispatch, deadlines, locking, authority, schema assembly —
-//! asks the registry first and falls back to its original code path. A tool is fully migrated when
-//! its descriptor exists and its old entries are deleted; between those two moments both paths are
-//! live and must agree, which the recorded surface and matrix snapshots enforce.
+//! # What guards this table
 //!
-//! That is what keeps a 55-tool migration reviewable: every step is a small diff that either changes
-//! the snapshots or does not, and only the final step removes the fallback.
+//! Two recorded fixtures cover five of a descriptor's six facts — `tools-surface.json` pins name and
+//! schema, `tool-matrix.tsv` pins deadline, lock, reach, and read-only. Both were captured before
+//! the migration began and are byte-identical after it, which is the evidence that moving 54 tools
+//! changed no advertised behaviour.
+//!
+//! The sixth fact, handler identity, is invisible to both: a descriptor pointing one tool at
+//! another's handler leaves the fixtures unchanged. `each_descriptor_calls_the_handler_named_for_its_tool`
+//! is what covers it, and the reasoning for why nothing cheaper works is recorded there.
 
 use std::time::Duration;
 
@@ -55,7 +61,7 @@ pub(crate) struct ToolDescriptor {
     pub(crate) serializes_mutation: bool,
 }
 
-/// Every migrated tool. Tools absent from this table still run through the original dispatch.
+/// Every tool this server dispatches. A name absent from this table is refused as unknown.
 static REGISTRY: &[ToolDescriptor] = &[
     ToolDescriptor {
         name: crate::tools::capability_manifest::NAME,
@@ -690,6 +696,46 @@ mod tests {
         );
     }
 
+    /// Record which registry names are proper prefixes of another, because one is.
+    ///
+    /// This documents an assumption rather than guarding anything. `dispatch::attribute` matches a
+    /// name followed by the refusal marker, so it is correct whether or not prefix pairs exist, and
+    /// this test must not be read as the thing that makes it safe: deleting the boundary because
+    /// this passes would reintroduce the misattribution the boundary exists to prevent.
+    ///
+    /// What it does is keep the assumption measured instead of remembered. The set is asserted whole
+    /// rather than counted, so a new pair fails here and is looked at deliberately, and a pair that
+    /// disappears fails too rather than leaving a stale claim behind. The scope is registry names
+    /// only: `project_execute` resolves before the repository is determined and never reaches
+    /// `call_tool`, so it cannot be misattributed and asserting over it would claim something wider
+    /// than the property being documented.
+    #[test]
+    fn the_registry_names_that_are_prefixes_of_another_are_the_known_ones() {
+        const KNOWN_PREFIX_PAIRS: &[(&str, &str)] = &[("write_new_file", "write_new_file_base64")];
+
+        let names: Vec<&str> = REGISTRY.iter().map(|entry| entry.name).collect();
+        let mut observed: Vec<(&str, &str)> = names
+            .iter()
+            .flat_map(|shorter| {
+                names
+                    .iter()
+                    .filter(move |longer| *longer != shorter && longer.starts_with(*shorter))
+                    .map(move |longer| (*shorter, *longer))
+            })
+            .collect();
+        observed.sort_unstable();
+
+        let mut known = KNOWN_PREFIX_PAIRS.to_vec();
+        known.sort_unstable();
+
+        assert_eq!(
+            observed, known,
+            "the set of registry names that are proper prefixes of another has changed; confirm \
+             that dispatch::attribute still matches on the refusal marker rather than the bare name, \
+             then record the new set here"
+        );
+    }
+
     /// A descriptor whose schema advertises a different name than the descriptor claims would make
     /// the registry disagree with the surface it generates.
     #[test]
@@ -703,6 +749,73 @@ mod tests {
                 entry.name
             );
         }
+    }
+
+    /// Each descriptor must invoke the handler named for its own tool.
+    ///
+    /// This is the sixth per-tool fact, and the only one neither snapshot covers. `tool-matrix.tsv`
+    /// pins the deadline, lock, reach, and read-only axes; `tools-surface.json` pins the name and
+    /// schema. Handler identity is pinned by neither, so pointing `git_push_exact` at
+    /// `git_remote_check`'s handler leaves both fixtures byte-identical.
+    ///
+    /// Behavioural tests do not close it either, which was measured rather than assumed: invoked
+    /// with empty arguments, only 6 of 54 tools name themselves in the reply and only 13 of 54
+    /// replies are distinct at all, because most refuse with the same generic missing-argument text.
+    /// Two tools taking the same argument name are mutually indistinguishable that way.
+    ///
+    /// Comparing function pointers would not work either: every descriptor holds its own closure, so
+    /// 54 closures are 54 distinct addresses no matter which function each one calls.
+    ///
+    /// What does discriminate is the naming convention, which every handler follows without
+    /// exception. This enforces it, and in doing so pins the wiring: a swapped or duplicated handler
+    /// names the wrong tool and fails here.
+    #[test]
+    fn each_descriptor_calls_the_handler_named_for_its_tool() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools/registry.rs"),
+        )
+        .expect("the registry module must be readable");
+
+        let table = &source[source
+            .find("static REGISTRY")
+            .expect("the registry table must exist")..];
+        let table = &table[..table.find("\n];").expect("the table must terminate")];
+
+        let mut offenders = Vec::new();
+        let mut seen = 0;
+        for block in table.split("\n    ToolDescriptor {").skip(1) {
+            seen += 1;
+            let name = block
+                .split("name: crate::tools::")
+                .nth(1)
+                .and_then(|rest| rest.split("::NAME").next())
+                .expect("every descriptor names a tool");
+            let handler = block
+                .split("handler:")
+                .nth(1)
+                .and_then(|rest| rest.split("\n        deadline:").next())
+                .expect("every descriptor has a handler");
+            if !handler.contains(&format!("call_{name}(")) {
+                offenders.push(name.to_string());
+            }
+        }
+
+        // Fail closed. This parses its own source with fixed indentation, so a reformatted descriptor
+        // would drop out of the loop silently and the check would still pass on whatever remained.
+        // Comparing against the table length makes the formatting coupling harmless instead of
+        // load-bearing: if the parse stops matching, this fails rather than shrinking.
+        assert_eq!(
+            seen,
+            REGISTRY.len(),
+            "the source parse found {seen} descriptors but the table holds {}; the parse has \
+             drifted from the source layout and is no longer checking every tool",
+            REGISTRY.len()
+        );
+        assert!(
+            offenders.is_empty(),
+            "these descriptors invoke a handler named for a different tool, which no snapshot can \
+             detect: {offenders:?}"
+        );
     }
 
     /// Every migrated tool must be reachable by name, or dispatch would fall through to a path that
