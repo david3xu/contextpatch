@@ -445,3 +445,22 @@ judgement stands. Clause 34 states the rule for whoever next opens those files.
 The three same-name collisions in `core` — two `MAX_ARGS`, two `checked_timeout`, three constants
 worth 600 — carry notes at their declarations naming their counterparts, which is the mitigation
 rather than a rename.
+
+
+## Concurrent writers, recorded 2026-08-12
+
+Two agents wrote to this repository nine minutes apart. `git_commit_exact`'s full-dirty-set rule made
+them mutually blocking, which surfaced the conflict at commit time instead of letting one silently
+absorb the other's work.
+
+The instance was handled: the second writer stopped on detecting a dirty set it had not produced,
+refused to commit under its own message, and the work was landed by a third party after reading the
+diff and running the gate, with `a5c35dd` stating its provenance.
+
+The finding was **not** handled at the time. It lived in conversation and in one line of a commit
+body, where a fresh session would never find it — the same defect class as every staleness item above,
+committed while cataloguing them. The protocol now lives in `AGENTS.md` under "Working alongside
+another session", which is where a fresh session reads before writing.
+
+No mechanism was added. The guard already works; what was missing was the instruction not to route
+around it.

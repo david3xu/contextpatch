@@ -59,6 +59,32 @@ Operations do **not** take a repository path. They take `core::git::root::Reposi
 
 Most of the recent commit history is the migration of individual tools onto this model. A few sites still read `logical_path()`, all deliberately and none for access: two report `cwd` back to the caller, and one uses it as receipt identity, which is path-derived by design. The exact set is asserted by `the_files_that_read_a_logical_path_are_the_known_ones` in `dispatch.rs`, so read it there rather than from a list here — line numbers in prose go stale and that test does not. Adding a reader for *access* would be a regression; adding one for reporting needs the same justification these carry.
 
+### Working alongside another session
+
+Two agents wrote to this repository nine minutes apart on 2026-08-12, and the surface caught it rather
+than losing work. Worth knowing the mechanism, because it only works if you do not route around it.
+
+`git_commit_exact` requires the supplied path list to match the **entire** dirty set, and
+`git_commit_scoped` requires a clean index. So any two concurrent writers are mutually blocking: the
+second cannot commit without naming the first's files, which means it cannot commit without either
+claiming that work or noticing it. That is the guard functioning, not an obstacle to work around with
+a terminal commit.
+
+If you find files dirty that you did not write:
+
+1. **Stop before writing anything.** A further edit races a writer who may still be active.
+2. `status_guard` for the dirty set, then compare file mtimes against the last commit time. A cluster
+   of recent mtimes in a coherent work order means an active or just-finished session.
+3. Do not commit it as yours. `git_commit_exact` would carry their insertions under your message,
+   which is false attribution in a repository whose whole discipline is that claims match
+   measurements.
+4. Ask whose it is. If it is abandoned, read the full diff, run the gate, and commit with a message
+   that says what the change does and states plainly that it was authored elsewhere. `a5c35dd` is the
+   worked example.
+
+Do not take an adjacent task "while this is sorted out" either — that makes you the second concurrent
+writer and causes the collision you just avoided.
+
 ### Module size
 
 There is no enforced line limit, and any figure quoted as one has been fitted to a measurement rather than chosen. What matters is whether a file holds more than one concern.
