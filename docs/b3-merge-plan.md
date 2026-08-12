@@ -1,3 +1,10 @@
+**Status: executed.** The five prefix merges landed on `main` between `c35ba2e` and `9cf5ce1`, in
+the order below. First-parent history shows the five merge commits, so each group is still reviewable
+in isolation. Kept because the independence finding is the reusable part: groups that are thematically
+separable can be textually entangled, and measuring file overlap is what distinguishes them.
+
+---
+
 # B3 merge plan
 
 This branch is too large to merge as one diff and cannot be merged as independent pieces. It can be

@@ -1,47 +1,12 @@
-Yes, and for a reason beyond tidiness: **there is currently no checkpoint.** Roughly 60 files of coherent work sit uncommitted with no recovery point. A mistaken `checkout` or a revert loses all of it. That alone justifies committing before anything else.
+# Blocker register
 
-Three more reasons: every gate is green right now, so this is a known-good state to capture; a large uncommitted tree sitting next to in-flight `clients/vscode/` work raises collision risk; and a fresh round starting from a clean baseline plus the handover brief will be more reliable than continuing to stack context.
+Blockers for this repository, newest section last. The register is append-only: closed items keep
+their entry with the evidence that closed them, because a register that deletes what it resolved
+cannot be used to check whether a claim was ever true.
 
-## I can't do it
-
-My git access is read-only: `status`, `diff`, `log`, `show`, `rev-parse`, `ls-tree`. No `add`, no `commit`. You'll need to run it.
-
-## Do not use `git add -A`
-
-Four things in the tree aren't part of this work:
-
-```
- M .gitignore
- M CLAUDE.md
- M docs/working-notes/2026-08-06-lifecycle-and-memory-capability-review.md
-?? clients/vscode/
-```
-
-The three `package.json` bumps to 0.1.75 are yours. My read is they belong with the demonstration bundle rather than with this feature work, but that's your call — I'm flagging it because you told me not to bundle a version bump into S6.5, and sweeping yours in would violate the spirit of that.
-
-`.tmp/` is gitignored and needs no exclusion.
-
-## Suggested split, three commits mapping to the three ADRs
-
-**1. Decision records and plan docs.** The three ADRs, the design doc, the workload plan, `documentation-map.md`, `decisions/README.md`, `authority-policy.ts`. Gate: `./scripts/check-docs.sh` plus `./scripts/check-doc-commands.sh`.
-
-**2. C2, Runtime-owned capability projection.** Schema, storage, publish and read endpoints, reader rewrite, Coordinator publish, `runtime-client`, contracts, tests. Gate: runtime typecheck, `audit drift`, `bun run test`.
-
-**3. C1, dispatch intent pull.** Event type and schema, claim surface, spawn-attempt endpoint, poller, `worker-runtime` transport, failure-class vocabulary, Coordinator intent write, tests. Gate: same three plus the bridge and vocabulary lanes.
-
-Generated artifacts must travel with their commit: `api-surface.md` and `_generated/platform-audit-events/coordination_dispatch_requested.json`, or drift fires.
-
-Message convention: no attribution lines.
-
-## One thing worth fixing before you commit
-
-**ADR 0027's acceptance criterion 2 contains a false premise.** It says the re-sourcing must preserve "the existing operator remediation text." S6.5 established there was no existing remediation text — the failure class was a bare literal in two files. The criterion is satisfied by something better than it asked for, but committing an Accepted ADR with a wrong premise inside it is the same drift problem that cost us most of a pass this morning.
-
-Small edit, five minutes, and it's the kind of thing that becomes archaeology if left. Say the word and I'll do it before you commit.
-
-## What the new round should open with
-
-Not code. The C1 demonstration, since it needs no Azure resources and is the only thing that can tell us whether any of this works. Then the three tally questions, which are a message rather than work. Then G1 and G3.
+An inherited handover note that used to head this file now lives in
+[handover-notes-datacore-platform.md](handover-notes-datacore-platform.md). It was never about this
+repository.
 
 ---
 
@@ -428,3 +393,55 @@ tests: a fact asserted in one place and never checked against the thing it descr
 falls out is narrower than "write integration tests" — **a capability whose contract is dry-run-then-
 confirm must have at least one test that confirms**, because the plan path and the execution path
 share no code and a green plan proves nothing about execution.
+
+
+---
+
+# Blocker status — closed, 2026-08-12, `main` @ `dcc5a63`
+
+Everything on the register is closed except one item that needs the operator. `main` carries the work
+that was on `guarded-shell-script-list`, plus the action-surface sweep.
+
+| Blocker | Outcome |
+| --- | --- |
+| B1 compose mapping | Closed, and the specification was wrong. The six proofs are shell scripts that never invoke `docker compose`; they joined the fixed validation-script list in `965803d`. `compose_stack_run`'s empty action list is a measured fact, not a pending question. |
+| B3 merge | Closed. Five prefix merges, `c35ba2e` through `9cf5ce1`. Groups proved textually entangled, so sequential prefixes rather than independent merges. |
+| B5 rename commits | Closed. Three collectors each read a rename as one path; all three fixed, and the confirming test is what found the second and third. |
+| B6 auto-load | **Answered: negative.** A fresh session held no registry or snapshot rules, and what it did hold was measurably stale — 461 tests against a tree with 506. The rename cost automatic discovery. The fix is machine-side config; `AGENTS.md` line 6 already says so. |
+| B10 fixture regeneration | Closed as documentation. Regeneration stays terminal-only; deliberate moves are patched from the comparison's own output, which prints recorded and current verbatim. |
+| B12 half-delivered B5 | Closed by `a8368f9`. |
+| B13 uncertain write | Resolved: it never landed. |
+| B14 push credential | Closed. `gh`'s active account governs `gh`, not `git`; git accumulated `osxkeychain` ahead of the `gh` helper. Fixed repo-scoped by resetting the helper chain for `github.com`. |
+| B16 constraint sweep | Closed with a negative result: no advertised constraint lacks a guard anywhere. What exists is duplicated literals and undisclosed bounds, deferred deliberately. |
+
+## The action-surface sweep is complete
+
+Four surfaces, four enums, one per commit:
+
+| Surface | Commit | What the enum bought beyond collapsing a list |
+| --- | --- | --- |
+| `github_pr_run` | `215b74b` | Four read sites unified; two arms had restated their own name as a JSON literal beside themselves |
+| `setup_profile_run` | `ff03b04` | Per-profile, because the manifest already nested actions under the profile key while core treated the action as flat — the advertised surface had the right model and the code did not |
+| `native_build_run` | `a5c35dd` | Deleted two `unreachable!()` panics reachable only if the router and a planner disagreed |
+| `native_device_run` | `dcc5a63` | Moved the confirmation gate off a tuple's third element and onto the action; clippy then proved the catch-all dead |
+
+In each, `ALL` is the only construction site, so an omitted variant is dead code and will not compile.
+That binding was measured once, on `PrAction`, by dropping a variant and observing
+`-D dead-code` refuse it — not asserted four times.
+
+## Still open
+
+**One item, and it is the operator's.** A stale `github.com` keychain entry for a non-owner account
+still shadows every other repository on this machine; only this one carries the scoped fix. Clearing
+it is `printf 'protocol=https\nhost=github.com\n\n' | git credential-osxkeychain erase`, after which
+git re-resolves through `gh`.
+
+## Deferred, with reasons rather than as backlog
+
+The constants sweep: 78 advertised numeric bounds, no missing counterparts, the residue being
+duplicated literals. Stopped deliberately as tidiness while a hard blocker sat untouched, and the
+judgement stands. Clause 34 states the rule for whoever next opens those files.
+
+The three same-name collisions in `core` — two `MAX_ARGS`, two `checked_timeout`, three constants
+worth 600 — carry notes at their declarations naming their counterparts, which is the mitigation
+rather than a rename.
