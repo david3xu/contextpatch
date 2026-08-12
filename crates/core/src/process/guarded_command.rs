@@ -43,6 +43,15 @@ const ALLOWED_SHELL_SCRIPTS: &[&str] = &[
     "scripts/check-endpoint-literals.sh",
     "scripts/check-hosted-target-readiness.sh",
     "scripts/docs-audit.sh",
+    // The six root proofs. Measured rather than assumed: these are shell scripts that bring the
+    // system up themselves and contain no `docker compose` invocation, which is why the Compose
+    // stack tool is not the instrument for them and its action list stays empty.
+    "scripts/front-door-proof.sh",
+    "scripts/full-platform-proof.sh",
+    "scripts/prove-auto-workflow.sh",
+    "scripts/prove-dispatch-preflight.sh",
+    "scripts/prove-human-ai-team-flow.sh",
+    "scripts/prove-local-edition-bundle.sh",
 ];
 
 /// Run one allowlisted command inside the repository, through the repository's own authority.
