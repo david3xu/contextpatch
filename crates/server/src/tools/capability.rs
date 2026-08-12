@@ -259,7 +259,8 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
         "github_workflows": {
             "available": true,
             "tools": [tools::github_pr_run::NAME, tools::github_fork_prepare::NAME],
-            "actions": ["auth_status", "pr_view", "pr_comments", "pr_checks", "workflow_runs_for_commit", "workflow_run_view", "workflow_job_log", "workflow_run_rerun_failed", "pr_create"],
+            // Derived, not restated: the same set the schema advertises and the handler admits.
+            "actions": tools::github::PrAction::advertised_names(),
             "repository_targeting": "PR and Actions actions accept a validated OWNER/REPO selector for fork/upstream workflows.",
             "fork_actions": ["dry_run fork plan", "confirmed gh repo fork"],
             "guards": [

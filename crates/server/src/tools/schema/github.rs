@@ -11,7 +11,10 @@ pub(crate) fn github_pr_run_definition() -> Value {
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["auth_status", "pr_view", "pr_comments", "pr_checks", "workflow_runs_for_commit", "workflow_run_view", "workflow_job_log", "workflow_run_rerun_failed", "pr_create"],
+                            // Derived, not restated: the admitted set is `PrAction::ALL`, and the
+                            // handler's parse is the guard clause 34 requires behind an advisory
+                            // schema keyword.
+                            "enum": tools::github::PrAction::advertised_names(),
                             "description": "GitHub workflow action."
                         },
                         "number": {

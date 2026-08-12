@@ -21,6 +21,84 @@ use crate::tools::common::{
 };
 use crate::tools::git::support::git_stdout_for_tool;
 
+/// One `github_pr_run` action.
+///
+/// Parsed once at handler entry so the branches below match on a type rather than re-comparing a
+/// string. Four sites read the action, and as strings they were four comparisons the compiler could
+/// not relate to one another: the log-view gate, the argv builder, the comment filter, and the
+/// reported echo, where two arms restated their own name as a literal beside it. As variants they
+/// are exhaustive, so an action added later cannot compile until every site accounts for it, and the
+/// catch-all arm that used to absorb unknown names is gone.
+///
+/// `ALL` is the single source for the advertised schema `enum` and for the capability manifest,
+/// which both read it rather than restating these names. Safety-contract clause 34 leaves a schema
+/// keyword advisory with a core guard behind it, and `parse` is that guard: the admitted set is this
+/// list whatever the schema happens to say.
+///
+/// A variant left out of `ALL` does not compile. `ALL` is the only site that constructs one, so an
+/// omitted variant is constructed nowhere and the dead-code lint refuses it under `-D warnings`.
+/// That is what binds the list to the enum without a macro, and it was measured rather than assumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrAction {
+    AuthStatus,
+    PrView,
+    PrComments,
+    PrChecks,
+    WorkflowRunsForCommit,
+    WorkflowRunView,
+    WorkflowJobLog,
+    WorkflowRunRerunFailed,
+    PrCreate,
+}
+
+impl PrAction {
+    /// Every action, in the order the schema advertises them.
+    pub const ALL: &'static [Self] = &[
+        Self::AuthStatus,
+        Self::PrView,
+        Self::PrComments,
+        Self::PrChecks,
+        Self::WorkflowRunsForCommit,
+        Self::WorkflowRunView,
+        Self::WorkflowJobLog,
+        Self::WorkflowRunRerunFailed,
+        Self::PrCreate,
+    ];
+
+    /// The wire name, which is the only form a caller or a reader of the manifest ever sees.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthStatus => "auth_status",
+            Self::PrView => "pr_view",
+            Self::PrComments => "pr_comments",
+            Self::PrChecks => "pr_checks",
+            Self::WorkflowRunsForCommit => "workflow_runs_for_commit",
+            Self::WorkflowRunView => "workflow_run_view",
+            Self::WorkflowJobLog => "workflow_job_log",
+            Self::WorkflowRunRerunFailed => "workflow_run_rerun_failed",
+            Self::PrCreate => "pr_create",
+        }
+    }
+
+    /// The advertised names, for surfaces that must report the set rather than restate it.
+    pub fn advertised_names() -> Vec<&'static str> {
+        Self::ALL.iter().map(|action| action.as_str()).collect()
+    }
+
+    fn parse(action: &str) -> Result<Self, String> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == action)
+            .ok_or_else(|| {
+                format!(
+                    "{} refused: unsupported action `{action}`",
+                    tools::github_pr_run::NAME
+                )
+            })
+    }
+}
+
 pub(crate) fn call_github_pr_run<'a>(
     repository_root: impl Into<RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,
@@ -28,7 +106,7 @@ pub(crate) fn call_github_pr_run<'a>(
     const CREATE_CONFIRMATION: &str = "create pull request";
     const RERUN_CONFIRMATION: &str = "rerun failed workflow jobs";
 
-    let action = required_string(arguments, "action")?;
+    let action = PrAction::parse(required_string(arguments, "action")?)?;
     // `gh` needs a working directory to discover which repository it is acting on. It gets the retained
     // descriptor rather than a name, so the repository it discovers is the one that was selected. The
     // logical path is still reported, because that is what a caller reading `cwd` expects to see.
@@ -37,7 +115,7 @@ pub(crate) fn call_github_pr_run<'a>(
         resolve_child_cwd(root, None).map_err(|error| format!("github_pr_run refused: {error}"))?;
     let root = cwd.logical_path();
     let repository = optional_github_repository(arguments)?;
-    let job_log_view = if action == "workflow_job_log" {
+    let job_log_view = if action == PrAction::WorkflowJobLog {
         Some(workflow_job_log_view(arguments)?)
     } else {
         if arguments.contains_key("log_view") {
@@ -48,7 +126,7 @@ pub(crate) fn call_github_pr_run<'a>(
         None
     };
     let args: Vec<String> = match action {
-        "auth_status" => {
+        PrAction::AuthStatus => {
             if repository.is_some() {
                 return Err(
                     "github_pr_run refused: repository is not accepted for auth_status".to_string(),
@@ -56,7 +134,7 @@ pub(crate) fn call_github_pr_run<'a>(
             }
             vec!["auth".to_string(), "status".to_string()]
         }
-        "pr_view" => {
+        PrAction::PrView => {
             let number = optional_u64(arguments, "number")?.ok_or_else(|| {
                 "github_pr_run refused: number is required for pr_view".to_string()
             })?;
@@ -70,7 +148,7 @@ pub(crate) fn call_github_pr_run<'a>(
             append_repository(&mut args, repository.as_deref());
             args
         }
-        "pr_comments" => {
+        PrAction::PrComments => {
             let number = optional_u64(arguments, "number")?.ok_or_else(|| {
                 "github_pr_run refused: number is required for pr_comments".to_string()
             })?;
@@ -86,7 +164,7 @@ pub(crate) fn call_github_pr_run<'a>(
             append_repository(&mut args, repository.as_deref());
             args
         }
-        "pr_checks" => {
+        PrAction::PrChecks => {
             let number = optional_u64(arguments, "number")?.ok_or_else(|| {
                 "github_pr_run refused: number is required for pr_checks".to_string()
             })?;
@@ -101,7 +179,7 @@ pub(crate) fn call_github_pr_run<'a>(
             append_repository(&mut args, repository.as_deref());
             args
         }
-        "workflow_runs_for_commit" => {
+        PrAction::WorkflowRunsForCommit => {
             let head_sha = required_github_head_sha(arguments)?;
             let limit = result_limit(arguments, "workflow_runs_for_commit", 20, 50)?;
             let mut args = vec![
@@ -117,7 +195,7 @@ pub(crate) fn call_github_pr_run<'a>(
             append_repository(&mut args, repository.as_deref());
             args
         }
-        "workflow_run_view" => {
+        PrAction::WorkflowRunView => {
             let run_id = optional_u64(arguments, "run_id")?.ok_or_else(|| {
                 "github_pr_run refused: run_id is required for workflow_run_view".to_string()
             })?;
@@ -131,7 +209,7 @@ pub(crate) fn call_github_pr_run<'a>(
             append_repository(&mut args, repository.as_deref());
             args
         }
-        "workflow_job_log" => {
+        PrAction::WorkflowJobLog => {
             let job_id = optional_u64(arguments, "job_id")?.ok_or_else(|| {
                 "github_pr_run refused: job_id is required for workflow_job_log".to_string()
             })?;
@@ -145,7 +223,7 @@ pub(crate) fn call_github_pr_run<'a>(
             append_repository(&mut args, repository.as_deref());
             args
         }
-        "workflow_run_rerun_failed" => {
+        PrAction::WorkflowRunRerunFailed => {
             let run_id = optional_u64(arguments, "run_id")?.ok_or_else(|| {
                 "github_pr_run refused: run_id is required for workflow_run_rerun_failed"
                     .to_string()
@@ -161,7 +239,7 @@ pub(crate) fn call_github_pr_run<'a>(
             if dry_run {
                 return serde_json::to_string_pretty(&json!({
                     "tool": tools::github_pr_run::NAME,
-                    "action": "workflow_run_rerun_failed",
+                    "action": action.as_str(),
                     "dry_run": true,
                     "program": "gh",
                     "args": args,
@@ -178,7 +256,7 @@ pub(crate) fn call_github_pr_run<'a>(
             }
             args
         }
-        "pr_create" => {
+        PrAction::PrCreate => {
             let base = nonempty_tool_string(
                 tools::github_pr_run::NAME,
                 "base",
@@ -216,7 +294,7 @@ pub(crate) fn call_github_pr_run<'a>(
             if dry_run {
                 return serde_json::to_string_pretty(&json!({
                     "tool": tools::github_pr_run::NAME,
-                    "action": "pr_create",
+                    "action": action.as_str(),
                     "dry_run": true,
                     "program": "gh",
                     "args": args,
@@ -232,11 +310,6 @@ pub(crate) fn call_github_pr_run<'a>(
             }
             args
         }
-        _ => {
-            return Err(format!(
-                "github_pr_run refused: unsupported action `{action}`"
-            ))
-        }
     };
 
     let mut command = Command::new("gh");
@@ -247,7 +320,7 @@ pub(crate) fn call_github_pr_run<'a>(
         .map_err(|error| format!("github_pr_run refused: failed to run gh: {error}"))?;
 
     let raw_stdout = String::from_utf8_lossy(&output.stdout);
-    let stdout_source = if action == "pr_comments" && output.status.success() {
+    let stdout_source = if action == PrAction::PrComments && output.status.success() {
         filter_pr_comments(&raw_stdout, arguments)?
     } else {
         raw_stdout.into_owned()
@@ -261,7 +334,7 @@ pub(crate) fn call_github_pr_run<'a>(
     let exit_code = output.status.code();
     let mut response = json!({
         "tool": tools::github_pr_run::NAME,
-        "action": action,
+        "action": action.as_str(),
         "program": "gh",
         "args": args,
         "cwd": root.display().to_string(),
@@ -496,4 +569,66 @@ pub(crate) fn call_github_fork_prepare<'a>(
         "remotes": remotes
     }))
     .map_err(|error| format!("github_fork_prepare refused: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{call_github_pr_run, PrAction};
+    use contextpatch_core::git::RepositoryRoot;
+    use serde_json::json;
+
+    /// Every variant reaches its own arm, and a name outside the set does not.
+    ///
+    /// The population comes from `ALL` rather than a list written here, so this cannot pass by
+    /// agreeing with a copy of itself. That distinction is the whole point: a test naming the nine
+    /// actions would prove the enum agrees with the test, which is what the register calls mention
+    /// rather than membership.
+    ///
+    /// Each call carries only `action` and `repository`. Every arm refuses that shape, either on a
+    /// missing required parameter or, for `auth_status`, on rejecting `repository` outright, so no
+    /// variant reaches `gh` and nothing here depends on an external program. What is asserted is the
+    /// absence of the vocabulary refusal: a variant that failed to dispatch would report an
+    /// unsupported action rather than a parameter, which is the failure this guards.
+    #[test]
+    fn every_action_variant_dispatches_and_an_unknown_name_does_not() {
+        for action in PrAction::ALL.iter().copied() {
+            let message = refusal(action.as_str());
+            assert!(
+                !message.contains("unsupported action"),
+                "{} must reach its own arm: {message}",
+                action.as_str()
+            );
+        }
+
+        let message = refusal("workflow_run_delete");
+        assert!(
+            message.contains("unsupported action `workflow_run_delete`"),
+            "a name outside the set must be refused as unsupported: {message}"
+        );
+    }
+
+    /// Round-trips every wire name through the parse the schema keyword defers to.
+    ///
+    /// Not a tautology, though it looks close to one: `parse` scans `ALL` by wire name, so if two
+    /// variants ever carried the same string the scan would return the earlier one and the later
+    /// one's round trip would fail here. A duplicated name is the copy-paste defect this shape has,
+    /// and it is invisible to the compiler because the strings are data.
+    #[test]
+    fn every_advertised_name_parses_back_to_its_variant() {
+        for action in PrAction::ALL.iter().copied() {
+            assert_eq!(
+                PrAction::parse(action.as_str()).expect("an advertised name must parse"),
+                action
+            );
+        }
+    }
+
+    fn refusal(action: &str) -> String {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("action".to_string(), json!(action));
+        arguments.insert("repository".to_string(), json!("owner/name"));
+        call_github_pr_run(RepositoryRoot::from_path(&std::env::temp_dir()), &arguments)
+            .map(|response| panic!("an underspecified call must refuse, got: {response}"))
+            .unwrap_err()
+    }
 }
