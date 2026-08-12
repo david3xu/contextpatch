@@ -674,6 +674,50 @@ fn stage2_git_restore_exact_restores_only_requested_tracked_dirty_paths() {
 }
 
 #[test]
+fn stage2_a_rename_commits_through_the_guarded_path_beside_an_unrelated_edit() {
+    // The only test on this path that confirms rather than plans, and it exists because two defects
+    // hid behind a green dry run. Planning exercises neither staging nor verification, so the plan
+    // reported ok while `git add -- <rename source>` matched nothing and aborted, and once that was
+    // fixed the staged set reported one side of the rename against an expected set holding both.
+    // Five parser tests passed throughout. Only a confirmed run reaches either step.
+    //
+    // The unrelated edit is part of the case rather than decoration: staging has to drop the rename
+    // source while still staging everything else named beside it.
+    let root =
+        git_repo("stage2_a_rename_commits_through_the_guarded_path_beside_an_unrelated_edit");
+    fs::write(root.join("old.txt"), "moved\n").unwrap();
+    fs::write(root.join("keep.txt"), "base\n").unwrap();
+    git(&root, &["add", "old.txt", "keep.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "initial"]);
+    fs::write(root.join("keep.txt"), "edited\n").unwrap();
+
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"move_tracked","arguments":{"from":"old.txt","to":"new.txt","dry_run":false,"confirm":"move tracked file"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["new.txt","keep.txt"],"subject":"One side named"}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"git_commit_exact","arguments":{"paths":["old.txt","new.txt","keep.txt"],"subject":"Rename beside an edit","dry_run":false,"confirm":"commit exact paths"}}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status_guard","arguments":{}}}"#,
+    ];
+    let responses = run_server_sequential(&root, &requests);
+
+    assert_text(&responses[0], "\"moved\": true");
+
+    // Omitting a side is refused: both paths changed, so the exact set does not match the dirty set.
+    assert_eq!(responses[1]["result"]["isError"], true);
+
+    // The confirmed call is the whole point. It failed at staging before the first fix and at
+    // verification after it.
+    assert_text(&responses[2], "\"committed\": true");
+    assert_text(&responses[3], "clean");
+
+    assert!(!root.join("old.txt").exists());
+    assert_eq!(fs::read_to_string(root.join("new.txt")).unwrap(), "moved\n");
+    assert_eq!(
+        fs::read_to_string(root.join("keep.txt")).unwrap(),
+        "edited\n"
+    );
+}
+
+#[test]
 fn stage2_move_and_delete_tracked_files_are_dry_run_hash_and_confirmation_guarded() {
     let root =
         git_repo("stage2_move_and_delete_tracked_files_are_dry_run_hash_and_confirmation_guarded");

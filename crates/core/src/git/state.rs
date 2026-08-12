@@ -153,6 +153,34 @@ pub fn parse_porcelain_paths(
     Ok(paths)
 }
 
+/// Every path Git reports only as the source of a staged rename.
+///
+/// These cannot be staged by pathspec. `git mv` has already removed the source from both the index and
+/// the worktree, so `git add -- <source>` matches nothing and aborts the entire invocation, taking the
+/// other paths with it. They remain part of the changed set a caller must name, which is why the gate
+/// and the staging step need different lists: naming both sides is how a caller acknowledges the
+/// rename, while only one side can be handed to `git add`.
+///
+/// A copy's source is deliberately excluded. A copy leaves its original in place, so pathspec matches
+/// it and there is nothing to work around.
+pub fn parse_porcelain_rename_sources(
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let mut sources = BTreeSet::new();
+    let mut entries = porcelain_entries(bytes);
+    while let Some(entry) = entries.next() {
+        ensure_porcelain_entry_shape(entry, label)?;
+        if is_rename_or_copy(entry) {
+            let original = porcelain_original_path(&mut entries, label)?;
+            if entry[0] == b'R' || entry[1] == b'R' {
+                sources.insert(original);
+            }
+        }
+    }
+    Ok(sources)
+}
+
 /// Parse porcelain v1 entries, keeping only untracked paths.
 ///
 /// A rename's original path is consumed and dropped: it is tracked by definition, so it can never be
@@ -198,6 +226,40 @@ pub fn parse_untracked_and_ignored_porcelain_paths(
                     .trim_end_matches('/')
                     .to_string(),
             );
+        }
+    }
+    Ok(paths)
+}
+
+/// Parse `--name-status -z` output into the set of paths it reports.
+///
+/// The field layout is not porcelain's. Porcelain packs the two status characters and a space into the
+/// front of the path field; `--name-status -z` emits the status as its own NUL-terminated field, so a
+/// normal change is two fields and a rename or copy is three, the score being part of the status field
+/// as `R100` rather than a bare `R`. Reusing the porcelain parser here would misread every record.
+///
+/// Both sides of a rename are collected for the same reason as in [`parse_porcelain_paths`]: the index
+/// holds a deletion and an addition, so a caller's exact set names both, and reporting one would make
+/// the staged set differ from the requested set for a rename that staged correctly.
+pub fn parse_name_status_paths(
+    bytes: &[u8],
+    label: &str,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let mut paths = BTreeSet::new();
+    let mut fields = porcelain_entries(bytes);
+    while let Some(status) = fields.next() {
+        let carries_two_paths = matches!(status.first(), Some(b'R') | Some(b'C'));
+        let path = fields.next().ok_or_else(|| {
+            ContextPatchError::new(format!("{label} reported a status with no path"))
+        })?;
+        paths.insert(porcelain_path(path, label)?);
+        if carries_two_paths {
+            let destination = fields.next().ok_or_else(|| {
+                ContextPatchError::new(format!(
+                    "{label} reported a rename or copy with only one path"
+                ))
+            })?;
+            paths.insert(porcelain_path(destination, label)?);
         }
     }
     Ok(paths)
@@ -276,6 +338,17 @@ pub fn status_paths<'a>(
     parse_porcelain_paths(&output.stdout, STATUS_LABEL)
 }
 
+/// Every path Git reports only as the source of a staged rename.
+pub fn rename_source_paths<'a>(
+    repository: impl Into<GitRepository<'a>>,
+) -> Result<BTreeSet<String>, ContextPatchError> {
+    let output = output(
+        repository,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    parse_porcelain_rename_sources(&output.stdout, STATUS_LABEL)
+}
+
 /// Only the untracked paths Git reports.
 pub fn untracked_paths<'a>(
     repository: impl Into<GitRepository<'a>>,
@@ -305,11 +378,15 @@ pub fn untracked_and_ignored_paths<'a>(
 }
 
 /// The paths currently staged in the index.
+///
+/// `--name-status` rather than `--name-only`, because `--name-only` reports a rename as its new path
+/// alone. The exact set a caller must name holds both sides, so with `--name-only` a correctly staged
+/// rename verified as a mismatch after staging had already happened.
 pub fn cached_paths<'a>(
     repository: impl Into<GitRepository<'a>>,
 ) -> Result<BTreeSet<String>, ContextPatchError> {
-    let output = output(repository, &["diff", "--cached", "--name-only", "-z"])?;
-    parse_nul_paths(&output.stdout, CACHED_DIFF_LABEL)
+    let output = output(repository, &["diff", "--cached", "--name-status", "-z"])?;
+    parse_name_status_paths(&output.stdout, CACHED_DIFF_LABEL)
 }
 
 /// Short-format status text, including untracked files.
@@ -541,6 +618,19 @@ mod tests {
         git(&root, &["add", "staged.txt"]);
 
         assert_eq!(cached_paths(&root).unwrap(), names(&["staged.txt"]));
+    }
+
+    #[test]
+    fn cached_paths_report_both_sides_of_a_staged_rename() {
+        // The index holds a deletion and an addition, and the exact set a caller names holds both, so
+        // reporting only the new path made a correctly staged rename verify as a mismatch.
+        let root = committed_repo("cached_paths_rename");
+        fs::write(root.join("old.txt"), "moved\n").unwrap();
+        git(&root, &["add", "old.txt"]);
+        git(&root, &["commit", "--quiet", "-m", "add old"]);
+        git(&root, &["mv", "old.txt", "new.txt"]);
+
+        assert_eq!(cached_paths(&root).unwrap(), names(&["new.txt", "old.txt"]));
     }
 
     #[test]
