@@ -284,7 +284,9 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
             "default_max_timeout_secs": 600,
             "harbor_run_max_timeout_secs": 3600,
             "programs": {
-                "git": ["status", "diff", "log", "show", "rev-parse", "ls-tree"],
+                // Derived, not restated: this copy fell two behind when C38 admitted `rev-list`
+                // and `shortlog`, while the two sites that held the set as prose were updated.
+                "git": contextpatch_core::process::guarded_command::allowed_git_subcommands(),
                 "cargo": ["check", "test", "build", "clippy", "fmt (only with --check)"],
                 "bun": ["run", "test"],
                 "npm": ["run", "test"],

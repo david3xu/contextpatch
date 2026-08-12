@@ -54,6 +54,28 @@ const ALLOWED_SHELL_SCRIPTS: &[&str] = &[
     "scripts/prove-local-edition-bundle.sh",
 ];
 
+/// Git subcommands the guarded runner may execute.
+///
+/// A const rather than a `matches!` pattern so a surface can read the set instead of restating it.
+/// The restatement was the defect: C38 admitted `rev-list` and `shortlog` and updated the two sites
+/// that held the set as prose, while the capability manifest held it as a literal array and fell two
+/// behind. A pattern gives a reporting site nothing to point at, so copying is the only option left,
+/// and the copy is what drifts.
+///
+/// Every entry only reads history. They share a namespace with `fetch`, `push` and `commit`, so the
+/// boundary is a property of this list rather than of the word `git`, which is why the refusals are
+/// asserted beside the admissions rather than left implied.
+const GIT_SUBCOMMANDS: &[&str] = &[
+    "status",
+    "diff",
+    "log",
+    "show",
+    "rev-parse",
+    "rev-list",
+    "shortlog",
+    "ls-tree",
+];
+
 /// Run one allowlisted command inside the repository, through the repository's own authority.
 ///
 /// The working directory is opened relative to the root descriptor and held open until the child has been
@@ -172,19 +194,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
 
     let subcommand = args.first().map(String::as_str);
     let allowed = match program {
-        "git" => matches!(
-            subcommand,
-            Some(
-                "status"
-                    | "diff"
-                    | "log"
-                    | "show"
-                    | "rev-parse"
-                    | "rev-list"
-                    | "shortlog"
-                    | "ls-tree"
-            )
-        ),
+        "git" => subcommand.is_some_and(|subcommand| GIT_SUBCOMMANDS.contains(&subcommand)),
         "cargo" => match subcommand {
             Some("check" | "test" | "build" | "clippy") => true,
             Some("fmt") => cargo_fmt_arguments_are_allowed(args),
@@ -394,6 +404,11 @@ pub fn allowed_shell_scripts() -> &'static [&'static str] {
     ALLOWED_SHELL_SCRIPTS
 }
 
+/// The permitted Git subcommands, for surfaces that must report the set rather than restate it.
+pub fn allowed_git_subcommands() -> &'static [&'static str] {
+    GIT_SUBCOMMANDS
+}
+
 fn is_allowed_shell_script(args: &[String]) -> bool {
     let Some(first) = args.first() else {
         return false;
@@ -451,7 +466,7 @@ mod tests {
 
     use super::{
         checked_command_timeout, is_pytest_plugin_option, redact_and_truncate_output,
-        redact_and_truncate_output_tail, run_guarded_command, validate_command,
+        redact_and_truncate_output_tail, run_guarded_command, validate_command, GIT_SUBCOMMANDS,
     };
     use crate::process::runner::redact_line;
 
@@ -693,6 +708,23 @@ mod tests {
                 message.contains("not allowlisted"),
                 "unexpected refusal for {values:?}: {message}"
             );
+        }
+    }
+
+    /// Every admitted subcommand is checked, rather than a sample of them.
+    ///
+    /// The test above reaches two members and the neighbours around them, which was as far as any
+    /// assertion could reach while the set was a `matches!` pattern: a pattern cannot be iterated, so
+    /// there was nothing for a test to walk. Holding the set in a const is what makes this assertion
+    /// available at all, and this is the first test here to check every member rather than a sample.
+    ///
+    /// Emptying or truncating the const cannot pass this vacuously, because
+    /// `runs_allowlisted_git_status` and the admissions above each name a member directly.
+    #[test]
+    fn every_admitted_git_subcommand_is_permitted() {
+        for &subcommand in GIT_SUBCOMMANDS {
+            validate_command("git", &args(&[subcommand]))
+                .unwrap_or_else(|error| panic!("git {subcommand} must be permitted: {error}"));
         }
     }
 
