@@ -788,15 +788,27 @@ Rules:
 - The working directory must resolve inside the configured repository root.
 - The executable must be an allowlisted program name, not a path.
 - The subcommand must be allowlisted:
-  - `git`: `status`, `diff`, `log`, `show`, `rev-parse`, `ls-tree`
-  - `cargo`: `check`, `test`, `build`, `clippy`, and `fmt` only when `--check` is present and `--emit` is absent
+  - `git`: `status`, `diff`, `log`, `show`, `rev-parse`, `rev-list`, `shortlog`, `ls-tree`
+  - `cargo`: `check`, `test`, `build`, `clippy`, `run`, and `fmt` only when `--check` is present and `--emit` is absent
   - `bun`: `run`, `test`
   - `npm`: `run`, `test`
   - `pnpm`: `run`, `test`
   - `python`/`python3`: a repo-relative `.py` script path as the first argument
   - `pytest`: validation invocation
-  - `bash`: only a script on the fixed validation-script list, with an optional leading `./` — `references/check-base-image.sh` (optionally with the exact `task` argument), `scripts/check-doc-commands.sh`, `scripts/check-docs.sh`, `scripts/check-endpoint-literals.sh`, `scripts/check-hosted-target-readiness.sh`, `scripts/docs-audit.sh` (each argument-free)
+  - `bash`: only a script on the fixed validation-script list, with an optional leading `./` — `references/check-base-image.sh` (optionally with the exact `task` argument), the argument-free documentation gates (`scripts/check-doc-commands.sh`, `scripts/check-docs.sh`, `scripts/check-endpoint-literals.sh`, `scripts/check-hosted-target-readiness.sh`, `scripts/docs-audit.sh`), the six argument-free root proofs (`scripts/front-door-proof.sh`, `scripts/full-platform-proof.sh`, `scripts/prove-auto-workflow.sh`, `scripts/prove-dispatch-preflight.sh`, `scripts/prove-human-ai-team-flow.sh`, `scripts/prove-local-edition-bundle.sh`), **or** an argument-free script the *selected* repository declares for itself — see "Repository-declared scripts" below
   - `rg`: search invocation
+
+Repository-declared scripts: the selected repository root may carry a `.contextpatch/allowed-scripts.json`
+file with a `shell_scripts` array of repo-relative paths, each one usable with `bash` under exactly the
+same argument-free rule as the fixed list above. This is what lets a repository other than contextpatch
+itself expose its own gate script through `run_guarded_command` without a contextpatch source change —
+the fixed list stays the baseline every repository gets, and a declaration in one repository's manifest
+never applies to another configured repository. The manifest is capped at 16 KiB and 64 entries; each
+declared path is validated the same way an invoked argument already is (repo-relative, no traversal, no
+absolute path). A present but malformed manifest is refused rather than treated as empty, so a typo does
+not silently read as "this repository declared nothing." Still an exact enumeration per safety-contract
+clause 19 — never a directory glob, and never a path to a program other than `bash`.
+
 - The default timeout is 120 seconds and the maximum is 600 seconds.
 - Arguments that directly reference paths outside the repository root must be refused, except for the server-owned `{scratch}` token.
 - `{scratch}` may appear inside data/output arguments and expands to the stable repository-specific scratch root; traversal outside that root must be refused.

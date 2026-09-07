@@ -54,6 +54,23 @@ const ALLOWED_SHELL_SCRIPTS: &[&str] = &[
     "scripts/prove-local-edition-bundle.sh",
 ];
 
+/// Where a *target* repository declares its own additional `bash` scripts for `run_guarded_command`.
+///
+/// Read from the selected repository root, never from contextpatch's own checkout, so any configured
+/// `--repo-root` can extend its own validation-script allowlist without a contextpatch source change.
+/// `ALLOWED_SHELL_SCRIPTS` stays exactly as it is: the baseline every repository gets. This manifest is
+/// what lets one repository's own gate script (`tools/run_gates.sh`, say) join the allowlist without
+/// every other configured repository inheriting it, and without hardcoding one repository's paths into
+/// this binary. Still an exact enumeration per safety-contract clause 19 — a repository lists scripts by
+/// name, not a directory pattern, and each entry is argument-free like every non-base-image entry above.
+const ALLOWED_SCRIPTS_MANIFEST: &str = ".contextpatch/allowed-scripts.json";
+/// Generous for a name list, small enough that a malformed or hostile manifest cannot make this an
+/// unbounded read. A manifest actually listing 64 scripts is already a sign the repository wants
+/// something closer to a directory grant, which is exactly what this format refuses to be.
+const MAX_MANIFEST_BYTES: u64 = 16 * 1024;
+const MAX_MANIFEST_SCRIPTS: usize = 64;
+const MAX_MANIFEST_SCRIPT_PATH_LEN: usize = 4096;
+
 /// Git subcommands the guarded runner may execute.
 ///
 /// A const rather than a `matches!` pattern so a surface can read the set instead of restating it.
@@ -92,7 +109,14 @@ pub fn run_guarded_command<'a>(
     let root = repo_root.into();
     let cwd = resolve_child_cwd(root, cwd)?;
 
-    validate_command(program, args)?;
+    if let Err(error) = validate_command(program, args) {
+        // The fixed list refused it; give the target repository's own manifest a chance before
+        // surfacing that refusal. Scoped to `bash` so every other program's validation stays exactly
+        // as cheap and as fixed as it already was.
+        if program != "bash" || !is_repo_declared_shell_script(root, args)? {
+            return Err(error);
+        }
+    }
     let timeout = checked_command_timeout(program, args, timeout_secs)?;
     let expanded_args = crate::fs::scratch::expand_scratch_tokens(root, args)?;
     let output = run_bounded_command(
@@ -196,7 +220,10 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
     let allowed = match program {
         "git" => subcommand.is_some_and(|subcommand| GIT_SUBCOMMANDS.contains(&subcommand)),
         "cargo" => match subcommand {
-            Some("check" | "test" | "build" | "clippy") => true,
+            // `run` executes a compiled workspace binary; `test` already executes compiled test
+            // binaries under the same reviewed-repository-code trust, so this is not a wider trust
+            // boundary, only a wider set of already-trusted code it can reach.
+            Some("check" | "test" | "build" | "clippy" | "run") => true,
             Some("fmt") => cargo_fmt_arguments_are_allowed(args),
             _ => false,
         },
@@ -425,6 +452,106 @@ fn is_allowed_shell_script(args: &[String]) -> bool {
     args.len() == 1
 }
 
+/// Whether a `bash <script>` invocation names a script the *target* repository declared for itself.
+///
+/// Called only after [`is_allowed_shell_script`] has already refused the call against the fixed list,
+/// so the manifest read never happens on the common path where the fixed list already admits it, and
+/// never happens at all for the sixteen programs other than `bash`.
+fn is_repo_declared_shell_script(
+    root: crate::git::RepositoryRoot<'_>,
+    args: &[String],
+) -> Result<bool, ContextPatchError> {
+    if args.len() != 1 {
+        return Ok(false);
+    }
+    let Some(first) = args.first() else {
+        return Ok(false);
+    };
+    let script = first.strip_prefix("./").unwrap_or(first);
+    let declared = repo_declared_shell_scripts(root)?;
+    Ok(declared.iter().any(|entry| entry == script))
+}
+
+/// Read and validate the target repository's own script manifest, if it has one.
+///
+/// Reads through [`crate::fs::rooted`] exactly like every other repository file this server opens:
+/// descriptor-relative, `O_NOFOLLOW` at every component, refusing anything that is not a regular file.
+/// A missing manifest is not an error — most configured repositories will never have one — but a
+/// present, malformed one is refused rather than silently ignored, so a typo does not read as "no
+/// scripts declared" when the repository owner believed otherwise.
+fn repo_declared_shell_scripts(
+    root: crate::git::RepositoryRoot<'_>,
+) -> Result<Vec<String>, ContextPatchError> {
+    if !crate::fs::rooted::exists(root, ALLOWED_SCRIPTS_MANIFEST)? {
+        return Ok(Vec::new());
+    }
+
+    let mut file = crate::fs::rooted::open_regular_file(root, ALLOWED_SCRIPTS_MANIFEST)
+        .map_err(|error| manifest_error(format!("failed to open: {error}")))?;
+    let length = file
+        .metadata()
+        .map_err(|error| manifest_error(format!("failed to inspect: {error}")))?
+        .len();
+    if length > MAX_MANIFEST_BYTES {
+        return Err(manifest_error(format!(
+            "exceeds the {MAX_MANIFEST_BYTES}-byte manifest limit"
+        )));
+    }
+
+    let mut contents = String::new();
+    std::io::Read::read_to_string(&mut file, &mut contents)
+        .map_err(|error| manifest_error(format!("failed to read: {error}")))?;
+    let manifest: serde_json::Value = serde_json::from_str(&contents)
+        .map_err(|error| manifest_error(format!("is not valid JSON: {error}")))?;
+    let scripts = manifest
+        .get("shell_scripts")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| manifest_error("must be a JSON object with a `shell_scripts` array"))?;
+    if scripts.len() > MAX_MANIFEST_SCRIPTS {
+        return Err(manifest_error(format!(
+            "declares more than {MAX_MANIFEST_SCRIPTS} scripts"
+        )));
+    }
+
+    scripts
+        .iter()
+        .map(|entry| {
+            let path = entry
+                .as_str()
+                .ok_or_else(|| manifest_error("`shell_scripts` entries must be strings"))?;
+            validate_manifest_script_path(path)?;
+            // Normalized the same way an invoked argument is in `is_allowed_shell_script`, so a
+            // declaration written as `./tools/gate.sh` matches an invocation of either spelling.
+            Ok(path.strip_prefix("./").unwrap_or(path).to_string())
+        })
+        .collect()
+}
+
+fn manifest_error(reason: impl std::fmt::Display) -> ContextPatchError {
+    ContextPatchError::new(format!("{ALLOWED_SCRIPTS_MANIFEST} {reason}"))
+}
+
+/// A manifest-declared path must look like the argv strings this runner already accepts: repo-relative,
+/// no traversal, no absolute path. This validates the *declaration*, not the invocation — the argument
+/// actually supplied to `bash` is independently re-checked by `validate_common_command_shape` before it
+/// ever reaches [`is_repo_declared_shell_script`], so a permissive entry here cannot by itself reach
+/// outside the repository; it can only fail to match anything real.
+fn validate_manifest_script_path(path: &str) -> Result<(), ContextPatchError> {
+    if path.is_empty()
+        || path.len() > MAX_MANIFEST_SCRIPT_PATH_LEN
+        || path.starts_with('/')
+        || path == ".."
+        || path.starts_with("../")
+        || path.contains("/../")
+        || path.contains('\0')
+    {
+        return Err(manifest_error(format!(
+            "declares an invalid script path: {path}"
+        )));
+    }
+    Ok(())
+}
+
 /// pytest accepts node ids and options freely, so refuse the options that load a caller-named
 /// plugin. Outside-repository paths are already refused by argument path confinement, and ambient
 /// plugin autoload is disabled for pytest children in the bounded runner.
@@ -466,7 +593,8 @@ mod tests {
 
     use super::{
         checked_command_timeout, is_pytest_plugin_option, redact_and_truncate_output,
-        redact_and_truncate_output_tail, run_guarded_command, validate_command, GIT_SUBCOMMANDS,
+        redact_and_truncate_output_tail, run_guarded_command, validate_command,
+        validate_manifest_script_path, GIT_SUBCOMMANDS,
     };
     use crate::process::runner::redact_line;
 
@@ -573,6 +701,163 @@ mod tests {
                 "unexpected refusal for {values:?}: {message}"
             );
         }
+    }
+
+    #[test]
+    fn manifest_script_paths_are_validated() {
+        for valid in [
+            "tools/run_gates.sh",
+            "build/probe_arch/run_probe.sh",
+            "./tools/gate.sh",
+        ] {
+            validate_manifest_script_path(valid)
+                .unwrap_or_else(|error| panic!("{valid:?} must be a valid declaration: {error}"));
+        }
+        for invalid in [
+            "",
+            "..",
+            "../outside.sh",
+            "/etc/passwd",
+            "a/../../etc/passwd",
+        ] {
+            assert!(
+                validate_manifest_script_path(invalid).is_err(),
+                "{invalid:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn permits_a_repository_declared_shell_script() {
+        let root = temp_root("repo-declared-script");
+        fs::create_dir_all(root.join(".contextpatch")).unwrap();
+        // Declared with a leading `./` to pin the normalization against the invocation below, which
+        // omits it.
+        fs::write(
+            root.join(".contextpatch/allowed-scripts.json"),
+            r#"{"shell_scripts": ["./tools/run_gates.sh"]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("tools")).unwrap();
+        fs::write(root.join("tools/run_gates.sh"), "#!/bin/sh\necho gate-ok\n").unwrap();
+
+        let output = run_guarded_command(
+            &root,
+            None,
+            "bash",
+            &["tools/run_gates.sh".to_string()],
+            Some(10),
+        )
+        .unwrap_or_else(|error| panic!("declared script must be permitted: {error}"));
+
+        assert!(output.contains("gate-ok"), "unexpected output: {output}");
+    }
+
+    #[test]
+    fn repository_declared_scripts_do_not_leak_to_other_repositories() {
+        let declaring_root = temp_root("declares-script");
+        fs::create_dir_all(declaring_root.join(".contextpatch")).unwrap();
+        fs::write(
+            declaring_root.join(".contextpatch/allowed-scripts.json"),
+            r#"{"shell_scripts": ["tools/run_gates.sh"]}"#,
+        )
+        .unwrap();
+
+        let other_root = temp_root("does-not-declare-script");
+        fs::create_dir_all(other_root.join("tools")).unwrap();
+        fs::write(
+            other_root.join("tools/run_gates.sh"),
+            "#!/bin/sh\necho gate-ok\n",
+        )
+        .unwrap();
+
+        let error = run_guarded_command(
+            &other_root,
+            None,
+            "bash",
+            &["tools/run_gates.sh".to_string()],
+            Some(10),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("not allowlisted"),
+            "unexpected: {error}"
+        );
+    }
+
+    #[test]
+    fn missing_manifest_permits_only_the_fixed_list() {
+        let root = temp_root("no-manifest");
+
+        let error = run_guarded_command(
+            &root,
+            None,
+            "bash",
+            &["scripts/other.sh".to_string()],
+            Some(10),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("not allowlisted"),
+            "unexpected: {error}"
+        );
+    }
+
+    #[test]
+    fn refuses_a_malformed_manifest_rather_than_treating_it_as_empty() {
+        let root = temp_root("manifest-malformed");
+        fs::create_dir_all(root.join(".contextpatch")).unwrap();
+        fs::write(
+            root.join(".contextpatch/allowed-scripts.json"),
+            "{ not json",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("tools")).unwrap();
+        fs::write(root.join("tools/run_gates.sh"), "#!/bin/sh\necho gate-ok\n").unwrap();
+
+        let error = run_guarded_command(
+            &root,
+            None,
+            "bash",
+            &["tools/run_gates.sh".to_string()],
+            Some(10),
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(
+            message.contains("allowed-scripts.json") && message.contains("not valid JSON"),
+            "manifest problem must be surfaced, not swallowed as empty: {message}"
+        );
+    }
+
+    #[test]
+    fn a_manifest_declared_script_still_respects_the_argument_free_rule() {
+        let root = temp_root("manifest-arguments");
+        fs::create_dir_all(root.join(".contextpatch")).unwrap();
+        fs::write(
+            root.join(".contextpatch/allowed-scripts.json"),
+            r#"{"shell_scripts": ["tools/run_gates.sh"]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("tools")).unwrap();
+        fs::write(root.join("tools/run_gates.sh"), "#!/bin/sh\necho gate-ok\n").unwrap();
+
+        let error = run_guarded_command(
+            &root,
+            None,
+            "bash",
+            &["tools/run_gates.sh".to_string(), "--fix".to_string()],
+            Some(10),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("not allowlisted"),
+            "unexpected: {error}"
+        );
     }
 
     #[test]
