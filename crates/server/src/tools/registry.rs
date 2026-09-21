@@ -694,6 +694,18 @@ static REGISTRY: &[ToolDescriptor] = &[
         serializes_mutation: false,
     },
     ToolDescriptor {
+        name: crate::tools::azure_deployment_start::NAME,
+        starts_background_job: true,
+        schema: crate::tools::schema::azure_deployment_start_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_azure_deployment_start(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
         name: crate::tools::image_cleanliness_check_run::NAME,
         starts_background_job: false,
         schema: crate::tools::schema::image_cleanliness_check_run_definition,
@@ -847,6 +859,7 @@ mod tests {
             "artifact_build_check_run",
             "compose_stack_run",
             "harbor_run_start",
+            "azure_deployment_start",
             "validation_profile_run",
         ];
 

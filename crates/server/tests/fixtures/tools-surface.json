@@ -212,6 +212,65 @@
       "openWorldHint": true,
       "readOnlyHint": false
     },
+    "description": "Plan or start an ARM/Bicep deployment to Azure in the background. Defaults to a read-only what-if preview; set dry_run=false with confirm to apply, which returns a log_id polled with read_command_log. Apply also requires the AZURE_ALLOW_DEPLOY host opt-in. Harbor, task-image, validation-profile, Compose-stack, artifact-build, and Azure-deployment jobs share a two-job cap.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "description": "Required literal value `run azure deployment` when dry_run is false.",
+          "type": "string"
+        },
+        "deployment_name": {
+          "description": "Optional ARM deployment name. A leading hyphen is refused.",
+          "pattern": "^[A-Za-z0-9._][A-Za-z0-9._-]*$",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Run a read-only what-if preview without applying. Defaults to true.",
+          "type": "boolean"
+        },
+        "parameters": {
+          "description": "Optional inline ARM parameters as `name=value` strings, each name an ARM identifier. Combined with parameters_file when both are given.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "parameters_file": {
+          "description": "Optional normalized repository-relative ARM parameters file.",
+          "type": "string"
+        },
+        "resource_group": {
+          "description": "Target Azure resource group. A leading hyphen is refused.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "template_file": {
+          "description": "Normalized repository-relative ARM/Bicep template file.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "Apply timeout in seconds. Defaults to 1800.",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "resource_group",
+        "template_file"
+      ],
+      "type": "object"
+    },
+    "name": "azure_deployment_start"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Plan or run the exact repository base-image check script references/check-base-image.sh without enabling arbitrary shell access.",
     "inputSchema": {
       "additionalProperties": false,
@@ -1898,7 +1957,7 @@
           "type": "string"
         },
         "program": {
-          "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for a script on the fixed validation-script list, or rg. Use harbor_run_start for Harbor.",
+          "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for a script on the fixed validation-script list, rg, or az for read-only Azure inventory and deployment state (containerapp/group/account show/list, deployment group/sub show/list/what-if, graph query). Use harbor_run_start for Harbor.",
           "type": "string"
         },
         "timeout_secs": {

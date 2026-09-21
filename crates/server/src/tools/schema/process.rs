@@ -11,7 +11,7 @@ pub(crate) fn run_guarded_command_definition() -> Value {
                     "properties": {
                         "program": {
                             "type": "string",
-                            "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for a script on the fixed validation-script list, or rg. Use harbor_run_start for Harbor."
+                            "description": "Allowlisted executable name: git, cargo, bun, npm, pnpm, python/python3, pytest, bash for a script on the fixed validation-script list, rg, or az for read-only Azure inventory and deployment state (containerapp/group/account show/list, deployment group/sub show/list/what-if, graph query). Use harbor_run_start for Harbor."
                         },
                         "args": {
                             "type": "array",
@@ -232,6 +232,60 @@ pub(crate) fn compose_stack_run_definition() -> Value {
                         }
                     },
                     "required": ["action"],
+                    "additionalProperties": false
+                }
+            }
+    )
+}
+
+pub(crate) fn azure_deployment_start_definition() -> Value {
+    json!({
+                "name": tools::azure_deployment_start::NAME,
+                "description": "Plan or start an ARM/Bicep deployment to Azure in the background. Defaults to a read-only what-if preview; set dry_run=false with confirm to apply, which returns a log_id polled with read_command_log. Apply also requires the AZURE_ALLOW_DEPLOY host opt-in. Harbor, task-image, validation-profile, Compose-stack, artifact-build, and Azure-deployment jobs share a two-job cap.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "resource_group": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Target Azure resource group. A leading hyphen is refused."
+                        },
+                        "template_file": {
+                            "type": "string",
+                            "description": "Normalized repository-relative ARM/Bicep template file."
+                        },
+                        "parameters_file": {
+                            "type": "string",
+                            "description": "Optional normalized repository-relative ARM parameters file."
+                        },
+                        "parameters": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "Optional inline ARM parameters as `name=value` strings, each name an ARM identifier. Combined with parameters_file when both are given."
+                        },
+                        "deployment_name": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9._][A-Za-z0-9._-]*$",
+                            "description": "Optional ARM deployment name. A leading hyphen is refused."
+                        },
+                        "dry_run": {
+                            "type": "boolean",
+                            "description": "Run a read-only what-if preview without applying. Defaults to true."
+                        },
+                        "confirm": {
+                            "type": "string",
+                            "description": "Required literal value `run azure deployment` when dry_run is false."
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": contextpatch_core::process::guarded_command::AZURE_DEPLOY_MAX_TIMEOUT_SECS,
+                            "description": "Apply timeout in seconds. Defaults to 1800."
+                        }
+                    },
+                    "required": ["resource_group", "template_file"],
                     "additionalProperties": false
                 }
             }

@@ -4,6 +4,7 @@ artifact_delete_exact	write	yes	Local	no	no
 artifact_python_run	none	no	InheritedByExecutedCode	no	no
 artifact_write_base64	write	yes	Local	no	no
 artifact_write_text	write	yes	Local	no	no
+azure_deployment_start	none	no	InheritedByExecutedCode	no	yes
 base_image_check_run	none	no	InheritedByExecutedCode	no	no
 bulk_replace_exact	write	yes	Local	no	no
 bulk_write_new_files_base64	write	yes	Local	no	no

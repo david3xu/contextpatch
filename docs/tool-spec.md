@@ -39,6 +39,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `fixture_manifest_refresh` | Manifest file only | Regenerates fixture manifest from declared files/prefixes with dry-run, confirmation, and existing-manifest hash guard |
 | `read_command_log` | No | Reads captured command logs and asynchronous lifecycle state by opaque id |
 | `harbor_run_start` | Harbor job artifacts | Starts one typed Harbor run asynchronously and exposes pollable structured evidence through an opaque log id |
+| `azure_deployment_start` | Azure resources in the target resource group (apply only) | Plans a read-only ARM/Bicep what-if by default; apply is gated by confirm plus the AZURE_ALLOW_DEPLOY opt-in, starts asynchronously, and returns a pollable log id |
 | `compose_stack_run` | Docker containers, images, and volumes in this server's own Compose project | Plans a named Compose stack proof; confirmed execution starts asynchronously, returns a pollable log id, and always attempts a project-scoped teardown |
 | `artifact_build_check_run` | One uniquely tagged Docker image, always removed afterwards | Plans a Docker build of a repository Dockerfile plus a networkless import smoke run of the built image; confirmed execution starts asynchronously and returns a pollable log id |
 | `validation_profile_run` | No source edits | Starts predefined allowlisted validation command sequences asynchronously |
@@ -774,7 +775,7 @@ Runs a bounded validation-oriented command without invoking a shell.
 
 Required inputs:
 
-- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python`, `python3`, `pytest`, `bash`, or `rg`
+- `program`: one of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python`, `python3`, `pytest`, `bash`, `rg`, or `az`
 - `args`: command arguments; the first argument must be an allowlisted subcommand
 
 Optional inputs:
@@ -797,6 +798,7 @@ Rules:
   - `pytest`: validation invocation
   - `bash`: only a script on the fixed validation-script list, with an optional leading `./` — `references/check-base-image.sh` (optionally with the exact `task` argument), the argument-free documentation gates (`scripts/check-doc-commands.sh`, `scripts/check-docs.sh`, `scripts/check-endpoint-literals.sh`, `scripts/check-hosted-target-readiness.sh`, `scripts/docs-audit.sh`), the six argument-free root proofs (`scripts/front-door-proof.sh`, `scripts/full-platform-proof.sh`, `scripts/prove-auto-workflow.sh`, `scripts/prove-dispatch-preflight.sh`, `scripts/prove-human-ai-team-flow.sh`, `scripts/prove-local-edition-bundle.sh`), **or** an argument-free script the *selected* repository declares for itself — see "Repository-declared scripts" below
   - `rg`: search invocation
+  - `az`: read-only Azure inventory and deployment state only — `show`/`list` forms of `containerapp`, `group`, and `account`, plus `containerapp env`/`revision`/`logs`, `deployment group`/`sub` `show`/`list`/`what-if`, and `graph query`; every mutating or unknown subcommand (`create`, `update`, `delete`, `up`, `exec`, `deploy`, `account set`) is refused. Deploys are owned by typed plan-first tools, not this list
 
 Repository-declared scripts: the selected repository root may carry a `.contextpatch/allowed-scripts.json`
 file with a `shell_scripts` array of repo-relative paths, each one usable with `bash` under exactly the
@@ -1088,6 +1090,34 @@ Rules:
 - Structured evidence must prioritize exception-bearing trials, return at most 100 trials and 1000 rewards, remain within 700000 serialized bytes, and report total, returned, omitted, and truncation counts explicitly.
 - Evidence reads must accept only the exact `jobs/<job>/result.json` layout and trial directories named by that result. Traversal, symlink components, malformed JSON, oversized artifacts, missing artifacts, and unsafe trial names must be surfaced explicitly rather than guessed.
 - After a server restart, an in-progress log owned by the previous instance reports `unknown`; callers must inspect existing Harbor job state before deciding whether to start another run.
+
+### `azure_deployment_start`
+
+Plans a read-only ARM/Bicep what-if preview by default, or applies a deployment to Azure in a background worker after two independent gates.
+
+Required inputs:
+
+- `resource_group`: target Azure resource group; non-empty and not beginning with `-`
+- `template_file`: normalized repository-relative ARM/Bicep template file
+
+Optional inputs:
+
+- `parameters_file`: normalized repository-relative ARM parameters file
+- `parameters`: inline ARM parameters as `name=value` strings, each name an ARM identifier; combined with `parameters_file` if both are given
+- `deployment_name`: ARM deployment name containing only ASCII letters, digits, `.`, `_`, or `-`, and not beginning with `-`
+- `dry_run`: read-only what-if preview without applying; defaults to true
+- `confirm`: required literal `run azure deployment` when `dry_run` is false
+- `timeout_secs`: apply timeout from 1 to 3600; defaults to 1800
+
+Rules:
+
+- `dry_run` (the default) runs `az deployment group what-if` synchronously and returns the change preview; it applies nothing and needs no opt-in.
+- Applying requires both `confirm: "run azure deployment"` and the `AZURE_ALLOW_DEPLOY` host environment opt-in; either missing is a refusal, so the capability is dormant unless an operator enabled it.
+- The apply command is `az deployment group create -g <resource_group> --template-file <template> [--parameters <parameters_file>] [--parameters <name=value>...] [--name <deployment_name>]` with explicit argv and no shell. The template and any parameters file are normalized repository-relative paths; inline parameters are `name=value` pairs whose names must be ARM identifiers, so neither an option nor a `@file` reference can be injected through them.
+- Direct `az deployment group create` through `run_guarded_command` is refused and redirected here; the raw allowlist admits only the read-only `az` surface.
+- Apply starts asynchronously and shares the two-active-background-job limit; the response returns `status: "running"`, a stable `log_id`, an exact `read_command_log` polling request, and restart semantics.
+- Authority over what the deployment may change is the Azure RBAC role of the signed-in identity, not this tool; the tool bounds only the plan-first shape and the two gates.
+- A client-side timeout stops waiting but does not abort the server-side ARM deployment; `az deployment group show` holds the authoritative result. After a server restart, an in-progress apply reports `unknown`.
 
 ### `validation_profile_run`
 

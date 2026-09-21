@@ -30,6 +30,10 @@ pub mod harbor_run_start {
     pub const NAME: &str = "harbor_run_start";
 }
 
+pub mod azure_deployment_start {
+    pub const NAME: &str = "azure_deployment_start";
+}
+
 pub mod compose_stack_run {
     pub const NAME: &str = "compose_stack_run";
 }
@@ -51,8 +55,8 @@ use jobs::ACTIVE_BACKGROUND_JOBS;
 pub(crate) use jobs::MAX_ACTIVE_BACKGROUND_JOBS;
 use jobs::{start_background_job, BackgroundJobOutcome};
 pub(crate) use runs::{
-    call_artifact_python_run, call_harbor_run_start, call_validation_profile_run,
-    MAX_HARBOR_AGENT_LEN, VALIDATION_PROFILE_NAMES,
+    call_artifact_python_run, call_azure_deployment_start, call_harbor_run_start,
+    call_validation_profile_run, MAX_HARBOR_AGENT_LEN, VALIDATION_PROFILE_NAMES,
 };
 
 use std::fs;
@@ -89,6 +93,16 @@ pub(crate) fn call_run_guarded_command<'a>(
         return Err(
             "run_guarded_command refused: direct `harbor run` is not available; use \
              harbor_run_start and poll its log_id with read_command_log"
+                .to_string(),
+        );
+    }
+    if program == "az"
+        && contextpatch_core::process::guarded_command::is_azure_deploy_command(&args)
+    {
+        return Err(
+            "run_guarded_command refused: direct `az deployment ... create` is not available; use \
+             azure_deployment_start (dry_run for a what-if preview; dry_run=false with confirm to \
+             apply)"
                 .to_string(),
         );
     }

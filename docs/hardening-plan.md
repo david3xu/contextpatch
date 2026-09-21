@@ -200,8 +200,8 @@ The capability and ownership boundary must be explicit:
 | Need | ContextPatch | Azure companion MCP | Operator or workload repository |
 | --- | --- | --- | --- |
 | Repository edits, Bicep source changes, and local validation | Yes, through existing guarded file, Git, and command policies | No | Review and approve mutations |
-| Guarded command execution | Only the supported forms of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python3`, `pytest`, `rg`, and the exact approved shell check | No | Supply confirmations where required |
-| Azure resource inventory, state, Resource Graph, cost evidence, and service-tier inspection | No | Read-only first implementation | Establish and revoke the scoped identity |
+| Guarded command execution | Only the supported forms of `git`, `cargo`, `bun`, `npm`, `pnpm`, `python3`, `pytest`, `rg`, read-only `az` inventory and deployment-state reads (`containerapp`/`group`/`account` show/list, `deployment group`/`sub` show/list/what-if, `graph query`), and the exact approved shell check | No | Supply confirmations where required |
+| Azure resource inventory, state, Resource Graph, cost evidence, and service-tier inspection | Read-only `az` reads for Container Apps, resource groups, deployment state, and Resource Graph queries (`show`/`list`/`what-if`/`query`); cost evidence and service-tier inspection remain out of scope | Read-only first implementation | Establish and revoke the scoped identity |
 | `az bicep build`, ARM deployment, Speech SKU mutation, and other control-plane writes | No | Disabled in the first implementation | Run explicitly and retain raw output |
 | Application sequencing such as handler migration before Redis adoption | Repository editing only | Inspect deployed state after it exists | Owned by the workload plan |
 
@@ -291,7 +291,7 @@ What the audit changed, beyond wording:
   traversal are refused before spawn, in `validate_common_command_shape`. That claim survived the
   audit intact and is now pinned by test rather than assumed.
 
-Refusal tests added for `az`, `npx`, npm/pnpm/bun installation forms, arbitrary `python -m` and
+Refusal tests added for `az` mutations and unknown subcommands (read-only `az` inventory and deployment-state reads are allowed and separately tested), `npx`, npm/pnpm/bun installation forms, arbitrary `python -m` and
 `-c`, generic shell programs and shell strings, pytest plugin-loading options, pytest paths outside
 the repository, and a program supplied as a path. Every prohibition listed in item 2 below is now
 covered by a test rather than by prose alone.

@@ -16,6 +16,11 @@ const DEFAULT_MAX_TIMEOUT_SECS: u64 = 600;
 /// through `harbor_run_start`. Public because the advertised bound must read it rather than restate
 /// it, and both paths bound the same operation.
 pub const HARBOR_RUN_MAX_TIMEOUT_SECS: u64 = 3600;
+/// The longest an Azure deployment apply may run through `azure_deployment_start`. A deployment is a
+/// server-side ARM operation the CLI only polls, so this bounds the local wait, not the deployment
+/// itself: a client-side timeout leaves it progressing in Azure to be read back with `deployment
+/// group show`.
+pub const AZURE_DEPLOY_MAX_TIMEOUT_SECS: u64 = 3600;
 
 /// pytest's plugin-loading option, in both its separated and combined short forms.
 const PYTEST_PLUGIN_OPTION: &str = "-p";
@@ -147,6 +152,8 @@ fn checked_command_timeout(
 ) -> Result<std::time::Duration, ContextPatchError> {
     let max_timeout_secs = if program == "harbor" && args.first().is_some_and(|arg| arg == "run") {
         HARBOR_RUN_MAX_TIMEOUT_SECS
+    } else if program == "az" && is_azure_deploy_command(args) {
+        AZURE_DEPLOY_MAX_TIMEOUT_SECS
     } else {
         DEFAULT_MAX_TIMEOUT_SECS
     };
@@ -237,6 +244,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         "harbor" => matches!(subcommand, Some("run")),
         "bash" => is_allowed_shell_script(args),
         "rg" => subcommand.is_some() && rg_arguments_are_allowed(args),
+        "az" => azure_read_command_is_allowed(args) || is_azure_deploy_command(args),
         _ => false,
     };
 
@@ -560,6 +568,82 @@ fn is_pytest_plugin_option(arg: &str) -> bool {
         || (arg.starts_with(PYTEST_PLUGIN_OPTION) && !arg.starts_with(LONG_OPTION_PREFIX))
 }
 
+/// Read-only Azure inventory and deployment-state commands, listed positively as exact token
+/// prefixes.
+///
+/// `az` shares one namespace with deployment and mutation: `containerapp create`/`update`/`delete`/
+/// `up`/`exec`, `group create`/`delete`, `deployment group create`, and `account set` all sit one
+/// token from the reads below, so the boundary is a property of this exact list rather than of the
+/// word `az`. Every entry ends in a read verb (`show`, `list`, `what-if`, `query`), and an argument
+/// vector is admitted only when it *starts with* one of these prefixes; because Azure CLI verbs are
+/// terminal, a prefix that ends in a read verb cannot also prefix a mutating command. Trailing flags
+/// (`-g`, `-n`, `-o`, `--query`) are query parameters that cannot turn a read into a write, so they
+/// are not inspected. Writes are owned by typed, plan-first tools, never by this list. See
+/// `docs/execution-threat-model.md`.
+const AZURE_READ_COMMANDS: &[&[&str]] = &[
+    &["containerapp", "show"],
+    &["containerapp", "list"],
+    &["containerapp", "env", "show"],
+    &["containerapp", "env", "list"],
+    &["containerapp", "revision", "list"],
+    &["containerapp", "logs", "show"],
+    &["deployment", "group", "show"],
+    &["deployment", "group", "list"],
+    &["deployment", "group", "what-if"],
+    &["deployment", "sub", "show"],
+    &["deployment", "sub", "list"],
+    &["deployment", "sub", "what-if"],
+    &["group", "show"],
+    &["group", "list"],
+    &["account", "show"],
+    &["account", "list"],
+    &["graph", "query"],
+];
+
+/// The read-only `az` command prefixes as space-joined strings, for surfaces that report the set
+/// rather than restate it. Derived from `AZURE_READ_COMMANDS` so the capability manifest cannot drift
+/// from the guard, the same coupling `allowed_git_subcommands` keeps for `git`.
+pub fn allowed_azure_read_subcommands() -> Vec<String> {
+    AZURE_READ_COMMANDS
+        .iter()
+        .map(|prefix| prefix.join(" "))
+        .collect()
+}
+
+/// Azure deployment (write) commands, reachable only through the typed `azure_deployment_start` tool.
+///
+/// Listed as exact token prefixes like the read set. The guard admits them so the typed tool can run
+/// them through the repository's authority, but the raw `run_guarded_command` tool refuses them and
+/// redirects to `azure_deployment_start`, which adds the what-if plan, the `run azure deployment`
+/// confirmation, and the `AZURE_ALLOW_DEPLOY` operator opt-in. Only creating a deployment is admitted;
+/// deleting a deployment or resources is not.
+const AZURE_DEPLOY_COMMANDS: &[&[&str]] = &[
+    &["deployment", "group", "create"],
+    &["deployment", "sub", "create"],
+];
+
+/// Whether `args` is an Azure deployment (write) command. Public so the raw-tool refusal and the
+/// timeout ceiling share this exact predicate rather than restate it.
+pub fn is_azure_deploy_command(args: &[String]) -> bool {
+    AZURE_DEPLOY_COMMANDS.iter().any(|prefix| {
+        args.len() >= prefix.len()
+            && prefix
+                .iter()
+                .zip(args)
+                .all(|(expected, actual)| actual == expected)
+    })
+}
+
+fn azure_read_command_is_allowed(args: &[String]) -> bool {
+    AZURE_READ_COMMANDS.iter().any(|prefix| {
+        args.len() >= prefix.len()
+            && prefix
+                .iter()
+                .zip(args)
+                .all(|(expected, actual)| actual == expected)
+    })
+}
+
 fn is_allowlisted_program(program: &str) -> bool {
     matches!(
         program,
@@ -574,6 +658,7 @@ fn is_allowlisted_program(program: &str) -> bool {
             | "harbor"
             | "bash"
             | "rg"
+            | "az"
     )
 }
 
@@ -612,10 +697,61 @@ mod tests {
     fn refuses_azure_cli() {
         for values in [
             vec!["login"],
-            vec!["account", "show"],
             vec!["bicep", "build"],
+            vec!["account", "set"],
+            vec!["group", "create"],
+            vec!["group", "delete"],
+            vec!["containerapp", "create"],
+            vec!["containerapp", "update"],
+            vec!["containerapp", "delete"],
+            vec!["containerapp", "up"],
+            vec!["containerapp", "exec"],
+            vec!["containerapp", "env", "create"],
+            vec!["containerapp", "revision", "restart"],
+            vec!["containerapp", "revision", "deactivate"],
+            vec!["containerapp", "logs", "tail"],
+            vec!["deployment", "group", "delete"],
+            vec!["graph"],
         ] {
-            assert!(refusal("az", &values).contains("not allowlisted"));
+            assert!(
+                refusal("az", &values).contains("not allowlisted"),
+                "az {values:?} must stay refused"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_azure_read_only_commands() {
+        for values in [
+            vec!["containerapp", "show", "-g", "rg", "-n", "app"],
+            vec!["containerapp", "list", "-g", "rg", "-o", "table"],
+            vec!["containerapp", "env", "show", "-g", "rg", "-n", "env"],
+            vec!["containerapp", "revision", "list", "-g", "rg", "-n", "app"],
+            vec!["containerapp", "logs", "show", "-g", "rg", "-n", "app"],
+            vec!["deployment", "group", "show", "-g", "rg", "-n", "dep"],
+            vec!["deployment", "group", "what-if", "-g", "rg", "--template-file", "main.bicep"],
+            vec!["deployment", "sub", "list"],
+            vec!["group", "list"],
+            vec!["account", "show"],
+            vec!["graph", "query", "-q", "Resources | project name"],
+        ] {
+            assert!(
+                validate_command("az", &args(&values)).is_ok(),
+                "az {values:?} must be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_azure_deploy_commands() {
+        for values in [
+            vec!["deployment", "group", "create", "-g", "rg", "--template-file", "main.bicep"],
+            vec!["deployment", "sub", "create", "--template-file", "main.bicep"],
+        ] {
+            assert!(
+                validate_command("az", &args(&values)).is_ok(),
+                "az {values:?} deploy must be admitted by the guard"
+            );
         }
     }
 

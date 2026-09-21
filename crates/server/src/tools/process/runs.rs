@@ -14,6 +14,232 @@ use crate::tools::common::{
 /// declaring a second name for one bound.
 pub(crate) const MAX_HARBOR_AGENT_LEN: usize = 128;
 
+pub(crate) fn call_azure_deployment_start<'a>(
+    repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
+    arguments: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let resource_group = required_string(arguments, "resource_group")?;
+    if resource_group.is_empty() || resource_group.starts_with('-') {
+        return Err(
+            "azure_deployment_start refused: resource_group must be non-empty and must not start with `-`"
+                .to_string(),
+        );
+    }
+    let template = normalize_repo_relative_path(
+        crate::tools::azure_deployment_start::NAME,
+        required_string(arguments, "template_file")?,
+    )?;
+    let parameters_file = match optional_string(arguments, "parameters_file")? {
+        Some(path) => {
+            Some(normalize_repo_relative_path(crate::tools::azure_deployment_start::NAME, path)?)
+        }
+        None => None,
+    };
+    let inline_parameters = optional_string_array(arguments, "parameters")?;
+    validate_inline_deploy_parameters(&inline_parameters)?;
+    let deployment_name = optional_string(arguments, "deployment_name")?;
+    if let Some(name) = deployment_name {
+        if name.is_empty()
+            || name.starts_with('-')
+            || !name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        {
+            return Err(
+                "azure_deployment_start refused: deployment_name must not start with `-` and may contain only ASCII letters, digits, `.`, `_`, or `-`"
+                    .to_string(),
+            );
+        }
+    }
+
+    let mut tail: Vec<String> = vec![
+        "-g".to_string(),
+        resource_group.to_string(),
+        "--template-file".to_string(),
+        template,
+    ];
+    if let Some(params_file) = parameters_file {
+        tail.push("--parameters".to_string());
+        tail.push(params_file);
+    }
+    if !inline_parameters.is_empty() {
+        tail.push("--parameters".to_string());
+        tail.extend(inline_parameters);
+    }
+    if let Some(name) = deployment_name {
+        tail.push("--name".to_string());
+        tail.push(name.to_string());
+    }
+
+    let root = repository_root.into();
+
+    if optional_bool(arguments, "dry_run")?.unwrap_or(true) {
+        let mut what_if_args = vec![
+            "deployment".to_string(),
+            "group".to_string(),
+            "what-if".to_string(),
+        ];
+        what_if_args.extend(tail);
+        let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(600).min(600);
+        let output = run_guarded_command(root, None, "az", &what_if_args, Some(timeout_secs))
+            .map_err(|error| format!("azure_deployment_start refused: {error}"))?;
+        return serde_json::to_string_pretty(&json!({
+            "tool": crate::tools::azure_deployment_start::NAME,
+            "mode": "what-if",
+            "status": "previewed",
+            "plan": output,
+            "next": "Re-call with dry_run=false and confirm=\"run azure deployment\" to apply; apply also requires the AZURE_ALLOW_DEPLOY host opt-in."
+        }))
+        .map_err(|error| format!("azure_deployment_start refused: {error}"));
+    }
+
+    if required_string(arguments, "confirm")? != "run azure deployment" {
+        return Err(
+            "azure_deployment_start refused: applying requires confirm=\"run azure deployment\"; use dry_run for a read-only what-if preview"
+                .to_string(),
+        );
+    }
+    if !matches!(
+        std::env::var("AZURE_ALLOW_DEPLOY").unwrap_or_default().trim(),
+        "1" | "true" | "yes"
+    ) {
+        return Err(
+            "azure_deployment_start refused: apply is disabled because the AZURE_ALLOW_DEPLOY host opt-in is not set; a read-only what-if preview (dry_run=true) needs no opt-in"
+                .to_string(),
+        );
+    }
+
+    let max_timeout_secs =
+        contextpatch_core::process::guarded_command::AZURE_DEPLOY_MAX_TIMEOUT_SECS;
+    let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(1800);
+    if timeout_secs == 0 || timeout_secs > max_timeout_secs {
+        return Err(format!(
+            "azure_deployment_start refused: timeout_secs must be between 1 and {max_timeout_secs}"
+        ));
+    }
+
+    let mut create_args = vec![
+        "deployment".to_string(),
+        "group".to_string(),
+        "create".to_string(),
+    ];
+    create_args.extend(tail);
+    let initial_log = format!(
+        "Azure deployment is applying.\ncommand: az {}\n",
+        create_args
+            .iter()
+            .map(|arg| shell_display_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+
+    let worker_authority = contextpatch_core::git::OwnedRepositoryRoot::retain(root)
+        .map_err(|error| format!("azure_deployment_start refused: {error}"))?;
+    let log_id = start_background_job(
+        crate::tools::azure_deployment_start::NAME,
+        "az",
+        &initial_log,
+        move |worker_log_id| {
+            let output = run_guarded_command(
+                worker_authority.borrow(),
+                None,
+                "az",
+                &create_args,
+                Some(timeout_secs),
+            )
+            .map_err(|error| format!("azure_deployment_start failed: {error}"))?;
+            let exit_code = extract_field(&output, "exit_code")
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or(-1);
+            let timed_out = extract_field(&output, "timed_out") == Some("true");
+            let status = if timed_out {
+                "timed_out"
+            } else if exit_code == 0 {
+                "completed"
+            } else {
+                "failed"
+            };
+            Ok(BackgroundJobOutcome {
+                status,
+                exit_code,
+                timed_out,
+                log: serde_json::to_string_pretty(&json!({
+                    "tool": crate::tools::azure_deployment_start::NAME,
+                    "log_id": worker_log_id,
+                    "status": status,
+                    "command_output": output
+                }))
+                .map_err(|error| format!("azure_deployment_start failed: {error}"))?,
+            })
+        },
+    )?;
+
+    serde_json::to_string_pretty(&json!({
+        "tool": crate::tools::azure_deployment_start::NAME,
+        "mode": "apply",
+        "status": "running",
+        "log_id": log_id,
+        "poll_with": {
+            "action": crate::tools::read_command_log::NAME,
+            "arguments": {"log_id": log_id}
+        },
+        "restart_semantics": "Polling never restarts work. A client-side timeout stops waiting but the ARM deployment continues server-side; read az deployment group show for the authoritative result. If the MCP server restarts while running, read_command_log reports unknown."
+    }))
+    .map_err(|error| format!("azure_deployment_start refused: {error}"))
+}
+
+fn validate_inline_deploy_parameters(parameters: &[String]) -> Result<(), String> {
+    for entry in parameters {
+        let (key, had_value) = match entry.split_once('=') {
+            Some((key, _value)) => (key, true),
+            None => (entry.as_str(), false),
+        };
+        let key_ok = !key.is_empty()
+            && key.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
+            && key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if !had_value || !key_ok {
+            return Err(format!(
+                "azure_deployment_start refused: inline parameter {entry:?} must be `name=value` \
+                 with an ARM parameter name (an ASCII letter or underscore, then letters, digits, \
+                 or underscores); use parameters_file for file-backed parameters"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod azure_deployment_start_tests {
+    use super::validate_inline_deploy_parameters;
+
+    fn check(entries: &[&str]) -> Result<(), String> {
+        validate_inline_deploy_parameters(
+            &entries.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn accepts_well_formed_name_value_pairs_and_an_empty_list() {
+        assert!(check(&["location=australiaeast", "namePrefix=dcp2", "replicas=3"]).is_ok());
+        assert!(check(&["conn=Server=db;Port=5432"]).is_ok(), "values may contain '='");
+        assert!(check(&[]).is_ok());
+    }
+
+    #[test]
+    fn rejects_entries_that_could_inject_an_option_or_a_file_read() {
+        for bad in [
+            "location",       // no value
+            "=australiaeast", // empty name
+            "--query=x",      // option-shaped name
+            "@params.json",   // az file-reference form
+            "-p=1",           // leading hyphen
+            "name.prefix=x",  // '.' is not an ARM identifier character
+        ] {
+            assert!(check(&[bad]).is_err(), "{bad:?} must be refused");
+        }
+    }
+}
+
 pub(crate) fn call_harbor_run_start<'a>(
     repository_root: impl Into<contextpatch_core::git::RepositoryRoot<'a>>,
     arguments: &serde_json::Map<String, Value>,

@@ -20,6 +20,8 @@ const EXPECTED_OPEN_WORLD_ACTIONS: &[&str] = &[
     "git_remote_check",
     "github_fork_prepare",
     "github_pr_run",
+    // Reaches the Azure control plane through the deployment CLI when an operator has enabled apply.
+    "azure_deployment_start",
     "harbor_run_start",
     "native_build_run",
     "native_device_run",

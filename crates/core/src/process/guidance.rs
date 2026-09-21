@@ -70,6 +70,7 @@ pub fn permitted_summary(program: &str) -> Option<&'static str> {
         }
         "rg" => "search options only, from a positive allowlist; options that start a program \
                  (--pre, --pre-glob, --hostname-bin, -z) or leave the repository (--follow) are refused",
+        "az" => "read-only Azure inventory and deployment state: show/list forms of containerapp, group, and account, plus containerapp env/revision/logs, deployment group/sub show/list/what-if, and graph query; every mutating or unknown subcommand (create, update, delete, up, exec, deploy, account set) is refused",
         _ => return None,
     })
 }
@@ -208,7 +209,7 @@ mod tests {
         // coupling is asserted rather than trusted.
         for program in [
             "git", "cargo", "bun", "npm", "pnpm", "python", "python3", "pytest", "harbor", "bash",
-            "rg",
+            "rg", "az",
         ] {
             assert!(
                 permitted_summary(program).is_some(),

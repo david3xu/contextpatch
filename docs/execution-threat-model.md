@@ -25,6 +25,7 @@ the program itself decides what to do with it.
 | `rg` | search options from a positive allowlist | No, since C37 | No, since C37 |
 | `bash` | only a script on the fixed validation-script list; `references/check-base-image.sh` optionally takes `task`, the rest take no arguments | Yes: whatever those tracked scripts contain | Depends on script |
 | `harbor` | `run` | Yes: agent workload | Yes |
+| `az` | read-only inventory and deployment state: `show`/`list`/`what-if`/`query` forms of `containerapp`, `group`, `account`, `deployment`, and `graph` | No | Yes: the Azure control plane |
 
 ## Authority axes
 

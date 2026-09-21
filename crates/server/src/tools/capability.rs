@@ -321,11 +321,13 @@ fn full_manifest(root: RepositoryRoot<'_>, label: &Path, surface: ToolSurface) -
                 "bash": contextpatch_core::process::guarded_command::allowed_shell_scripts(),
                 // Derived for the same reason as `bash` above: `["search"]` described the surface
                 // where any argument was accepted, and outlived it.
-                "rg": contextpatch_core::process::guarded_command::allowed_rg_long_options()
+                "rg": contextpatch_core::process::guarded_command::allowed_rg_long_options(),
+                "az": contextpatch_core::process::guarded_command::allowed_azure_read_subcommands()
             },
             "typed_workflows": {
                 "read_command_log": "Reads command logs with max_chars and offset paging.",
                 "harbor_run_start": "Starts one typed Harbor run asynchronously, returns a stable log_id, and reports running/completed/failed/timed_out/unknown status through read_command_log.",
+                "azure_deployment_start": "Plans a read-only ARM/Bicep what-if by default, or applies a deployment asynchronously after a confirm plus the AZURE_ALLOW_DEPLOY opt-in, returning a stable log_id polled through read_command_log.",
                 "validation_profile_run": "Starts a named validation sequence asynchronously and adds structured Dynamo/Harbor oracle/nop reward summaries for the task profile.",
                 "artifact_python_run": "Runs artifact-root Python scratch scripts without placing temporary analysis code in the repository.",
                 "task_image_python_run": "Plans or asynchronously builds task/environment/Dockerfile and runs one repository-relative Python script in the image with no network, a read-only repository mount, dropped capabilities, bounded temporary storage, and explicit confirmation.",
@@ -714,7 +716,8 @@ pub(crate) fn call_preflight_health<'a>(
             "pytest": executable_available("pytest"),
             "harbor": executable_available("harbor"),
             "bash": executable_available("bash"),
-            "rg": executable_available("rg")
+            "rg": executable_available("rg"),
+            "az": executable_available("az")
         },
         "validation_tools": {
             "git": executable_available("git"),
@@ -728,6 +731,7 @@ pub(crate) fn call_preflight_health<'a>(
             "harbor": executable_available("harbor"),
             "bash": executable_available("bash"),
             "rg": executable_available("rg"),
+            "az": executable_available("az"),
             "base_image_check": base_image_check_available(root)
         },
         "validation_profiles": {
