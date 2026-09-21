@@ -152,7 +152,7 @@ fn checked_command_timeout(
 ) -> Result<std::time::Duration, ContextPatchError> {
     let max_timeout_secs = if program == "harbor" && args.first().is_some_and(|arg| arg == "run") {
         HARBOR_RUN_MAX_TIMEOUT_SECS
-    } else if program == "az" && is_azure_deploy_command(args) {
+    } else if program == "az" && (is_azure_deploy_command(args) || azure_ops_command_is_allowed(args)) {
         AZURE_DEPLOY_MAX_TIMEOUT_SECS
     } else {
         DEFAULT_MAX_TIMEOUT_SECS
@@ -244,7 +244,11 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         "harbor" => matches!(subcommand, Some("run")),
         "bash" => is_allowed_shell_script(args),
         "rg" => subcommand.is_some() && rg_arguments_are_allowed(args),
-        "az" => azure_read_command_is_allowed(args) || is_azure_deploy_command(args),
+        "az" => {
+            azure_read_command_is_allowed(args)
+                || is_azure_deploy_command(args)
+                || azure_ops_command_is_allowed(args)
+        }
         _ => false,
     };
 
@@ -634,6 +638,30 @@ pub fn is_azure_deploy_command(args: &[String]) -> bool {
     })
 }
 
+/// Azure Container Apps operational commands the operator authorized for direct use through
+/// `run_guarded_command`: exec a command inside a running container, update an app's configuration
+/// (environment variables, image), and restart a revision. Unlike the read set these reach into or
+/// mutate live infrastructure, and unlike `AZURE_DEPLOY_COMMANDS` they are not routed through a typed
+/// tool -- they are operator-facing control-plane actions on the operator's own deployment, admitted
+/// so the agent can run the hosted lifecycle end to end without hand-off.
+const AZURE_OPS_COMMANDS: &[&[&str]] = &[
+    &["containerapp", "exec"],
+    &["containerapp", "update"],
+    &["containerapp", "revision", "restart"],
+    &["acr", "build"],
+];
+
+/// Whether `args` is an authorized Azure Container Apps operational command.
+fn azure_ops_command_is_allowed(args: &[String]) -> bool {
+    AZURE_OPS_COMMANDS.iter().any(|prefix| {
+        args.len() >= prefix.len()
+            && prefix
+                .iter()
+                .zip(args)
+                .all(|(expected, actual)| actual == expected)
+    })
+}
+
 fn azure_read_command_is_allowed(args: &[String]) -> bool {
     AZURE_READ_COMMANDS.iter().any(|prefix| {
         args.len() >= prefix.len()
@@ -702,12 +730,9 @@ mod tests {
             vec!["group", "create"],
             vec!["group", "delete"],
             vec!["containerapp", "create"],
-            vec!["containerapp", "update"],
             vec!["containerapp", "delete"],
             vec!["containerapp", "up"],
-            vec!["containerapp", "exec"],
             vec!["containerapp", "env", "create"],
-            vec!["containerapp", "revision", "restart"],
             vec!["containerapp", "revision", "deactivate"],
             vec!["containerapp", "logs", "tail"],
             vec!["deployment", "group", "delete"],
@@ -751,6 +776,21 @@ mod tests {
             assert!(
                 validate_command("az", &args(&values)).is_ok(),
                 "az {values:?} deploy must be admitted by the guard"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_azure_ops_commands() {
+        for values in [
+            vec!["containerapp", "exec", "-g", "rg", "-n", "app", "--command", "printenv X"],
+            vec!["containerapp", "update", "-g", "rg", "-n", "app", "--set-env-vars", "K=V"],
+            vec!["containerapp", "revision", "restart", "-g", "rg", "-n", "app", "--revision", "rev"],
+            vec!["acr", "build", "--registry", "acr", "--image", "img:tag", "-f", "Dockerfile", "."],
+        ] {
+            assert!(
+                validate_command("az", &args(&values)).is_ok(),
+                "az {values:?} operational command must be allowed"
             );
         }
     }
