@@ -295,7 +295,7 @@ pub(crate) fn azure_deployment_start_definition() -> Value {
 pub(crate) fn azure_containerapp_op_definition() -> Value {
     json!({
                 "name": tools::azure_containerapp_op::NAME,
-                "description": "Preview or run one Azure Container Apps write: `update` (image and/or plain environment variables of a container app) or `build` (az acr build of a repository Dockerfile). Arguments are typed, never forwarded; the default dry_run returns the exact az command. Applying needs confirm plus a target the operator named in the server's CONTEXTPATCH_AZURE_OPS_TARGETS (resource-group/app pairs) and CONTEXTPATCH_AZURE_OPS_REGISTRIES; credential-like variable names are refused, and a build refuses uncommitted changes. Applying returns a log_id polled with read_command_log.",
+                "description": "Preview or run one Azure Container Apps write: `update` (image and/or plain environment variables of a container app) or `build` (az acr build of a repository Dockerfile). Arguments are typed, never forwarded; the default dry_run returns the exact az command. Targets are checked before anything else, so the preview already refuses a resource-group/app not named in the server's CONTEXTPATCH_AZURE_OPS_TARGETS and a registry not named in CONTEXTPATCH_AZURE_OPS_REGISTRIES; applying additionally needs confirm; credential-like variable names are refused, and a build refuses uncommitted changes. Applying returns a log_id polled with read_command_log.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
