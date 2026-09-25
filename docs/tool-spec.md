@@ -40,6 +40,7 @@ This is deliberate: `contextpatch` is a safe patch layer for AI coding agents, n
 | `read_command_log` | No | Reads captured command logs and asynchronous lifecycle state by opaque id |
 | `harbor_run_start` | Harbor job artifacts | Starts one typed Harbor run asynchronously and exposes pollable structured evidence through an opaque log id |
 | `azure_deployment_start` | Azure resources in the target resource group (apply only) | Plans a read-only ARM/Bicep what-if by default; apply is gated by confirm plus the AZURE_ALLOW_DEPLOY opt-in, starts asynchronously, and returns a pollable log id |
+| `azure_containerapp_op` | One operator-named container app, or one operator-named registry (apply only) | Previews one typed `az containerapp update` or `az acr build` by default; apply is gated by confirm plus the target appearing in CONTEXTPATCH_AZURE_OPS_TARGETS / CONTEXTPATCH_AZURE_OPS_REGISTRIES, starts asynchronously, and returns a pollable log id |
 | `compose_stack_run` | Docker containers, images, and volumes in this server's own Compose project | Plans a named Compose stack proof; confirmed execution starts asynchronously, returns a pollable log id, and always attempts a project-scoped teardown |
 | `artifact_build_check_run` | One uniquely tagged Docker image, always removed afterwards | Plans a Docker build of a repository Dockerfile plus a networkless import smoke run of the built image; confirmed execution starts asynchronously and returns a pollable log id |
 | `validation_profile_run` | No source edits | Starts predefined allowlisted validation command sequences asynchronously |
@@ -1118,6 +1119,46 @@ Rules:
 - Apply starts asynchronously and shares the two-active-background-job limit; the response returns `status: "running"`, a stable `log_id`, an exact `read_command_log` polling request, and restart semantics.
 - Authority over what the deployment may change is the Azure RBAC role of the signed-in identity, not this tool; the tool bounds only the plan-first shape and the two gates.
 - A client-side timeout stops waiting but does not abort the server-side ARM deployment; `az deployment group show` holds the authoritative result. After a server restart, an in-progress apply reports `unknown`.
+
+### `azure_containerapp_op`
+
+Previews by default, or applies in a background worker after a confirmation, exactly one Azure Container Apps write built from typed fields. It is the only route to `az containerapp update` and `az acr build`.
+
+Required inputs:
+
+- `operation`: `update` or `build`
+
+Inputs for `update`:
+
+- `resource_group`, `app`: the container app; `<resource_group>/<app>` must be listed in the `CONTEXTPATCH_AZURE_OPS_TARGETS` host setting
+- `image`: optional `<registry>.azurecr.io/<repository>:<tag>`, where `<registry>` is listed in `CONTEXTPATCH_AZURE_OPS_REGISTRIES`
+- `set_env`: optional plain `NAME=value` environment variables
+- `remove_env`: optional environment variable names
+- at least one of `image`, `set_env`, `remove_env` is required
+
+Inputs for `build`:
+
+- `registry`: registry name, listed in `CONTEXTPATCH_AZURE_OPS_REGISTRIES`
+- `image`: `<repository>:<tag>`
+- `dockerfile`: normalized repository-relative Dockerfile
+- `platform`: optional, `linux/amd64` (default) or `linux/arm64`
+
+Common optional inputs:
+
+- `dry_run`: return the planned `az` command without running it; defaults to true
+- `confirm`: required literal `run azure containerapp op` when `dry_run` is false
+- `timeout_secs`: apply timeout from 1 to 3600; defaults to 900
+
+Rules:
+
+- `CONTEXTPATCH_AZURE_OPS_TARGETS` (comma-separated `resource-group/app` pairs) and `CONTEXTPATCH_AZURE_OPS_REGISTRIES` (comma-separated registry names) are read from the server process environment, which a repository cannot set. With neither set, every operation is refused, preview included, so the capability is dormant unless an operator named its targets.
+- Arguments are never forwarded. `update` runs `az containerapp update -n <app> -g <resource_group> [--image <image>] [--set-env-vars NAME=value...] [--remove-env-vars NAME...] --query <summary> -o json`; `build` runs `az acr build --registry <registry> --platform <platform> --image <repository:tag> --file <dockerfile> .` from the repository root. Explicit argv, no shell.
+- Names must be ASCII letters, digits, `.`, `_`, or `-` and must not begin with `-`. Environment variable names must be uppercase identifiers; names that look like credentials (`TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `PRIVATE`, a trailing `KEY`, or `_KEY_`) are refused, because credentials belong in Container Apps secret references and a plain value would appear in command logs. A name may not be both set and removed; values are at most 512 characters with no control characters.
+- An `update` image must come from an Azure Container Registry named in `CONTEXTPATCH_AZURE_OPS_REGISTRIES`.
+- A `build` apply refuses when the repository has uncommitted changes (`git status --porcelain` is not empty), because `az acr build` uploads the working tree rather than a commit, and an image tagged for a commit must be built from that commit.
+- Direct `az containerapp update` and `az acr build` through `run_guarded_command` are refused and redirected here. `az containerapp exec` and `az containerapp revision restart` are refused everywhere.
+- Apply starts asynchronously and shares the two-active-background-job limit; the response returns `status: "running"`, the command, a stable `log_id`, and an exact `read_command_log` polling request.
+- Authority over what an operation may change is still the Azure RBAC role of the signed-in identity; this tool bounds the shape of the operation, the named targets, and the confirmation.
 
 ### `validation_profile_run`
 

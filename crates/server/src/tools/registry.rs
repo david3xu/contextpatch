@@ -694,6 +694,18 @@ static REGISTRY: &[ToolDescriptor] = &[
         serializes_mutation: false,
     },
     ToolDescriptor {
+        name: crate::tools::azure_containerapp_op::NAME,
+        starts_background_job: true,
+        schema: crate::tools::schema::azure_containerapp_op_definition,
+        handler: |repository, _surface, arguments| {
+            crate::tools::process::call_azure_containerapp_op(repository.root(), arguments)
+        },
+        deadline: None,
+        reach: RemoteReach::InheritedByExecutedCode,
+        read_only: false,
+        serializes_mutation: false,
+    },
+    ToolDescriptor {
         name: crate::tools::azure_deployment_start::NAME,
         starts_background_job: true,
         schema: crate::tools::schema::azure_deployment_start_definition,
@@ -860,6 +872,7 @@ mod tests {
             "compose_stack_run",
             "harbor_run_start",
             "azure_deployment_start",
+            "azure_containerapp_op",
             "validation_profile_run",
         ];
 

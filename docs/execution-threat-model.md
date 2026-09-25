@@ -25,7 +25,7 @@ the program itself decides what to do with it.
 | `rg` | search options from a positive allowlist | No, since C37 | No, since C37 |
 | `bash` | only a script on the fixed validation-script list; `references/check-base-image.sh` optionally takes `task`, the rest take no arguments | Yes: whatever those tracked scripts contain | Depends on script |
 | `harbor` | `run` | Yes: agent workload | Yes |
-| `az` | read-only inventory and deployment state: `show`/`list`/`what-if`/`query` forms of `containerapp`, `group`, `account`, `deployment`, and `graph` | No | Yes: the Azure control plane |
+| `az` | read-only inventory and deployment state: `show`/`list`/`what-if`/`query` forms of `containerapp`, `group`, `account`, `deployment`, and `graph`. Writes only through typed tools: `deployment ... create` via `azure_deployment_start`, and `containerapp update` / `acr build` via `azure_containerapp_op` (see "Azure write authority" below) | No | Yes: the Azure control plane |
 
 ## Authority axes
 
@@ -159,7 +159,12 @@ Probe-confirmed and source-confirmed refusals, which the corrections must not we
 
 - package installation: `npm install -g @azure/mcp` is refused as not allowlisted, with
   `permitted for this program: run, test`
-- `npx`, `az`, `docker`, `pip`, and `gh` are absent from `is_allowlisted_program` entirely
+- `npx`, `docker`, `pip`, and `gh` are absent from `is_allowlisted_program` entirely; `az` is
+  present but admitted only for the exact read prefixes and the typed-tool write prefixes below
+- `az containerapp exec` and `az containerapp revision restart`: refused (admitted by `982049f`,
+  withdrawn 2026-09-25 pending their own review)
+- direct `az deployment ... create`, `az containerapp update`, and `az acr build` through
+  `run_guarded_command`: refused and redirected to their typed tools
 - arbitrary `python -m`: the first argument must end in `.py` and must not start with `-`
 - Python outside the repository: a scratch-token script path is refused and redirected to
   `artifact_python_run`
@@ -173,7 +178,37 @@ Probe-confirmed and source-confirmed refusals, which the corrections must not we
 
 ## Consequence for Azure work
 
-ContextPatch cannot install, authenticate, or drive an Azure client, and must not be extended
-to do so. Azure access belongs to a separate Claude Desktop entry running Microsoft's Azure MCP
-Server, outside this repository and outside this authority boundary. See
-`docs/azure-workload-position.md`.
+The standing decision recorded here was zero Azure authority: ContextPatch was not to drive an
+Azure client, and Azure access was to belong to a separate Microsoft Azure MCP Server entry. That
+alternative was evaluated and retired (`docs/azure-mcp-runbook.md`: four of the five required
+capabilities are absent, and it was scoped read-only). The decision is revised as follows.
+
+### Azure write authority (revised 2026-09-25)
+
+The operator decided, on 2026-09-25, that the agent may run the hosted Container Apps lifecycle
+itself rather than hand each command to the operator. The authority granted is deliberately
+narrow, and every part of it is a property of source rather than of the word `az`:
+
+- **What.** Two write shapes only: `az containerapp update` (image and plain environment
+  variables of one app) and `az acr build` (one repository Dockerfile, built from the repository
+  root), plus the existing `az deployment group create` through `azure_deployment_start`. Nothing
+  that runs code inside a container (`containerapp exec`), deletes, creates apps or environments,
+  changes secrets, identities, ingress, scale, or role assignments is reachable.
+- **Where.** Only a `resource-group/app` pair listed in `CONTEXTPATCH_AZURE_OPS_TARGETS`, and only
+  a registry listed in `CONTEXTPATCH_AZURE_OPS_REGISTRIES`. Both come from the server process
+  environment, set by the operator in the server's launch configuration; a repository, an
+  `.envrc`, or a tool argument cannot add a target. With neither set the capability is dormant.
+- **How.** Only through `azure_containerapp_op`: typed fields, never forwarded arguments; a
+  preview by default that returns the exact command; apply only with the literal confirmation
+  `run azure containerapp op`. The raw `run_guarded_command` tool refuses these commands.
+- **Guards on content.** Environment variable names that look like credentials are refused, so
+  the tool cannot place a secret in a plain value or in its own logs; an `update` image must come
+  from a named registry; a `build` refuses uncommitted changes so an image tagged for a commit is
+  built from that commit.
+- **What still bounds it.** The Azure RBAC role of the identity the operator signed in with. The
+  tool does not narrow that role; it narrows what the agent can ask of it.
+
+What this does not change: ContextPatch still installs no Azure client and authenticates nothing
+itself; it runs the operator's already-installed `az` under the operator's existing sign-in, and
+the binary itself originates no network traffic. See `docs/azure-workload-position.md` for the
+original position.

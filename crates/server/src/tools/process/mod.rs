@@ -34,6 +34,10 @@ pub mod azure_deployment_start {
     pub const NAME: &str = "azure_deployment_start";
 }
 
+pub mod azure_containerapp_op {
+    pub const NAME: &str = "azure_containerapp_op";
+}
+
 pub mod compose_stack_run {
     pub const NAME: &str = "compose_stack_run";
 }
@@ -42,10 +46,12 @@ pub mod artifact_build_check_run {
     pub const NAME: &str = "artifact_build_check_run";
 }
 
+mod azure_ops;
 mod containers;
 mod jobs;
 mod runs;
 
+pub(crate) use azure_ops::call_azure_containerapp_op;
 pub(crate) use containers::{
     call_artifact_build_check_run, call_compose_stack_run, call_docker_image_inspect,
     call_image_cleanliness_check_run, call_task_image_python_run,
@@ -103,6 +109,16 @@ pub(crate) fn call_run_guarded_command<'a>(
             "run_guarded_command refused: direct `az deployment ... create` is not available; use \
              azure_deployment_start (dry_run for a what-if preview; dry_run=false with confirm to \
              apply)"
+                .to_string(),
+        );
+    }
+    if program == "az"
+        && contextpatch_core::process::guarded_command::is_azure_ops_command(&args)
+    {
+        return Err(
+            "run_guarded_command refused: direct `az containerapp update` and `az acr build` are not \
+             available; use azure_containerapp_op (dry_run to preview; dry_run=false with confirm to \
+             apply, against a target named in CONTEXTPATCH_AZURE_OPS_TARGETS)"
                 .to_string(),
         );
     }

@@ -152,7 +152,7 @@ fn checked_command_timeout(
 ) -> Result<std::time::Duration, ContextPatchError> {
     let max_timeout_secs = if program == "harbor" && args.first().is_some_and(|arg| arg == "run") {
         HARBOR_RUN_MAX_TIMEOUT_SECS
-    } else if program == "az" && (is_azure_deploy_command(args) || azure_ops_command_is_allowed(args)) {
+    } else if program == "az" && (is_azure_deploy_command(args) || is_azure_ops_command(args)) {
         AZURE_DEPLOY_MAX_TIMEOUT_SECS
     } else {
         DEFAULT_MAX_TIMEOUT_SECS
@@ -247,7 +247,7 @@ fn validate_command(program: &str, args: &[String]) -> Result<(), ContextPatchEr
         "az" => {
             azure_read_command_is_allowed(args)
                 || is_azure_deploy_command(args)
-                || azure_ops_command_is_allowed(args)
+                || is_azure_ops_command(args)
         }
         _ => false,
     };
@@ -638,21 +638,25 @@ pub fn is_azure_deploy_command(args: &[String]) -> bool {
     })
 }
 
-/// Azure Container Apps operational commands the operator authorized for direct use through
-/// `run_guarded_command`: exec a command inside a running container, update an app's configuration
-/// (environment variables, image), and restart a revision. Unlike the read set these reach into or
-/// mutate live infrastructure, and unlike `AZURE_DEPLOY_COMMANDS` they are not routed through a typed
-/// tool -- they are operator-facing control-plane actions on the operator's own deployment, admitted
-/// so the agent can run the hosted lifecycle end to end without hand-off.
+/// Azure Container Apps operational (write) commands, reachable only through the typed
+/// `azure_containerapp_op` tool.
+///
+/// Listed as exact token prefixes like the deploy set. The guard admits them so the typed tool can
+/// run them through the repository's authority, but the raw `run_guarded_command` tool refuses them
+/// and redirects to `azure_containerapp_op`, which builds the argument vector from typed fields,
+/// previews it by default, and applies only with the `run azure containerapp op` confirmation
+/// against a resource group and app named in the `CONTEXTPATCH_AZURE_OPS_TARGETS` operator
+/// setting. `containerapp exec` (arbitrary commands inside a running container) and
+/// `containerapp revision restart` were admitted by 982049f and are deliberately not admitted
+/// here; each needs its own review before it is reachable. See `docs/execution-threat-model.md`.
 const AZURE_OPS_COMMANDS: &[&[&str]] = &[
-    &["containerapp", "exec"],
     &["containerapp", "update"],
-    &["containerapp", "revision", "restart"],
     &["acr", "build"],
 ];
 
-/// Whether `args` is an authorized Azure Container Apps operational command.
-fn azure_ops_command_is_allowed(args: &[String]) -> bool {
+/// Whether `args` is an Azure Container Apps operational (write) command. Public so the raw-tool
+/// refusal and the timeout ceiling share this exact predicate rather than restate it.
+pub fn is_azure_ops_command(args: &[String]) -> bool {
     AZURE_OPS_COMMANDS.iter().any(|prefix| {
         args.len() >= prefix.len()
             && prefix
@@ -705,7 +709,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        checked_command_timeout, is_pytest_plugin_option, redact_and_truncate_output,
+        checked_command_timeout, is_azure_ops_command, is_pytest_plugin_option, redact_and_truncate_output,
         redact_and_truncate_output_tail, run_guarded_command, validate_command,
         validate_manifest_script_path, GIT_SUBCOMMANDS,
     };
@@ -781,16 +785,31 @@ mod tests {
     }
 
     #[test]
-    fn allows_azure_ops_commands() {
+    fn admits_only_the_typed_azure_ops_commands() {
+        // The core guard admits these so azure_containerapp_op can run them; the raw
+        // run_guarded_command tool refuses them (server crate).
         for values in [
-            vec!["containerapp", "exec", "-g", "rg", "-n", "app", "--command", "printenv X"],
             vec!["containerapp", "update", "-g", "rg", "-n", "app", "--set-env-vars", "K=V"],
-            vec!["containerapp", "revision", "restart", "-g", "rg", "-n", "app", "--revision", "rev"],
             vec!["acr", "build", "--registry", "acr", "--image", "img:tag", "-f", "Dockerfile", "."],
         ] {
             assert!(
                 validate_command("az", &args(&values)).is_ok(),
-                "az {values:?} operational command must be allowed"
+                "az {values:?} must be admitted for the typed ops tool"
+            );
+            assert!(is_azure_ops_command(&args(&values)));
+        }
+    }
+
+    #[test]
+    fn refuses_container_exec_and_revision_restart() {
+        // Admitted by 982049f; withdrawn until each has its own review.
+        for values in [
+            vec!["containerapp", "exec", "-g", "rg", "-n", "app", "--command", "printenv X"],
+            vec!["containerapp", "revision", "restart", "-g", "rg", "-n", "app", "--revision", "rev"],
+        ] {
+            assert!(
+                refusal("az", &values).contains("not allowlisted"),
+                "az {values:?} must be refused"
             );
         }
     }

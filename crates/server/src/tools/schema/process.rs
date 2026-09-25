@@ -292,6 +292,75 @@ pub(crate) fn azure_deployment_start_definition() -> Value {
     )
 }
 
+pub(crate) fn azure_containerapp_op_definition() -> Value {
+    json!({
+                "name": tools::azure_containerapp_op::NAME,
+                "description": "Preview or run one Azure Container Apps write: `update` (image and/or plain environment variables of a container app) or `build` (az acr build of a repository Dockerfile). Arguments are typed, never forwarded; the default dry_run returns the exact az command. Applying needs confirm plus a target the operator named in the server's CONTEXTPATCH_AZURE_OPS_TARGETS (resource-group/app pairs) and CONTEXTPATCH_AZURE_OPS_REGISTRIES; credential-like variable names are refused, and a build refuses uncommitted changes. Applying returns a log_id polled with read_command_log.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["update", "build"],
+                            "description": "`update` a container app, or `build` an image with az acr build."
+                        },
+                        "resource_group": {
+                            "type": "string",
+                            "description": "update: the app's resource group; resource_group/app must be in CONTEXTPATCH_AZURE_OPS_TARGETS."
+                        },
+                        "app": {
+                            "type": "string",
+                            "description": "update: the container app name."
+                        },
+                        "image": {
+                            "type": "string",
+                            "description": "update: `<registry>.azurecr.io/<repository>:<tag>` from a registry in CONTEXTPATCH_AZURE_OPS_REGISTRIES. build: `<repository>:<tag>`."
+                        },
+                        "set_env": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "update: plain `NAME=value` environment variables to set. Credential-like names are refused."
+                        },
+                        "remove_env": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "update: environment variable names to remove."
+                        },
+                        "registry": {
+                            "type": "string",
+                            "description": "build: registry name (without .azurecr.io), named in CONTEXTPATCH_AZURE_OPS_REGISTRIES."
+                        },
+                        "dockerfile": {
+                            "type": "string",
+                            "description": "build: normalized repository-relative Dockerfile; the build context is the repository root."
+                        },
+                        "platform": {
+                            "type": "string",
+                            "enum": ["linux/amd64", "linux/arm64"],
+                            "description": "build: target platform. Defaults to linux/amd64."
+                        },
+                        "dry_run": {
+                            "type": "boolean",
+                            "description": "Return the planned az command without running it. Defaults to true."
+                        },
+                        "confirm": {
+                            "type": "string",
+                            "description": "Required literal value `run azure containerapp op` when dry_run is false."
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": contextpatch_core::process::guarded_command::AZURE_DEPLOY_MAX_TIMEOUT_SECS,
+                            "description": "Apply timeout in seconds. Defaults to 900."
+                        }
+                    },
+                    "required": ["operation"],
+                    "additionalProperties": false
+                }
+            }
+    )
+}
+
 pub(crate) fn harbor_run_start_definition() -> Value {
     json!({
                 "name": tools::harbor_run_start::NAME,

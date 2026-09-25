@@ -35,7 +35,8 @@ pub use git::{
 pub use github::{github_fork_prepare, github_pr_run};
 pub use native::{native_build_run, native_device_run};
 pub use process::{
-    artifact_build_check_run, artifact_python_run, azure_deployment_start, compose_stack_run,
+    artifact_build_check_run, artifact_python_run, azure_containerapp_op, azure_deployment_start,
+    compose_stack_run,
     docker_image_inspect, harbor_run_start, image_cleanliness_check_run, read_command_log,
     run_guarded_command,
     task_image_python_run, validation_profile_run,

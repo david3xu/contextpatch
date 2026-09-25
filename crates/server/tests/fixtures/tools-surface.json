@@ -212,6 +212,89 @@
       "openWorldHint": true,
       "readOnlyHint": false
     },
+    "description": "Preview or run one Azure Container Apps write: `update` (image and/or plain environment variables of a container app) or `build` (az acr build of a repository Dockerfile). Arguments are typed, never forwarded; the default dry_run returns the exact az command. Applying needs confirm plus a target the operator named in the server's CONTEXTPATCH_AZURE_OPS_TARGETS (resource-group/app pairs) and CONTEXTPATCH_AZURE_OPS_REGISTRIES; credential-like variable names are refused, and a build refuses uncommitted changes. Applying returns a log_id polled with read_command_log.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "description": "update: the container app name.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required literal value `run azure containerapp op` when dry_run is false.",
+          "type": "string"
+        },
+        "dockerfile": {
+          "description": "build: normalized repository-relative Dockerfile; the build context is the repository root.",
+          "type": "string"
+        },
+        "dry_run": {
+          "description": "Return the planned az command without running it. Defaults to true.",
+          "type": "boolean"
+        },
+        "image": {
+          "description": "update: `<registry>.azurecr.io/<repository>:<tag>` from a registry in CONTEXTPATCH_AZURE_OPS_REGISTRIES. build: `<repository>:<tag>`.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "`update` a container app, or `build` an image with az acr build.",
+          "enum": [
+            "update",
+            "build"
+          ],
+          "type": "string"
+        },
+        "platform": {
+          "description": "build: target platform. Defaults to linux/amd64.",
+          "enum": [
+            "linux/amd64",
+            "linux/arm64"
+          ],
+          "type": "string"
+        },
+        "registry": {
+          "description": "build: registry name (without .azurecr.io), named in CONTEXTPATCH_AZURE_OPS_REGISTRIES.",
+          "type": "string"
+        },
+        "remove_env": {
+          "description": "update: environment variable names to remove.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource_group": {
+          "description": "update: the app's resource group; resource_group/app must be in CONTEXTPATCH_AZURE_OPS_TARGETS.",
+          "type": "string"
+        },
+        "set_env": {
+          "description": "update: plain `NAME=value` environment variables to set. Credential-like names are refused.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timeout_secs": {
+          "description": "Apply timeout in seconds. Defaults to 900.",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "type": "object"
+    },
+    "name": "azure_containerapp_op"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Plan or start an ARM/Bicep deployment to Azure in the background. Defaults to a read-only what-if preview; set dry_run=false with confirm to apply, which returns a log_id polled with read_command_log. Apply also requires the AZURE_ALLOW_DEPLOY host opt-in. Harbor, task-image, validation-profile, Compose-stack, artifact-build, and Azure-deployment jobs share a two-job cap.",
     "inputSchema": {
       "additionalProperties": false,

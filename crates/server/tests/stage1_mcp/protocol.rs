@@ -22,6 +22,9 @@ const EXPECTED_OPEN_WORLD_ACTIONS: &[&str] = &[
     "github_pr_run",
     // Reaches the Azure control plane through the deployment CLI when an operator has enabled apply.
     "azure_deployment_start",
+    // Reaches the Azure control plane (container app update, registry build) for operator-named
+    // targets only.
+    "azure_containerapp_op",
     "harbor_run_start",
     "native_build_run",
     "native_device_run",
