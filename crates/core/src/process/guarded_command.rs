@@ -649,10 +649,7 @@ pub fn is_azure_deploy_command(args: &[String]) -> bool {
 /// setting. `containerapp exec` (arbitrary commands inside a running container) and
 /// `containerapp revision restart` were admitted by 982049f and are deliberately not admitted
 /// here; each needs its own review before it is reachable. See `docs/execution-threat-model.md`.
-const AZURE_OPS_COMMANDS: &[&[&str]] = &[
-    &["containerapp", "update"],
-    &["acr", "build"],
-];
+const AZURE_OPS_COMMANDS: &[&[&str]] = &[&["containerapp", "update"], &["acr", "build"]];
 
 /// Whether `args` is an Azure Container Apps operational (write) command. Public so the raw-tool
 /// refusal and the timeout ceiling share this exact predicate rather than restate it.
@@ -709,9 +706,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        checked_command_timeout, is_azure_ops_command, is_pytest_plugin_option, redact_and_truncate_output,
-        redact_and_truncate_output_tail, run_guarded_command, validate_command,
-        validate_manifest_script_path, GIT_SUBCOMMANDS,
+        checked_command_timeout, is_azure_ops_command, is_pytest_plugin_option,
+        redact_and_truncate_output, redact_and_truncate_output_tail, run_guarded_command,
+        validate_command, validate_manifest_script_path, GIT_SUBCOMMANDS,
     };
     use crate::process::runner::redact_line;
 
@@ -758,7 +755,15 @@ mod tests {
             vec!["containerapp", "revision", "list", "-g", "rg", "-n", "app"],
             vec!["containerapp", "logs", "show", "-g", "rg", "-n", "app"],
             vec!["deployment", "group", "show", "-g", "rg", "-n", "dep"],
-            vec!["deployment", "group", "what-if", "-g", "rg", "--template-file", "main.bicep"],
+            vec![
+                "deployment",
+                "group",
+                "what-if",
+                "-g",
+                "rg",
+                "--template-file",
+                "main.bicep",
+            ],
             vec!["deployment", "sub", "list"],
             vec!["group", "list"],
             vec!["account", "show"],
@@ -774,8 +779,22 @@ mod tests {
     #[test]
     fn allows_azure_deploy_commands() {
         for values in [
-            vec!["deployment", "group", "create", "-g", "rg", "--template-file", "main.bicep"],
-            vec!["deployment", "sub", "create", "--template-file", "main.bicep"],
+            vec![
+                "deployment",
+                "group",
+                "create",
+                "-g",
+                "rg",
+                "--template-file",
+                "main.bicep",
+            ],
+            vec![
+                "deployment",
+                "sub",
+                "create",
+                "--template-file",
+                "main.bicep",
+            ],
         ] {
             assert!(
                 validate_command("az", &args(&values)).is_ok(),
@@ -789,8 +808,27 @@ mod tests {
         // The core guard admits these so azure_containerapp_op can run them; the raw
         // run_guarded_command tool refuses them (server crate).
         for values in [
-            vec!["containerapp", "update", "-g", "rg", "-n", "app", "--set-env-vars", "K=V"],
-            vec!["acr", "build", "--registry", "acr", "--image", "img:tag", "-f", "Dockerfile", "."],
+            vec![
+                "containerapp",
+                "update",
+                "-g",
+                "rg",
+                "-n",
+                "app",
+                "--set-env-vars",
+                "K=V",
+            ],
+            vec![
+                "acr",
+                "build",
+                "--registry",
+                "acr",
+                "--image",
+                "img:tag",
+                "-f",
+                "Dockerfile",
+                ".",
+            ],
         ] {
             assert!(
                 validate_command("az", &args(&values)).is_ok(),
@@ -804,8 +842,27 @@ mod tests {
     fn refuses_container_exec_and_revision_restart() {
         // Admitted by 982049f; withdrawn until each has its own review.
         for values in [
-            vec!["containerapp", "exec", "-g", "rg", "-n", "app", "--command", "printenv X"],
-            vec!["containerapp", "revision", "restart", "-g", "rg", "-n", "app", "--revision", "rev"],
+            vec![
+                "containerapp",
+                "exec",
+                "-g",
+                "rg",
+                "-n",
+                "app",
+                "--command",
+                "printenv X",
+            ],
+            vec![
+                "containerapp",
+                "revision",
+                "restart",
+                "-g",
+                "rg",
+                "-n",
+                "app",
+                "--revision",
+                "rev",
+            ],
         ] {
             assert!(
                 refusal("az", &values).contains("not allowlisted"),

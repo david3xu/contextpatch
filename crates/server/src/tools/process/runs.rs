@@ -30,9 +30,10 @@ pub(crate) fn call_azure_deployment_start<'a>(
         required_string(arguments, "template_file")?,
     )?;
     let parameters_file = match optional_string(arguments, "parameters_file")? {
-        Some(path) => {
-            Some(normalize_repo_relative_path(crate::tools::azure_deployment_start::NAME, path)?)
-        }
+        Some(path) => Some(normalize_repo_relative_path(
+            crate::tools::azure_deployment_start::NAME,
+            path,
+        )?),
         None => None,
     };
     let inline_parameters = optional_string_array(arguments, "parameters")?;
@@ -80,7 +81,9 @@ pub(crate) fn call_azure_deployment_start<'a>(
             "what-if".to_string(),
         ];
         what_if_args.extend(tail);
-        let timeout_secs = optional_u64(arguments, "timeout_secs")?.unwrap_or(600).min(600);
+        let timeout_secs = optional_u64(arguments, "timeout_secs")?
+            .unwrap_or(600)
+            .min(600);
         let output = run_guarded_command(root, None, "az", &what_if_args, Some(timeout_secs))
             .map_err(|error| format!("azure_deployment_start refused: {error}"))?;
         return serde_json::to_string_pretty(&json!({
@@ -100,7 +103,9 @@ pub(crate) fn call_azure_deployment_start<'a>(
         );
     }
     if !matches!(
-        std::env::var("AZURE_ALLOW_DEPLOY").unwrap_or_default().trim(),
+        std::env::var("AZURE_ALLOW_DEPLOY")
+            .unwrap_or_default()
+            .trim(),
         "1" | "true" | "yes"
     ) {
         return Err(
@@ -196,7 +201,9 @@ fn validate_inline_deploy_parameters(parameters: &[String]) -> Result<(), String
         };
         let key_ok = !key.is_empty()
             && key.starts_with(|ch: char| ch.is_ascii_alphabetic() || ch == '_')
-            && key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            && key
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
         if !had_value || !key_ok {
             return Err(format!(
                 "azure_deployment_start refused: inline parameter {entry:?} must be `name=value` \
@@ -221,7 +228,10 @@ mod azure_deployment_start_tests {
     #[test]
     fn accepts_well_formed_name_value_pairs_and_an_empty_list() {
         assert!(check(&["location=australiaeast", "namePrefix=dcp2", "replicas=3"]).is_ok());
-        assert!(check(&["conn=Server=db;Port=5432"]).is_ok(), "values may contain '='");
+        assert!(
+            check(&["conn=Server=db;Port=5432"]).is_ok(),
+            "values may contain '='"
+        );
         assert!(check(&[]).is_ok());
     }
 

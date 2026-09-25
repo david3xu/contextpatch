@@ -112,9 +112,7 @@ pub(crate) fn call_run_guarded_command<'a>(
                 .to_string(),
         );
     }
-    if program == "az"
-        && contextpatch_core::process::guarded_command::is_azure_ops_command(&args)
-    {
+    if program == "az" && contextpatch_core::process::guarded_command::is_azure_ops_command(&args) {
         return Err(
             "run_guarded_command refused: direct `az containerapp update` and `az acr build` are not \
              available; use azure_containerapp_op (dry_run to preview; dry_run=false with confirm to \

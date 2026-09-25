@@ -62,7 +62,10 @@ impl OpsConfig {
 }
 
 fn refused(reason: impl std::fmt::Display) -> String {
-    format!("{} refused: {reason}", crate::tools::azure_containerapp_op::NAME)
+    format!(
+        "{} refused: {reason}",
+        crate::tools::azure_containerapp_op::NAME
+    )
 }
 
 /// An Azure resource name: letters, digits, `.`, `_`, `-`, not starting with `-`.
@@ -88,9 +91,9 @@ fn check_repository_and_tag(field: &str, value: &str) -> Result<(), String> {
         .ok_or_else(|| refused(format!("{field} must be `repository:tag`")))?;
     let repository_ok = !repository.is_empty()
         && repository.starts_with(|ch: char| ch.is_ascii_lowercase() || ch.is_ascii_digit())
-        && repository
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-' | '/'));
+        && repository.chars().all(|ch| {
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-' | '/')
+        });
     let tag_ok = !tag.is_empty()
         && tag
             .chars()
@@ -107,9 +110,16 @@ fn check_repository_and_tag(field: &str, value: &str) -> Result<(), String> {
 /// Environment variable names that look like credentials. Secrets belong in a Container Apps
 /// secret reference, never in a plain value, and a plain value would also land in tool logs.
 fn looks_secret(key: &str) -> bool {
-    ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE"]
-        .iter()
-        .any(|marker| key.contains(marker))
+    [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRIVATE",
+    ]
+    .iter()
+    .any(|marker| key.contains(marker))
         || key.ends_with("KEY")
         || key.contains("_KEY_")
 }
@@ -152,7 +162,9 @@ pub(crate) fn plan_update(
     let set_env = optional_string_array(arguments, "set_env")?;
     let remove_env = optional_string_array(arguments, "remove_env")?;
     if image.is_none() && set_env.is_empty() && remove_env.is_empty() {
-        return Err(refused("update needs at least one of image, set_env, or remove_env"));
+        return Err(refused(
+            "update needs at least one of image, set_env, or remove_env",
+        ));
     }
 
     let mut args = vec![
@@ -168,9 +180,9 @@ pub(crate) fn plan_update(
         let (login_server, repository_and_tag) = image
             .split_once('/')
             .ok_or_else(|| refused("image must be `<registry>.azurecr.io/<repository>:<tag>`"))?;
-        let registry = login_server
-            .strip_suffix(".azurecr.io")
-            .ok_or_else(|| refused("image must come from an Azure Container Registry (`<registry>.azurecr.io`)"))?;
+        let registry = login_server.strip_suffix(".azurecr.io").ok_or_else(|| {
+            refused("image must come from an Azure Container Registry (`<registry>.azurecr.io`)")
+        })?;
         if !config.registries.contains(registry) {
             return Err(refused(format!(
                 "registry {registry:?} is not named in {REGISTRIES_ENV}"
@@ -267,13 +279,17 @@ pub(crate) fn plan_operation(
     match required_string(arguments, "operation")? {
         "update" => plan_update(arguments, config),
         "build" => plan_build(arguments, config),
-        other => Err(refused(format!("operation {other:?} must be `update` or `build`"))),
+        other => Err(refused(format!(
+            "operation {other:?} must be `update` or `build`"
+        ))),
     }
 }
 
 /// The text between `stdout:` and `stderr:` in a guarded command's output.
 fn guarded_stdout(output: &str) -> &str {
-    let start = output.find("\nstdout:\n").map(|index| index + "\nstdout:\n".len());
+    let start = output
+        .find("\nstdout:\n")
+        .map(|index| index + "\nstdout:\n".len());
     let Some(start) = start else { return "" };
     let rest = &output[start..];
     let end = rest.find("\nstderr:").unwrap_or(rest.len());
@@ -289,7 +305,10 @@ pub(crate) fn call_azure_containerapp_op<'a>(
     let is_build = args.first().is_some_and(|arg| arg == "acr");
     let display = format!(
         "az {}",
-        args.iter().map(|arg| shell_display_arg(arg)).collect::<Vec<_>>().join(" ")
+        args.iter()
+            .map(|arg| shell_display_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
     );
 
     if optional_bool(arguments, "dry_run")?.unwrap_or(true) {
@@ -339,8 +358,8 @@ pub(crate) fn call_azure_containerapp_op<'a>(
     }
 
     let initial_log = format!("Azure Container Apps operation is applying.\ncommand: {display}\n");
-    let worker_authority = contextpatch_core::git::OwnedRepositoryRoot::retain(root)
-        .map_err(refused)?;
+    let worker_authority =
+        contextpatch_core::git::OwnedRepositoryRoot::retain(root).map_err(refused)?;
     let log_id = start_background_job(
         crate::tools::azure_containerapp_op::NAME,
         "az",
@@ -354,7 +373,10 @@ pub(crate) fn call_azure_containerapp_op<'a>(
                 Some(timeout_secs),
             )
             .map_err(|error| {
-                format!("{} failed: {error}", crate::tools::azure_containerapp_op::NAME)
+                format!(
+                    "{} failed: {error}",
+                    crate::tools::azure_containerapp_op::NAME
+                )
             })?;
             let exit_code = extract_field(&output, "exit_code")
                 .and_then(|value| value.parse::<i32>().ok())
@@ -378,7 +400,10 @@ pub(crate) fn call_azure_containerapp_op<'a>(
                     "command_output": output
                 }))
                 .map_err(|error| {
-                    format!("{} failed: {error}", crate::tools::azure_containerapp_op::NAME)
+                    format!(
+                        "{} failed: {error}",
+                        crate::tools::azure_containerapp_op::NAME
+                    )
                 })?,
             })
         },
@@ -460,8 +485,17 @@ mod tests {
         assert_eq!(
             args,
             [
-                "acr", "build", "--registry", "dcp2acr", "--platform", "linux/amd64", "--image",
-                "datacore-runtime:0.1.76-9f5f5cc", "--file", "services/runtime/Dockerfile", ".",
+                "acr",
+                "build",
+                "--registry",
+                "dcp2acr",
+                "--platform",
+                "linux/amd64",
+                "--image",
+                "datacore-runtime:0.1.76-9f5f5cc",
+                "--file",
+                "services/runtime/Dockerfile",
+                ".",
             ]
         );
     }
@@ -475,7 +509,10 @@ mod tests {
             "set_env": ["A=b"]
         }))
         .unwrap_err();
-        assert!(error.contains("not named in CONTEXTPATCH_AZURE_OPS_TARGETS"), "{error}");
+        assert!(
+            error.contains("not named in CONTEXTPATCH_AZURE_OPS_TARGETS"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -561,7 +598,10 @@ mod tests {
             for (key, entry) in value.as_object().expect("object") {
                 object.insert(key.clone(), entry.clone());
             }
-            assert!(plan_operation(&object, &config()).is_err(), "{value} must be refused");
+            assert!(
+                plan_operation(&object, &config()).is_err(),
+                "{value} must be refused"
+            );
         }
     }
 
@@ -595,7 +635,8 @@ mod tests {
     #[test]
     fn reads_the_stdout_section_of_a_guarded_command() {
         let clean = "command: git status --porcelain\nexit_code: 0\nstdout:\n\nstderr:\n";
-        let dirty = "command: git status --porcelain\nexit_code: 0\nstdout:\n M file.rs\n\nstderr:\n";
+        let dirty =
+            "command: git status --porcelain\nexit_code: 0\nstdout:\n M file.rs\n\nstderr:\n";
         assert_eq!(guarded_stdout(clean), "");
         assert_eq!(guarded_stdout(dirty), "M file.rs");
     }
